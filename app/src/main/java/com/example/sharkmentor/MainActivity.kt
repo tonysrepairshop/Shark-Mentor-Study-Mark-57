@@ -107,6 +107,22 @@ class MainActivity : ComponentActivity() {
                             onAuthSuccess = {
                                 registerFcmToken()
                                 com.example.sharkmentor.core.notification.SocialNotificationMonitor.start(this@MainActivity)
+                                lifecycleScope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        com.example.sharkmentor.data.repository.StreakRepository(this@MainActivity)
+                                            .pullAndMergeFromCloud()
+                                    }
+                                    runCatching {
+                                        com.example.sharkmentor.data.repository.CountdownRepository.getInstance(this@MainActivity)
+                                            .pullAndMergeFromCloud()
+                                    }
+                                    runCatching {
+                                        com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(this@MainActivity)
+                                    }
+                                    runCatching {
+                                        com.example.sharkmentor.service.sync.SyncWorker.enqueueForceFullSync(this@MainActivity)
+                                    }
+                                }
                                 isLoggedIn = true
                             },
                             onGuestContinue = {

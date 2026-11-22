@@ -67,6 +67,7 @@ class SharkMentorApplication : Application() {
             runCatching { com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(applicationContext) }
             runCatching { com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences.ensureLoaded(applicationContext) }
             runCatching { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(applicationContext) }
+            runCatching { com.example.sharkmentor.data.repository.CountdownRepository.getInstance(applicationContext) }
 
             runCatching {
                 com.example.sharkmentor.core.util.PdfLibraryManager.init(applicationContext)

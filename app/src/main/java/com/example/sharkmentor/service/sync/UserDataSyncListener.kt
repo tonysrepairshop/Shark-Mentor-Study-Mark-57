@@ -223,14 +223,9 @@ class UserDataSyncListener(private val context: Context) {
             }
             if (doc != null && doc.exists()) {
                 try {
-                    val remoteUpdatedAt = doc.getSafeLong("updatedAt") ?: 0L
-                    val localUpdatedAt = userPrefs.countdownUpdatedAt
-                    
-                    if (remoteUpdatedAt > localUpdatedAt) {
-                        userPrefs.countdownTargetDateMillis = doc.getSafeLong("targetDateMillis") ?: 0L
-                        userPrefs.countdownExamTitle = doc.getSafeString("examTitle")
-                        userPrefs.countdownUpdatedAt = remoteUpdatedAt
-                    }
+                    com.example.sharkmentor.data.repository.CountdownRepository
+                        .getInstance(context)
+                        .applyRemoteSnapshot(doc)
                 } catch (ex: Exception) {
                     Log.e(TAG, "Error parsing countdown doc", ex)
                 }

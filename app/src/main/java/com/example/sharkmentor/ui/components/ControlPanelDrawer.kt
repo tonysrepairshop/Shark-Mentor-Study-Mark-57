@@ -215,6 +215,8 @@ fun ControlPanelContent(
                     GoogleServicesHelper.signOut()
                     AvatarHelper.clearLocalAvatar(context)
                     userPrefs.clearSessionProfile()
+                    com.example.sharkmentor.data.repository.StreakRepository(context).clearLocalForLogout()
+                    com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).clearLocalForLogout()
                     SessionManager.setLinkedToInstitution(context, false)
                     SessionManager.setUserMode(context, "study")
                     onNavigate(Screen.Login.route)

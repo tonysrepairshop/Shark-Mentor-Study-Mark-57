@@ -1,12 +1,16 @@
 package com.example.sharkmentor.ui.screens
 
-import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -14,11 +18,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.data.local.preferences.UserPreferences
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
+import com.example.sharkmentor.data.repository.CountdownRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -29,19 +34,29 @@ fun CountdownSettingsScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("sharkmentor_prefs", Context.MODE_PRIVATE) }
-    val userPrefs = remember { UserPreferences.getInstance(context) }
-    var selectedMillis by remember { mutableLongStateOf(prefs.getLong("target_date_millis", 0L)) }
-    var targetTitle by remember {
-        val initial = prefs.getString("target_exam_title", null)?.takeIf { it.isNotBlank() }
-            ?: userPrefs.studentTargetExam?.takeIf { it.isNotBlank() }
-            ?: ""
-        mutableStateOf(initial)
+    val countdownRepo = remember(context) { CountdownRepository.getInstance(context) }
+    val userPrefs = remember(context) { UserPreferences.getInstance(context) }
+    val countdownState by countdownRepo.stateFlow.collectAsStateWithLifecycle()
+    val isSignedIn = remember(context) {
+        GoogleServicesHelper.getCurrentUser(context = context)?.takeUnless { it.isAnonymous } != null
     }
+
+    // Pull latest cloud countdown immediately upon opening screen so cross-device edits show live
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            runCatching { countdownRepo.pullAndMergeFromCloud() }
+        }
+    }
+
+    val resolvedSavedTitle = countdownState.title.ifBlank {
+        userPrefs.studentTargetExam?.takeIf { it.isNotBlank() } ?: ""
+    }
+    var targetTitle by remember(resolvedSavedTitle) { mutableStateOf(resolvedSavedTitle) }
+    val selectedMillis = countdownState.targetDateMillis
     var showDatePicker by remember { mutableStateOf(false) }
 
     val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = if (selectedMillis > 0) selectedMillis else System.currentTimeMillis()
+        initialSelectedDateMillis = if (selectedMillis > 0L) selectedMillis else System.currentTimeMillis()
     )
 
     if (showDatePicker) {
@@ -52,9 +67,9 @@ fun CountdownSettingsScreen(
                     onClick = {
                         val millis = datePickerState.selectedDateMillis
                         if (millis != null) {
-                            selectedMillis = millis
-                            val cleanTitle = targetTitle.ifBlank { "Hedef Sınav" }
-                            saveExamTarget(context, cleanTitle, millis)
+                            val cleanTitle = targetTitle.trim().ifBlank { CountdownRepository.DEFAULT_TITLE }
+                            countdownRepo.saveCountdown(cleanTitle, millis)
+                            Toast.makeText(context, "Hedef sınav tarihi kaydedildi.", Toast.LENGTH_SHORT).show()
                         }
                         showDatePicker = false
                     }
@@ -92,11 +107,53 @@ fun CountdownSettingsScreen(
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "Özel Hedef & Sınav Tarihi",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Özel Hedef & Sınav Tarihi",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isSignedIn) {
+                    val isPending = countdownState.isPendingSync
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = if (isPending) {
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
+                        },
+                        border = BorderStroke(
+                            1.dp,
+                            if (isPending) MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)
+                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPending) Icons.Default.CloudSync else Icons.Default.CloudDone,
+                                contentDescription = null,
+                                tint = if (isPending) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (isPending) "Eşitleniyor" else "Bulutla Senkron",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isPending) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+            }
 
             OutlinedTextField(
                 value = targetTitle,
@@ -120,7 +177,22 @@ fun CountdownSettingsScreen(
                 Text("Sınav Tarihini Takvimden Seç", fontWeight = FontWeight.Bold)
             }
 
-            if (selectedMillis > 0) {
+            if (selectedMillis > 0L && targetTitle.trim() != countdownState.title.trim() && targetTitle.isNotBlank()) {
+                OutlinedButton(
+                    onClick = {
+                        countdownRepo.saveCountdown(targetTitle.trim(), selectedMillis)
+                        Toast.makeText(context, "Hedef başlığı güncellendi.", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Başlığı Kaydet", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            if (selectedMillis > 0L) {
                 val formattedDate = SimpleDateFormat("dd MMMM yyyy", Locale("tr")).format(Date(selectedMillis))
                 val diffDays = (selectedMillis - System.currentTimeMillis()) / (24 * 3600 * 1000)
 
@@ -130,11 +202,13 @@ fun CountdownSettingsScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Mevcut Hedef: ${targetTitle.ifBlank { "Hedef Sınav" }}",
+                            text = "Mevcut Hedef: ${targetTitle.ifBlank { CountdownRepository.DEFAULT_TITLE }}",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
@@ -147,43 +221,21 @@ fun CountdownSettingsScreen(
                         )
                     }
                 }
+
+                TextButton(
+                    onClick = {
+                        countdownRepo.clearCountdown()
+                        targetTitle = ""
+                        Toast.makeText(context, "Geri sayım temizlendi.", Toast.LENGTH_SHORT).show()
+                    },
+                    modifier = Modifier.align(Alignment.End),
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Geri Sayımı Kaldır")
+                }
             }
         }
     }
-}
-
-private fun saveExamTarget(context: Context, title: String, millis: Long) {
-    val cleanTitle = title.trim().ifBlank { "Hedef Sınav" }
-    val prefs = context.getSharedPreferences("sharkmentor_prefs", Context.MODE_PRIVATE)
-    prefs.edit()
-        .putLong("target_date_millis", millis)
-        .putString("target_exam_title", cleanTitle)
-        .apply()
-
-    val userPrefs = UserPreferences.getInstance(context)
-    userPrefs.countdownExamTitle = cleanTitle
-    userPrefs.countdownTargetDateMillis = millis
-    userPrefs.countdownUpdatedAt = System.currentTimeMillis()
-    if (cleanTitle != "Hedef Sınav") {
-        userPrefs.updateStudentTargetExam(cleanTitle)
-    }
-
-    val uid = GoogleServicesHelper.getCurrentUser(context = context)?.uid
-    if (uid != null) {
-        val db = GoogleServicesHelper.getFirebaseFirestore(context)
-        val payload = hashMapOf<String, Any>(
-            "targetExamTitle" to cleanTitle,
-            "targetExamDate" to millis
-        )
-        if (cleanTitle != "Hedef Sınav") {
-            payload["targetExam"] = cleanTitle
-        }
-        db?.collection("students")?.document(uid)?.set(payload, SetOptions.merge())
-        if (cleanTitle != "Hedef Sınav") {
-            db?.collection("users")?.document(uid)
-                ?.set(mapOf("targetExam" to cleanTitle), SetOptions.merge())
-        }
-    }
-
-    Toast.makeText(context, "Hedef sınav tarihi kaydedildi.", Toast.LENGTH_SHORT).show()
 }

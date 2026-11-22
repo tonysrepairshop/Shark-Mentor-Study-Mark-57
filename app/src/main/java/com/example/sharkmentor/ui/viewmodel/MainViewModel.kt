@@ -43,6 +43,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         attachStudentListenerIfNeeded(uid)
     }
 
+    private val countdownRepo = com.example.sharkmentor.data.repository.CountdownRepository.getInstance(application)
+    private val streakRepo = com.example.sharkmentor.data.repository.StreakRepository(application)
     private val prefs = application.getSharedPreferences("sharkmentor_prefs", Context.MODE_PRIVATE)
     private val prefsListener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "target_date_millis" || key == "target_exam_title") {
@@ -53,6 +55,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         refreshCountdownText()
+
+        viewModelScope.launch {
+            countdownRepo.stateFlow.collect {
+                refreshCountdownText()
+            }
+        }
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             while (true) {
@@ -122,21 +130,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         targetExam = examInDb
                     )
 
-                    // Keep top bar countdown synced when exam title/date exist in cloud
-                    val cloudExamDate = snapshot.getLong("targetExamDate") ?: 0L
-                    val prefEditor = prefs.edit()
-                    var prefChanged = false
-                    if (!examInDb.isNullOrBlank() && prefs.getString("target_exam_title", "").isNullOrBlank()) {
-                        prefEditor.putString("target_exam_title", examInDb)
-                        prefChanged = true
-                    }
-                    if (cloudExamDate > 0L && prefs.getLong("target_date_millis", 0L) <= 0L) {
-                        prefEditor.putLong("target_date_millis", cloudExamDate)
-                        prefChanged = true
-                    }
-                    if (prefChanged) {
-                        prefEditor.apply()
+                    // Real-time two-way LWW cloud sync for Exam Countdown ("Geri Sayım Aracı")
+                    if (countdownRepo.applyRemoteSnapshot(snapshot)) {
                         refreshCountdownText()
+                    }
+
+                    // Real-time two-way cloud sync for Water Streak ("Su Serisi")
+                    if (streakRepo.applyRemoteSnapshot(snapshot)) {
+                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching {
+                                com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(appContext)
+                            }
+                        }
                     }
 
                     // Live sync profile photo / preset avatar for Side Panel & Profile
@@ -153,19 +158,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    // One-shot fallback check on users/{uid} if grade or targetExam was written there at registration
-                    if ((gradeInDb.isNullOrBlank() || examInDb.isNullOrBlank()) && fallbackCheckedForUid != uid) {
+                    // One-shot full reconciliation & legacy users/{uid} migration for this session
+                    if (fallbackCheckedForUid != uid) {
                         fallbackCheckedForUid = uid
-                        db.collection("users").document(uid).get().addOnSuccessListener { userDoc ->
-                            if (userDoc != null && userDoc.exists()) {
-                                val fallbackGrade = gradeInDb ?: listOf("grade", "gradeLevel", "sinif")
-                                    .firstNotNullOfOrNull { f -> userDoc.getString(f)?.trim()?.takeIf { it.isNotBlank() } }
-                                val fallbackExam = examInDb ?: listOf("targetExam", "targetExamTitle")
-                                    .firstNotNullOfOrNull { f -> userDoc.getString(f)?.trim()?.takeIf { it.isNotBlank() } }
-                                userPrefs.updateProfileDetails(
-                                    grade = fallbackGrade,
-                                    targetExam = fallbackExam
-                                )
+                        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching {
+                                countdownRepo.pullAndMergeFromCloud(prefetchedStudentDoc = snapshot)
+                            }
+                            runCatching {
+                                streakRepo.pullAndMergeFromCloud(prefetchedStudentDoc = snapshot)
+                            }
+                        }
+                        if (gradeInDb.isNullOrBlank() || examInDb.isNullOrBlank()) {
+                            db.collection("users").document(uid).get().addOnSuccessListener { userDoc ->
+                                if (userDoc != null && userDoc.exists()) {
+                                    val fallbackGrade = gradeInDb ?: listOf("grade", "gradeLevel", "sinif")
+                                        .firstNotNullOfOrNull { f -> userDoc.getString(f)?.trim()?.takeIf { it.isNotBlank() } }
+                                    val fallbackExam = examInDb ?: listOf("targetExam", "targetExamTitle")
+                                        .firstNotNullOfOrNull { f -> userDoc.getString(f)?.trim()?.takeIf { it.isNotBlank() } }
+                                    userPrefs.updateProfileDetails(
+                                        grade = fallbackGrade,
+                                        targetExam = fallbackExam
+                                    )
+                                }
                             }
                         }
                     }
@@ -174,16 +189,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshCountdownText() {
-        val rawTitle = prefs.getString("target_exam_title", null)?.trim().orEmpty()
+        val state = countdownRepo.stateFlow.value
+        val rawTitle = state.title.trim()
+            .ifBlank { prefs.getString("target_exam_title", null)?.trim().orEmpty() }
             .ifBlank {
                 com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(getApplication())
                     .studentTargetExam?.trim().orEmpty()
             }
         val examTitle = if (rawTitle.isBlank()) "YKS" else rawTitle
-        var targetMillis = prefs.getLong("target_date_millis", 0L)
+        val targetMillis = if (state.targetDateMillis > 0L) {
+            state.targetDateMillis
+        } else {
+            prefs.getLong("target_date_millis", 0L)
+        }
         if (targetMillis <= 0L) {
-         _uiState.value = _uiState.value.copy(targetCountdownText = "")
-         return
+            _uiState.value = _uiState.value.copy(targetCountdownText = "")
+            return
         }
 
         val diffMillis = targetMillis - System.currentTimeMillis()

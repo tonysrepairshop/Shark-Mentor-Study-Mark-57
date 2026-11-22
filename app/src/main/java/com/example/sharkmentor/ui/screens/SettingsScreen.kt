@@ -852,6 +852,8 @@ fun executePermanentAccountDeletion(context: Context, onComplete: () -> Unit) {
                             auth?.signOut()
                             com.example.sharkmentor.core.util.AvatarHelper.clearLocalAvatar(context)
                             com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).clearSessionProfile()
+                            com.example.sharkmentor.data.repository.StreakRepository(context).clearLocalForLogout()
+                            com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).clearLocalForLogout()
                             com.example.sharkmentor.core.util.SessionManager.setLinkedToInstitution(context, false)
                             com.example.sharkmentor.core.util.SessionManager.setUserMode(context, "study")
                             Toast.makeText(context, "Hesap silindi", Toast.LENGTH_SHORT).show()

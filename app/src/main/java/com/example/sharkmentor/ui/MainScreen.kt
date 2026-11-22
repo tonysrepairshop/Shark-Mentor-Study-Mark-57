@@ -225,6 +225,8 @@ fun MainScreen(
             GoogleServicesHelper.signOut()
             com.example.sharkmentor.core.util.AvatarHelper.clearLocalAvatar(context)
             com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).clearSessionProfile()
+            com.example.sharkmentor.data.repository.StreakRepository(context).clearLocalForLogout()
+            com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).clearLocalForLogout()
             com.example.sharkmentor.core.util.SessionManager.setLinkedToInstitution(context, false)
             com.example.sharkmentor.core.util.SessionManager.setUserMode(context, "study")
             navController.navigate(Screen.Login.route) {
@@ -553,6 +555,22 @@ fun MainScreen(
                         composable(Screen.Login.route) {
                             LoginScreen(
                                 onLoginSuccess = {
+                                    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                        runCatching {
+                                            com.example.sharkmentor.data.repository.StreakRepository(context)
+                                                .pullAndMergeFromCloud()
+                                        }
+                                        runCatching {
+                                            com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context)
+                                                .pullAndMergeFromCloud()
+                                        }
+                                        runCatching {
+                                            com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(context)
+                                        }
+                                        runCatching {
+                                            com.example.sharkmentor.service.sync.SyncWorker.enqueueForceFullSync(context)
+                                        }
+                                    }
                                     navController.navigate(Screen.Focus.route) {
                                         popUpTo(0) { inclusive = true }
                                         launchSingleTop = true

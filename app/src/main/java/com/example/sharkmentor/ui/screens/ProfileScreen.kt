@@ -161,13 +161,7 @@ private fun saveStudentTargetExamLocallyAndCloud(
 
     val userPrefs = UserPreferences.getInstance(context)
     userPrefs.updateStudentTargetExam(clean)
-    userPrefs.countdownExamTitle = clean
-
-    context.applicationContext
-        .getSharedPreferences("sharkmentor_prefs", Context.MODE_PRIVATE)
-        .edit()
-        .putString("target_exam_title", clean)
-        .apply()
+    com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).updateTitle(clean)
 
     if (!isGuest && !uid.isNullOrBlank()) {
         val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return

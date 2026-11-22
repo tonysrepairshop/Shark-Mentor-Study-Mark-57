@@ -134,8 +134,17 @@ object WidgetUpdateManager {
                 Instant.ofEpochMilli(session.completedAt).atZone(zone).toLocalDate()
             }.mapValues { (_, list) -> list.sumOf { it.durationSeconds } }
 
+            val allFocus = db.sessionDao().getAllSessionsRaw()
+                .filter { activeSessionUuid == null || it.cloudId != activeSessionUuid }
+            val syncedStreakState = runCatching {
+                streakRepository.syncFromRoomSessions(allFocus, totalTodayMinutes)
+            }.getOrDefault(initialStreakState)
+            val syncedCompletedDates = syncedStreakState.completedDates
+            val syncedDoneToday = syncedStreakState.lastStreakDate == todayStr || totalTodayMinutes >= 20L
+
             val dayStatuses = (6 downTo 0).map { offset ->
                 val date = today.minusDays(offset.toLong())
+                val dateIso = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 val mins = (secondsByDate[date] ?: 0L) / 60L
                 val effectiveMins = if (date == today) maxOf(mins, totalTodayMinutes) else mins
                 val label = when (date.dayOfWeek.value) {
@@ -147,7 +156,9 @@ object WidgetUpdateManager {
                     6 -> "Ct"
                     else -> "Pz"
                 }
-                val completed = effectiveMins >= 20L || (date == today && initialDoneToday)
+                val completed = effectiveMins >= 20L ||
+                    syncedCompletedDates.contains(dateIso) ||
+                    (date == today && syncedDoneToday)
                 DayFocusStatus(
                     dayLabel = label,
                     minutes = effectiveMins,
@@ -162,11 +173,6 @@ object WidgetUpdateManager {
 
             val topics = db.goalsDao().getAllTopicsRaw()
             val resources = db.goalsDao().getAllResourcesRaw()
-            val allFocus = db.sessionDao().getAllSessionsRaw()
-                .filter { activeSessionUuid == null || it.cloudId != activeSessionUuid }
-            val syncedStreakState = runCatching {
-                streakRepository.syncFromRoomSessions(allFocus, totalTodayMinutes)
-            }.getOrDefault(initialStreakState)
             val totalAllMinutes = (allFocus.sumOf { it.durationSeconds } / 60L) + liveActiveMinutes
             val reflections = db.dailyReflectionDao().getRecentReflectionsRaw()
             val avgScore = if (reflections.isNotEmpty()) {
@@ -191,8 +197,10 @@ object WidgetUpdateManager {
                 syncedStreakState = syncedStreakState
             )
         }.getOrElse {
+            val fallbackDates = initialStreakState.completedDates
             val fallback7Days = (6 downTo 0).map { offset ->
                 val date = today.minusDays(offset.toLong())
+                val dateIso = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 val label = when (date.dayOfWeek.value) {
                     1 -> "Pt"
                     2 -> "Sa"
@@ -205,7 +213,7 @@ object WidgetUpdateManager {
                 DayFocusStatus(
                     dayLabel = label,
                     minutes = 0L,
-                    isCompleted = date == today && initialDoneToday,
+                    isCompleted = fallbackDates.contains(dateIso) || (date == today && initialDoneToday),
                     isToday = date == today
                 )
             }

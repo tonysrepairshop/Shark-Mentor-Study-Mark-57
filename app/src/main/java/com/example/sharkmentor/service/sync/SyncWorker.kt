@@ -251,7 +251,17 @@ class SyncWorker(
                     async { syncLocalSessions(db, firestore, syncTag, defaultInstitution, studentName, uid) },
                     async { syncLocalPlans(db, firestore, syncTag, defaultInstitution, studentName, uid) },
                     async { syncLocalTopics(db, firestore, syncTag, uid) },
-                    async { syncLocalResources(db, firestore, syncTag, uid) }
+                    async { syncLocalResources(db, firestore, syncTag, uid) },
+                    async {
+                        runCatching {
+                            com.example.sharkmentor.data.repository.StreakRepository(context).pushPendingToCloudIfNeeded()
+                        }.getOrDefault(0)
+                    },
+                    async {
+                        runCatching {
+                            com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).pushPendingToCloudIfNeeded()
+                        }.getOrDefault(0)
+                    }
                 ).awaitAll().sum()
             }
 
@@ -285,6 +295,16 @@ class SyncWorker(
                 }
 
                 coroutineScope {
+                    val streakAndCountdownJob = async {
+                        runCatching {
+                            com.example.sharkmentor.data.repository.StreakRepository(context)
+                                .pullAndMergeFromCloud(prefetchedStudentDoc = studentDoc)
+                        }.onFailure { Log.w(syncTag, "Err pull water streak: ${it.message}") }
+                        runCatching {
+                            com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context)
+                                .pullAndMergeFromCloud(prefetchedStudentDoc = studentDoc)
+                        }.onFailure { Log.w(syncTag, "Err pull countdown: ${it.message}") }
+                    }
                     val planAndScheduleJob = async {
                         try {
                             pullActiveStudyPlan(db, studentDoc, syncTag)
@@ -306,7 +326,7 @@ class SyncWorker(
                     val goalsJob = async {
                         try { pullRemoteGoals(db, firestore, syncTag, uid) } catch (e: Exception) { Log.e(syncTag, "Err pull goals", e) }
                     }
-                    awaitAll(planAndScheduleJob, resourcesJob, topicsJob, goalsJob)
+                    awaitAll(streakAndCountdownJob, planAndScheduleJob, resourcesJob, topicsJob, goalsJob)
                 }
 
                 // 3. Assigned plans/targets pull (after target/plan tables finish above)

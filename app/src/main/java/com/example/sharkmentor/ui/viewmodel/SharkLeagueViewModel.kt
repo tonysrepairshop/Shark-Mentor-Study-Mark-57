@@ -847,8 +847,12 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
                 val liveTimerState = FocusTimerService.timerStateFlow.value
                 val weeklySeconds = completedWeeklySeconds + liveElapsedFocusSeconds(liveTimerState)
                 val liveFocusing = isCurrentlyFocusing(liveTimerState)
-                val remoteStreak = studentDoc?.getLong("streakDays")?.toInt() ?: 0
-                val streakDays = maxOf(localStreakDays, remoteStreak)
+                val remoteStreak = maxOf(
+                    studentDoc?.getLong("streakDays")?.toInt() ?: 0,
+                    studentDoc?.getLong("streakCount")?.toInt() ?: 0
+                )
+                val syncedWaterStreak = com.example.sharkmentor.data.repository.StreakRepository(appContext).streakState.value.streakCount
+                val streakDays = maxOf(localStreakDays, syncedWaterStreak, remoteStreak)
 
                 // Weekly bonus seconds (capped at MAX_WEEKLY_BONUS_SECONDS = 9000s during scoring)
                 val remoteWeekBonus = SharkBadgeCatalog.parseWeeklyBonusForWeek(
@@ -1987,7 +1991,10 @@ try {
                     break
                 }
             }
-            weeklySeconds to streak
+            val syncedWaterStreak = runCatching {
+                com.example.sharkmentor.data.repository.StreakRepository(appContext).streakState.value.streakCount
+            }.getOrDefault(0)
+            weeklySeconds to maxOf(streak, syncedWaterStreak)
         } catch (e: Exception) {
             0L to 0
         }
