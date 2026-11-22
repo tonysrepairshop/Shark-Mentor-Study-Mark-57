@@ -259,17 +259,17 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 }
                 val remoteCompetencies = compDocs.documents.mapNotNull { it.toObject(TopicCompetency::class.java) }
                 val localCompetencies = localTopicGoals.map {
-                    TopicCompetency(subject = it.subject, topic = it.topic, level = it.currentLevel)
+                    TopicCompetency(subject = it.subject, topicName = it.topic, level = it.currentLevel)
                 }
                 val mergedCompetencies = (localCompetencies + remoteCompetencies)
-                    .distinctBy { "${it.subject.lowercase()}_${it.topic.lowercase()}" }
+                    .distinctBy { "${it.subject.lowercase()}_${it.topicName.lowercase()}" }
 
                 // Filter to top 15 weak competencies (weakest scores first)
                 val prunedCompetencies = mergedCompetencies
                     .filter { it.level <= 3 }
                     .sortedWith(
                         compareBy<TopicCompetency> { it.level }
-                            .thenBy { com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
+                            .thenBy { com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topicName) }
                     )
                     .take(15)
 
