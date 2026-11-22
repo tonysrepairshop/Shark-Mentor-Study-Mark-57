@@ -131,7 +131,7 @@ fun NoteSettingsScreen(
                         title = "Notlar & PDF AI Asistanı",
                         subtitle = "Not ve PDF üst barındaki AI asistanını açar veya gizler.",
                         checked = notesAiEnabled,
-                        onCheckedChange = userAiPrefs::setNotesAiEnabled
+                        onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
                     )
                 }
             }
@@ -148,7 +148,7 @@ fun NoteSettingsScreen(
                         title = "Çizim Paneli AI (Kement Çözüm)",
                         subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu açar veya gizler.",
                         checked = drawingAiEnabled,
-                        onCheckedChange = userAiPrefs::setDrawingAiEnabled
+                        onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
                     )
                 }
             }

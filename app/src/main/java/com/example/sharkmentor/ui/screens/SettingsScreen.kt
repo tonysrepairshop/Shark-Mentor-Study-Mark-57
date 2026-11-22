@@ -558,6 +558,7 @@ fun SettingsScreen(
 private fun StudioAndModuleAiControlsContent(
     userAiPrefs: UserAiPreferences
 ) {
+    val context = LocalContext.current
     val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
     val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
@@ -582,14 +583,14 @@ private fun StudioAndModuleAiControlsContent(
             title = "Video Reklam Engelleyici",
             subtitle = "Video Stüdyosu'nda reklam ağlarını ve video içi reklamları engeller.",
             checked = videoAdBlockerEnabled,
-            onCheckedChange = userAiPrefs::setVideoAdBlockerEnabled
+            onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
         )
         ModuleControlSwitchCard(
             icon = Icons.Default.PlayCircleOutline,
             title = "Video Stüdyosu AI Asistanı",
             subtitle = "İzlenen video bağlantısı ve dakikaya göre AI soru sorma panelini açar.",
             checked = videoStudioAiEnabled,
-            onCheckedChange = userAiPrefs::setVideoStudioAiEnabled
+            onCheckedChange = { userAiPrefs.setVideoStudioAiEnabled(context, it) }
         )
 
         HorizontalDivider()
@@ -605,14 +606,14 @@ private fun StudioAndModuleAiControlsContent(
             title = "Notlar & PDF AI Asistanı",
             subtitle = "Not ve PDF ekranlarındaki yapay zeka asistan butonunu ve panelini yönetir.",
             checked = notesAiEnabled,
-            onCheckedChange = userAiPrefs::setNotesAiEnabled
+            onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
         )
         ModuleControlSwitchCard(
             icon = Icons.Default.Brush,
             title = "Çizim Paneli AI (Kement Çözüm)",
             subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu yönetir.",
             checked = drawingAiEnabled,
-            onCheckedChange = userAiPrefs::setDrawingAiEnabled
+            onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
         )
 
         Surface(

@@ -387,28 +387,28 @@ fun AiSettingsScreen(
                             title = "Video Stüdyosu AI Asistanı",
                             subtitle = "İzlenen video bağlantısı ve dakikaya göre soru sorma",
                             checked = videoStudioAiEnabled,
-                            onCheckedChange = userAiPrefs::setVideoStudioAiEnabled
+                            onCheckedChange = { userAiPrefs.setVideoStudioAiEnabled(context, it) }
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         AiModuleToggleRow(
                             title = "Video Reklam Engelleyici",
                             subtitle = "Video Stüdyosu'nda reklam isteklerini ve video içi reklamları engeller",
                             checked = videoAdBlockerEnabled,
-                            onCheckedChange = userAiPrefs::setVideoAdBlockerEnabled
+                            onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         AiModuleToggleRow(
                             title = "Notlar & PDF AI Asistanı",
                             subtitle = "Not ve PDF ekranlarındaki yapay zeka asistanını açar/kapatır",
                             checked = notesAiEnabled,
-                            onCheckedChange = userAiPrefs::setNotesAiEnabled
+                            onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                         AiModuleToggleRow(
                             title = "Çizim Paneli AI (Kement Çözüm)",
                             subtitle = "Kementle seçilen alanlarda AI'ya Sor kısayolunu açar/kapatır",
                             checked = drawingAiEnabled,
-                            onCheckedChange = userAiPrefs::setDrawingAiEnabled
+                            onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
                         )
                     }
                 }
