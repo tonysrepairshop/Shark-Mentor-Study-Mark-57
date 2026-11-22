@@ -590,22 +590,37 @@ fun SpaciousPlanTaskCard(
     onToggleCompletion: () -> Unit
 ) {
     val context = LocalContext.current
+    LaunchedEffect(context) {
+        BookCampManager.ensureLoaded(context)
+    }
+    val campBindings by BookCampManager.bindingsByResourceId.collectAsState()
+    val verifiedVideo = remember(task, campBindings) {
+        BookCampManager.resolveVerifiedCampEpisodeForTask(
+            context = context,
+            subject = task.subject,
+            topic = task.topic,
+            taskTitle = task.title,
+            dayHint = task.dayOfWeek
+        )
+    }
     var showCampStudio by remember { mutableStateOf(false) }
 
-    if (showCampStudio) {
-        val (campTitle, episode) = remember(task) {
-            BookCampManager.resolveCampEpisodeForTask(
-                context = context,
-                subject = task.subject,
-                topic = task.topic,
-                taskTitle = task.title,
-                dayHint = task.dayOfWeek
-            )
+    if (showCampStudio && verifiedVideo != null) {
+        val (campTitle, episode) = verifiedVideo
+        val matchedBinding = remember(campBindings, task.subject, episode.playlistId) {
+            campBindings.values.firstOrNull {
+                it.hasVerifiedVideoSupport && (
+                    (episode.playlistId.isNotBlank() && it.playlistId == episode.playlistId) ||
+                        it.subject.contains(task.subject, ignoreCase = true) ||
+                        task.subject.contains(it.subject, ignoreCase = true)
+                    )
+            }
         }
         CampVideoStudyStudioDialog(
             campTitle = campTitle,
             subject = task.subject,
             initialEpisode = episode,
+            allEpisodes = matchedBinding?.episodes?.ifEmpty { listOf(episode) } ?: listOf(episode),
             onMarkCompleted = {
                 if (!task.isCompleted) onToggleCompletion()
                 showCampStudio = false
@@ -707,31 +722,33 @@ fun SpaciousPlanTaskCard(
                 )
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            if (verifiedVideo != null) {
+                Spacer(modifier = Modifier.width(6.dp))
 
-            // Direct Camp Video Study Studio Link Chip next to plan box
-            Surface(
-                onClick = { showCampStudio = true },
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                // Only shown when verified real video support exists for this book/subject
+                Surface(
+                    onClick = { showCampStudio = true },
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayCircleOutline,
-                        contentDescription = "Kamp Videosu",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Text(
-                        text = "Kamp",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayCircleOutline,
+                            contentDescription = "Ders Videosu",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "İzle",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
 

@@ -1884,9 +1884,9 @@ private fun LeaderboardRow(
                             }
                         }
                         if (entry.isStudyingNow) {
-                            val activeTopicText = entry.activeSubject
-                                ?.trim()
-                                ?.takeIf { it.isNotBlank() && !it.equals("Genel", ignoreCase = true) }
+                            val activeTopicText = com.example.sharkmentor.core.coaching.CoachingEngine
+                                .formatCleanLeagueSubject(entry.activeSubject.orEmpty())
+                                .takeIf { it.isNotBlank() && !it.equals("Genel", ignoreCase = true) }
                             val badgeLabel = if (activeTopicText != null) {
                                 "Masada • $activeTopicText"
                             } else {

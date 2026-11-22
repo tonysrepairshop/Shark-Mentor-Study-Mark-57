@@ -973,7 +973,15 @@ fun DuolingoCoachingPathView(
         BookCampManager.ensureLoaded(context)
     }
 
-    // Build the 3-step Duolingo path nodes for the selected day (canonically ordered & mastery gated)
+    LaunchedEffect(activeSelectedResource?.id, activeSelectedResource?.title, activeSelectedResource?.subject) {
+        val res = activeSelectedResource ?: return@LaunchedEffect
+        val currentBinding = BookCampManager.resolveCampForResource(context, res)
+        if (!currentBinding.videoCheckCompleted) {
+            BookCampManager.discoverAndSyncRealCampForResource(context, res)
+        }
+    }
+
+    // Build daily Duolingo path nodes (shows Video step ONLY when real verified video exists)
     val dayTasks = remember(allFolderTasks, selectedDayIso) {
         allFolderTasks.filter { it.dayOfWeek == selectedDayIso }
     }
@@ -1007,13 +1015,18 @@ fun DuolingoCoachingPathView(
             campTitle = node.campTitle,
             subject = node.subject,
             initialEpisode = node.campEpisode,
-            allEpisodes = resourceBinding?.episodes ?: listOf(node.campEpisode),
-            onMarkCompleted = {
+            allEpisodes = resourceBinding?.episodes?.ifEmpty { listOf(node.campEpisode) } ?: listOf(node.campEpisode),
+            onEpisodeChanged = { chosenEp ->
+                node.linkedResource?.let { res ->
+                    BookCampManager.advanceCampDay(context, res, targetDay = chosenEp.dayNumber)
+                }
+            },
+            onMarkCompleted = { completedEp ->
                 val updated = completedNodeIds + node.id
                 completedNodeIds = updated
                 saveCompletedNodeIds(context, updated)
                 node.linkedResource?.let { res ->
-                    BookCampManager.advanceCampDay(context, res)
+                    BookCampManager.advanceCampDay(context, res, targetDay = completedEp.dayNumber + 1)
                 }
                 activeStudioNode = null
             },
@@ -1193,8 +1206,11 @@ fun DuolingoCoachingPathView(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
+                        val cleanCockpitSubj = CoachingEngine.formatCleanLeagueSubject(
+                            timerState.activeSubject.ifBlank { CoachingEngine.buildFormattedFocusSubject() }
+                        ).ifBlank { "Odak" }
                         Text(
-                            text = "Masada • ${timerState.activeSubject.ifBlank { CoachingEngine.buildFormattedFocusSubject() }}",
+                            text = "Masada • $cleanCockpitSubj",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.primary,
@@ -1373,44 +1389,125 @@ fun DuolingoCoachingPathView(
             }
         }
 
-        // 5b. Single Active Book / Resource Selector (prevents interleaving all library books together)
-        if (libraryResources.size > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+        // 5b. Active Book Banner & Selector (ALWAYS clearly displays which book is being progressed!)
+        if (activeSelectedResource != null) {
+            val activeBinding = remember(activeSelectedResource, campBindings) {
+                BookCampManager.resolveCampForResource(context, activeSelectedResource)
+            }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                libraryResources.forEach { res ->
-                    val isSelected = activeSelectedResource?.id == res.id
-                    Surface(
-                        onClick = { selectedResourceId = res.id },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isSelected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
-                        )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 13.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(9.dp),
+                            modifier = Modifier.weight(1f)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Book,
-                                contentDescription = null,
-                                tint = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = "${res.title} (${res.subject})",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) colorScheme.onPrimaryContainer else colorScheme.onSurface,
-                                maxLines = 1
-                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = colorScheme.primary.copy(alpha = 0.14f),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.Book,
+                                        contentDescription = null,
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "İlerlenen Kitap • ${activeSelectedResource.subject}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary
+                                )
+                                Text(
+                                    text = activeSelectedResource.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val bookModeSubtitle = when {
+                                    activeBinding.hasVerifiedVideoSupport ->
+                                        "Video Destekli • ${activeBinding.currentDay}/${activeBinding.totalDays}. Ders"
+                                    !activeBinding.videoCheckCompleted ->
+                                        "Video desteği kontrol ediliyor..."
+                                    else ->
+                                        "Kitap & Soru Odaklı İlerleme"
+                                }
+                                Text(
+                                    text = bookModeSubtitle,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        if (activeSelectedResource.totalUnits > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = colorScheme.primaryContainer
+                            ) {
+                                Text(
+                                    text = "${activeSelectedResource.completedUnits}/${activeSelectedResource.totalUnits} ${activeSelectedResource.unitType}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (libraryResources.size > 1) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            libraryResources.forEach { res ->
+                                val isSelected = activeSelectedResource.id == res.id
+                                Surface(
+                                    onClick = { selectedResourceId = res.id },
+                                    shape = RoundedCornerShape(9.dp),
+                                    color = if (isSelected) colorScheme.primary else colorScheme.surface,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    )
+                                ) {
+                                    Text(
+                                        text = "${res.title} (${res.subject})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1494,6 +1591,7 @@ fun DuolingoCoachingPathView(
                 colorScheme.secondary.red == colorScheme.secondary.green
         val completedAccent = if (isMonochromeTheme) colorScheme.primary else Color(0xFF10B981)
         val allDone = pathNodes.isNotEmpty() && completedCount == pathNodes.size
+        val hasVerifiedVideoStep = pathNodes.any { it.kind == DuolingoNodeKind.VIDEO_CAMP }
 
         Surface(
             shape = RoundedCornerShape(22.dp),
@@ -1522,10 +1620,17 @@ fun DuolingoCoachingPathView(
                             fontWeight = FontWeight.ExtraBold,
                             color = colorScheme.onSurface
                         )
+                        val bookTag = activeSelectedResource?.title?.takeIf { it.isNotBlank() }?.let { "$it • " }.orEmpty()
                         Text(
-                            text = "Kamp Videosu • Soru & Odak • Mini Kontrol",
+                            text = if (hasVerifiedVideoStep) {
+                                "${bookTag}Ders Videosu • Soru & Odak • Mini Kontrol"
+                            } else {
+                                "${bookTag}Soru & Odak • Mini Kontrol"
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     Surface(
@@ -2082,11 +2187,12 @@ private fun buildDuolingoDayNodes(
     completedNodeIds: Set<String>
 ): List<DuolingoPathNode> {
     val nodes = mutableListOf<DuolingoPathNode>()
+    val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
+    val dayOffsetFromToday = (dayIso - todayIso).coerceAtLeast(0)
 
     // 1. Build day's raw blocks without interleaving multiple library books together
     val rawBlocks: List<Triple<String, String, PlanEntity?>> = when {
         dayTasks.isNotEmpty() -> {
-            // Sort the day's tasks by canonical curriculum order within each subject
             dayTasks
                 .sortedBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic.ifBlank { it.title }) }
                 .map { task ->
@@ -2094,20 +2200,44 @@ private fun buildDuolingoDayNodes(
                 }
         }
         activeResource != null -> {
-            // Use ONLY the currently selected active book so books are never mixed together
             val binding = BookCampManager.resolveCampForResource(context, activeResource, topicGoals)
-            val epDay = (binding.currentDay + (dayIso - 1).coerceAtLeast(0)).coerceIn(1, binding.totalDays.coerceAtLeast(1))
-            val ep = binding.episodes.firstOrNull { it.dayNumber == epDay } ?: binding.currentEpisode()
-            listOf(Triple(activeResource.subject, ep.topicTitle, null))
+            if (binding.hasVerifiedVideoSupport && binding.episodes.isNotEmpty()) {
+                val epDay = (binding.currentDay + dayOffsetFromToday).coerceIn(1, binding.episodes.size)
+                val ep = binding.episodes.firstOrNull { it.dayNumber == epDay } ?: binding.currentEpisode()
+                listOf(Triple(activeResource.subject, ep.topicTitle, null))
+            } else {
+                // Honest non-video book progression: pick real topic from student's goals or canonical subject sequence
+                val subjectGoalTopics = topicGoals
+                    .filter {
+                        !it.isDeleted && (
+                            it.subject.contains(activeResource.subject, ignoreCase = true) ||
+                                activeResource.subject.contains(it.subject, ignoreCase = true)
+                            )
+                    }
+                    .sortedWith(
+                        compareBy<TopicGoalEntity> { it.currentLevel }
+                            .thenBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
+                    )
+                    .map { it.topic }
+                val baseTopics = subjectGoalTopics.ifEmpty {
+                    BookCampManager.canonicalCurriculumForSubject(activeResource.subject, activeResource.title)
+                }
+                val unitIndex = (activeResource.completedUnits + dayOffsetFromToday).coerceAtLeast(0)
+                val topicName = if (baseTopics.isNotEmpty()) {
+                    baseTopics[unitIndex % baseTopics.size]
+                } else {
+                    "${activeResource.title} • ${unitIndex + 1}. ${activeResource.unitType}"
+                }
+                listOf(Triple(activeResource.subject, topicName, null))
+            }
         }
         else -> {
             val defaultSubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
             val canonical = BookCampManager.canonicalCurriculumForSubject(defaultSubject)
-            val orderedTopics = if (canonical.isNotEmpty()) {
-                BookCampManager.expandTopicsToDaysWithMastery(defaultSubject, canonical, 30, topicGoals)
-            } else emptyList()
-            val topicForDay = orderedTopics.getOrElse((dayIso - 1).coerceAtLeast(0)) {
-                "${dayIso}. Gün Temel Kazanım & Soru Bloğu"
+            val topicForDay = if (canonical.isNotEmpty()) {
+                canonical[(dayIso - 1).coerceAtLeast(0) % canonical.size]
+            } else {
+                "$defaultSubject Soru & Konu Çalışması"
             }
             listOf(Triple(defaultSubject, topicForDay, null))
         }
@@ -2115,14 +2245,6 @@ private fun buildDuolingoDayNodes(
 
     var stepCounter = 1
     rawBlocks.forEachIndexed { blockIdx, (subject, rawTopic, planTask) ->
-        // Enforce Prerequisite Foundation Gatekeeping & Mastery Weighting
-        val gateResult = BookCampManager.enforcePrerequisiteFoundationGate(
-            subject = subject,
-            requestedTopic = rawTopic,
-            studentTopicGoals = topicGoals
-        )
-        val topic = gateResult.effectiveTopic
-
         val matchedResource = if (activeResource != null &&
             (activeResource.subject.contains(subject, ignoreCase = true) || subject.contains(activeResource.subject, ignoreCase = true))
         ) {
@@ -2133,42 +2255,89 @@ private fun buildDuolingoDayNodes(
             }
         }
 
-        val (campTitle, episode) = BookCampManager.resolveCampEpisodeForTask(
-            context = context,
-            subject = subject,
-            topic = topic,
-            taskTitle = planTask?.title.orEmpty(),
-            dayHint = dayIso,
-            libraryResources = libraryResources,
-            preferredResource = matchedResource,
-            studentTopicGoals = topicGoals
-        )
+        val matchedBinding = matchedResource?.let { BookCampManager.resolveCampForResource(context, it, topicGoals) }
+        val verifiedVideo: Pair<String, CampDayEpisode>? = when {
+            matchedBinding != null && matchedBinding.hasVerifiedVideoSupport -> {
+                val targetDay = if (planTask == null && matchedBinding.episodes.isNotEmpty()) {
+                    (matchedBinding.currentDay + dayOffsetFromToday).coerceIn(1, matchedBinding.episodes.size)
+                } else null
+                val ep = if (targetDay != null) {
+                    matchedBinding.episodes.firstOrNull { it.dayNumber == targetDay } ?: matchedBinding.currentEpisode()
+                } else {
+                    BookCampManager.resolveVerifiedCampEpisodeForTask(
+                        context = context,
+                        subject = subject,
+                        topic = rawTopic,
+                        taskTitle = planTask?.title.orEmpty(),
+                        dayHint = dayIso,
+                        libraryResources = libraryResources,
+                        preferredResource = matchedResource,
+                        studentTopicGoals = topicGoals
+                    )?.second ?: matchedBinding.currentEpisode()
+                }
+                if (ep.videoId.length == 11 || ep.playlistId.isNotBlank()) {
+                    matchedBinding.campTitle to ep
+                } else null
+            }
+            else -> BookCampManager.resolveVerifiedCampEpisodeForTask(
+                context = context,
+                subject = subject,
+                topic = rawTopic,
+                taskTitle = planTask?.title.orEmpty(),
+                dayHint = dayIso,
+                libraryResources = libraryResources,
+                preferredResource = matchedResource,
+                studentTopicGoals = topicGoals
+            )
+        }
+
+        // Preserve exact real playlist topic when coming from a real playlist; otherwise apply mastery gatekeeping
+        val topic = if (matchedBinding?.isFromRealPlaylist == true && verifiedVideo != null) {
+            verifiedVideo.second.topicTitle.ifBlank { rawTopic }
+        } else {
+            BookCampManager.enforcePrerequisiteFoundationGate(
+                subject = subject,
+                requestedTopic = rawTopic,
+                studentTopicGoals = topicGoals
+            ).effectiveTopic
+        }
 
         val baseKey = planTask?.id ?: "day_${dayIso}_block_${blockIdx}_${subject}"
+        val fallbackEpisode = verifiedVideo?.second ?: CampDayEpisode(dayNumber = dayIso, topicTitle = topic)
+        val effectiveCampTitle = verifiedVideo?.first ?: matchedResource?.title?.ifBlank { subject } ?: subject
 
-        // Node 1: Video Camp Step
-        val videoNodeId = "${baseKey}_video"
-        nodes.add(
-            DuolingoPathNode(
-                id = videoNodeId,
-                stepIndex = stepCounter++,
-                kind = DuolingoNodeKind.VIDEO_CAMP,
-                subject = subject,
-                topic = episode.topicTitle.ifBlank { topic },
-                subtitle = "$campTitle • ${episode.dayNumber}. Gün Videosu",
-                campTitle = campTitle,
-                campEpisode = episode,
-                linkedPlanTask = planTask,
-                linkedResource = matchedResource,
-                isCompleted = completedNodeIds.contains(videoNodeId) || (planTask?.isCompleted == true)
+        // Node 1 (ONLY when verified real video support exists for this book/task!)
+        if (verifiedVideo != null) {
+            val (campTitle, episode) = verifiedVideo
+            val videoNodeId = "${baseKey}_video"
+            val bookPrefix = matchedResource?.title?.takeIf {
+                it.isNotBlank() && !campTitle.contains(it, ignoreCase = true)
+            }?.let { "$it • " }.orEmpty()
+            nodes.add(
+                DuolingoPathNode(
+                    id = videoNodeId,
+                    stepIndex = stepCounter++,
+                    kind = DuolingoNodeKind.VIDEO_CAMP,
+                    subject = subject,
+                    topic = episode.topicTitle.ifBlank { topic },
+                    subtitle = "$bookPrefix$campTitle • ${episode.dayNumber}. Ders Videosu",
+                    campTitle = campTitle,
+                    campEpisode = episode,
+                    linkedPlanTask = planTask,
+                    linkedResource = matchedResource,
+                    isCompleted = completedNodeIds.contains(videoNodeId) || (planTask?.isCompleted == true)
+                )
             )
-        )
+        }
 
-        // Node 2: Practice Focus & Resource Unit Step
+        // Practice Focus & Active Book Unit Step (ALWAYS clearly displays the book title!)
         val practiceNodeId = "${baseKey}_practice"
         val qCount = planTask?.targetQuestions ?: 35
         val resourceSubtitle = if (matchedResource != null) {
-            "${matchedResource.title} • $qCount Soru (${matchedResource.completedUnits}/${matchedResource.totalUnits} ${matchedResource.unitType})"
+            val progressStr = if (matchedResource.totalUnits > 0) {
+                " (${matchedResource.completedUnits}/${matchedResource.totalUnits} ${matchedResource.unitType})"
+            } else ""
+            "Kitap: ${matchedResource.title} • $qCount Soru$progressStr"
         } else {
             "$qCount Soru Çözümü & Odak Oturumu"
         }
@@ -2180,8 +2349,8 @@ private fun buildDuolingoDayNodes(
                 subject = subject,
                 topic = topic,
                 subtitle = resourceSubtitle,
-                campTitle = campTitle,
-                campEpisode = episode,
+                campTitle = effectiveCampTitle,
+                campEpisode = fallbackEpisode,
                 linkedPlanTask = planTask,
                 linkedResource = matchedResource,
                 targetQuestions = qCount,
@@ -2189,8 +2358,13 @@ private fun buildDuolingoDayNodes(
             )
         )
 
-        // Node 3: Mini Control / Error Review Step
+        // Mini Control / Error Review Step
         val reviewNodeId = "${baseKey}_review"
+        val reviewSubtitle = if (matchedResource != null) {
+            "${matchedResource.title} • Püf Noktaları & Hata Kontrolü"
+        } else {
+            "ÖSYM Püf Noktaları & Hata Pekiştirme"
+        }
         nodes.add(
             DuolingoPathNode(
                 id = reviewNodeId,
@@ -2198,9 +2372,9 @@ private fun buildDuolingoDayNodes(
                 kind = DuolingoNodeKind.ERROR_REVIEW,
                 subject = subject,
                 topic = topic,
-                subtitle = "ÖSYM Püf Noktaları & Hata Pekiştirme",
-                campTitle = campTitle,
-                campEpisode = episode,
+                subtitle = reviewSubtitle,
+                campTitle = effectiveCampTitle,
+                campEpisode = fallbackEpisode,
                 linkedPlanTask = planTask,
                 linkedResource = matchedResource,
                 isCompleted = completedNodeIds.contains(reviewNodeId) || (planTask?.isCompleted == true)
@@ -2230,7 +2404,6 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
     val uncompleted = existingTasks.filter { !it.isCompleted }
 
     if (uncompleted.isNotEmpty()) {
-        // Sort uncompleted tasks by canonical curriculum order within each subject & apply prerequisite gatekeeping
         val orderedUncompleted = uncompleted
             .map { task ->
                 val gate = BookCampManager.enforcePrerequisiteFoundationGate(
@@ -2258,21 +2431,51 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
         return@withContext rebalanced.size
     }
 
-    // If a single book is selected (or available), distribute that single book's camp sequentially
-    // across the 7 days without mixing multiple books together
+    // If a single book is selected, use its REAL verified playlist if present;
+    // otherwise schedule honest book practice blocks without fabricating fake video camps
     val primaryResource = activeResource ?: libraryResources.firstOrNull()
     if (primaryResource != null) {
         val binding = BookCampManager.resolveCampForResource(context, primaryResource, topicGoals)
-        return@withContext BookCampManager.distributeCampToWeeklyPlan(context, binding, targetQuestionsPerDay = 40)
+        if (binding.hasVerifiedVideoSupport && binding.episodes.isNotEmpty()) {
+            return@withContext BookCampManager.distributeCampToWeeklyPlan(context, binding, targetQuestionsPerDay = 40)
+        }
+        val canonicalTopics = BookCampManager.canonicalCurriculumForSubject(primaryResource.subject, primaryResource.title)
+        val topics = if (canonicalTopics.isNotEmpty()) {
+            BookCampManager.expandTopicsToDaysWithMastery(
+                subject = primaryResource.subject,
+                topics = canonicalTopics,
+                totalDays = 7,
+                studentTopicGoals = topicGoals
+            )
+        } else {
+            (1..7).map { "${primaryResource.title} • ${primaryResource.completedUnits + it}. ${primaryResource.unitType}" }
+        }
+        val bookTasks = (1..7).map { day ->
+            val t = topics.getOrElse(day - 1) { "${primaryResource.title} • $day. Bölüm" }
+            val label = "${primaryResource.title}: $t"
+            PlanEntity(
+                id = UUID.randomUUID().toString(),
+                folderId = activeFolder.id,
+                title = label,
+                subject = primaryResource.subject,
+                topic = label,
+                dayOfWeek = day,
+                scheduledTime = "10:00 - 11:30",
+                targetQuestions = 40,
+                isCompleted = false,
+                orderIndex = day
+            )
+        }
+        planDao.insertTasks(bookTasks)
+        return@withContext bookTasks.size
     }
 
-    // Fallback when no library books exist: use canonical curriculum for the primary exam subject
     val primarySubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
     val canonicalTopics = BookCampManager.canonicalCurriculumForSubject(primarySubject)
     val weightedTopics = BookCampManager.expandTopicsToDaysWithMastery(
         subject = primarySubject,
         topics = canonicalTopics,
-        totalDays = 30,
+        totalDays = 7,
         studentTopicGoals = topicGoals
     )
 
@@ -2284,7 +2487,7 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
             requestedTopic = rawTopic,
             studentTopicGoals = topicGoals
         ).effectiveTopic
-        val topicLabel = "$primarySubject • $day. Gün: $gatedTopic"
+        val topicLabel = "$primarySubject: $gatedTopic"
         generated.add(
             PlanEntity(
                 id = UUID.randomUUID().toString(),

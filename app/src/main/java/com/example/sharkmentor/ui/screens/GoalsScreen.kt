@@ -527,8 +527,12 @@ fun ResourceCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    LaunchedEffect(context) {
+    LaunchedEffect(resource.id, resource.title, resource.subject) {
         BookCampManager.ensureLoaded(context)
+        val current = BookCampManager.resolveCampForResource(context, resource)
+        if (!current.videoCheckCompleted) {
+            BookCampManager.discoverAndSyncRealCampForResource(context, resource)
+        }
     }
     val allBindings by BookCampManager.bindingsByResourceId.collectAsStateWithLifecycle()
     val campBinding = remember(resource, allBindings) {
@@ -558,15 +562,18 @@ fun ResourceCard(
         )
     }
 
-    if (showCampStudioDialog) {
+    if (showCampStudioDialog && campBinding.hasVerifiedVideoSupport) {
         val currentEp = campBinding.currentEpisode()
         CampVideoStudyStudioDialog(
             campTitle = campBinding.campTitle,
             subject = resource.subject,
             initialEpisode = currentEp,
             allEpisodes = campBinding.episodes.ifEmpty { listOf(currentEp) },
-            onMarkCompleted = {
-                BookCampManager.advanceCampDay(context, resource)
+            onEpisodeChanged = { chosenEp ->
+                BookCampManager.advanceCampDay(context, resource, targetDay = chosenEp.dayNumber)
+            },
+            onMarkCompleted = { completedEp ->
+                BookCampManager.advanceCampDay(context, resource, targetDay = completedEp.dayNumber + 1)
                 onIncrement()
                 showCampStudioDialog = false
             },
@@ -817,94 +824,128 @@ fun ResourceCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // ── Mark 57 Book Video Camp & Daily Planner Bar ──
-            val currentEp = campBinding.currentEpisode()
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+            // ── Mark 62 Verified-Only Book Video Support Bar ──
+            if (campBinding.hasVerifiedVideoSupport) {
+                Spacer(modifier = Modifier.height(10.dp))
+                val currentEp = campBinding.currentEpisode()
+                val headerLabel = if (
+                    campBinding.instructor.isNotBlank() &&
+                    !campBinding.campTitle.contains(campBinding.instructor, ignoreCase = true)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${campBinding.campTitle} (${campBinding.instructor})",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${campBinding.currentDay}/${campBinding.totalDays}. Gün • ${currentEp.topicTitle}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
+                    "${campBinding.campTitle} (${campBinding.instructor})"
+                } else {
+                    campBinding.campTitle
+                }
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Surface(
-                            onClick = { showCampConfigDialog = true },
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Settings,
-                                    contentDescription = "Kamp Ayarla",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = "Kamp",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = headerLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${campBinding.currentDay}/${campBinding.totalDays}. Ders • ${currentEp.topicTitle}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
-                        Surface(
-                            onClick = { showCampStudioDialog = true },
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            Surface(
+                                onClick = { showCampConfigDialog = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayCircleOutline,
-                                    contentDescription = "Stüdyoda İzle",
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = "İzle",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = "Liste Ayarla",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "Liste",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                onClick = { showCampStudioDialog = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.PlayCircleOutline,
+                                        contentDescription = "Stüdyoda İzle",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "İzle",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = { showCampConfigDialog = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PlayCircleOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (campBinding.videoCheckCompleted) "Video Listesi Bağla" else "Video Kontrol Ediliyor...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             }

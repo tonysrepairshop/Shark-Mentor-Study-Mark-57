@@ -2085,7 +2085,8 @@ try {
                 "streakDays" to streakDays,
                 "tier" to resolvedTierName,
                 "isStudying" to isStudyingNow,
-                "activeSubject" to activeSubject.orEmpty(),
+                "activeSubject" to com.example.sharkmentor.core.coaching.CoachingEngine
+                    .formatCleanLeagueSubject(activeSubject.orEmpty()),
                 "avatarBase64" to avatarBase64,
                 "avatarPresetId" to effectivePresetId,
                 "mentorPoints" to mentorPoints,

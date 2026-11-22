@@ -160,8 +160,10 @@ fun LeagueMemberProfileSheet(
                                     shape = RoundedCornerShape(8.dp),
                                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                                 ) {
+                                    val cleanActiveSubject = com.example.sharkmentor.core.coaching.CoachingEngine
+                                        .formatCleanLeagueSubject(entry.activeSubject.orEmpty())
                                     Text(
-                                        text = entry.activeSubject?.takeIf { it.isNotBlank() }?.let { "Odakta: $it" } ?: "Şu An Odakta",
+                                        text = if (cleanActiveSubject.isNotBlank()) "Masada • $cleanActiveSubject" else "Şu An Masada",
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)

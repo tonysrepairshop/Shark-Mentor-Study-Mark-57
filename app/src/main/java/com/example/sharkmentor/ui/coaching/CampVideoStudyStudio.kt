@@ -22,14 +22,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,11 +50,16 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
@@ -78,7 +87,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -94,7 +105,6 @@ import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.coaching.BookCampManager
 import com.example.sharkmentor.core.coaching.CampDayEpisode
 import com.example.sharkmentor.core.coaching.CoachingEngine
-import com.example.sharkmentor.core.coaching.ResolvedYouTubeVideo
 import com.example.sharkmentor.core.coaching.ResourceCampBinding
 import com.example.sharkmentor.core.service.FocusTimerService
 import com.example.sharkmentor.core.timer.TimerMode
@@ -122,12 +132,12 @@ ANLAŞILIRLIK VE MATEMATİKSEL YAZIM KURALLARI:
 """
 
 /**
- * Split-Screen In-App Camp Video Study Studio (Mark 60):
- * - Direct YouTube video auto-resolution (plays the day's matching lesson directly — never a search page).
- * - Opera-style toggleable Video Ad Blocker (network request filter + player ad-skipper JS, synced with Settings).
- * - Live active video URL, title, playback timestamp (`mm:ss`) & caption transcript context passed to Studio AI.
- * - Unified AI provider/key routing (uses user's selected API key if set, otherwise built-in fixed Gemini key).
- * - Structured math/formula rendering (`RichSolutionContent`) + interactive `∑` Math Symbol Panel.
+ * Balanced Split-Screen In-App Video Study Studio (Mark 62):
+ * - Direct exact-episode playback (never restarts at playlist intro video #1).
+ * - Screen-height bounded, collapsible video viewport with clipToBounds() so the AI Tutor canvas
+ *   ALWAYS has spacious visibility and bottom-docked input across all phone screen sizes & IME states.
+ * - Real playlist episode selector tab ("Bölümler") for 1-tap switching between real lessons.
+ * - Opera-style toggleable Video Ad Blocker + live timestamp & caption transcript AI context.
  */
 @Composable
 fun CampVideoStudyStudioDialog(
@@ -142,6 +152,7 @@ fun CampVideoStudyStudioDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
 
     LaunchedEffect(context) {
         UserAiPreferences.initialize(context)
@@ -149,23 +160,37 @@ fun CampVideoStudyStudioDialog(
     val studioAiEnabled by UserAiPreferences.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val adBlockerEnabled by UserAiPreferences.videoAdBlockerEnabled.collectAsStateWithLifecycle()
 
-    var activeEpisode by remember(initialEpisode) { mutableStateOf(initialEpisode) }
-    var activeTab by remember(studioAiEnabled) { mutableIntStateOf(if (studioAiEnabled) 0 else 1) } // 0 = AI'ya Sor, 1 = Hızlı Not
+    val safeEpisodes = remember(allEpisodes, initialEpisode) {
+        allEpisodes.ifEmpty { listOf(initialEpisode) }
+    }
+    var activeEpisode by remember(initialEpisode.dayNumber, initialEpisode.videoId, initialEpisode.topicTitle) {
+        mutableStateOf(initialEpisode)
+    }
+    // 0 = AI Asistan, 1 = Hızlı Not, 2 = Bölümler (when playlist has >1 episodes)
+    var activeTab by remember(studioAiEnabled) { mutableIntStateOf(if (studioAiEnabled) 0 else 1) }
+    var isVideoCollapsed by remember { mutableStateOf(false) }
 
-    // Direct video resolution state (never falls back to YouTube search page if resolvable)
-    var resolvedCandidates by remember { mutableStateOf<List<ResolvedYouTubeVideo>>(emptyList()) }
-    var isResolvingVideo by remember { mutableStateOf(activeEpisode.videoId.length != 11) }
-    var useMobileWatchFallback by remember(activeEpisode.dayNumber, activeEpisode.videoId) { mutableStateOf(false) }
+    var isResolvingVideo by remember(activeEpisode.dayNumber, activeEpisode.videoId) {
+        mutableStateOf(activeEpisode.videoId.length != 11)
+    }
+    var useMobileWatchFallback by remember(activeEpisode.dayNumber, activeEpisode.videoId) {
+        mutableStateOf(false)
+    }
 
     // Live playback telemetry from WebView JS Bridge
     var livePlaybackSeconds by remember { mutableIntStateOf(0) }
-    var liveVideoTitle by remember { mutableStateOf(activeEpisode.topicTitle) }
-    var liveActiveVideoId by remember(activeEpisode.videoId) { mutableStateOf(activeEpisode.videoId) }
+    var liveVideoTitle by remember(activeEpisode.dayNumber, activeEpisode.topicTitle) {
+        mutableStateOf(activeEpisode.topicTitle)
+    }
+    var liveActiveVideoId by remember(activeEpisode.dayNumber, activeEpisode.videoId) {
+        mutableStateOf(activeEpisode.videoId)
+    }
 
     LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.searchQuery) {
         livePlaybackSeconds = 0
         if (activeEpisode.videoId.length == 11) {
             liveActiveVideoId = activeEpisode.videoId
+            liveVideoTitle = activeEpisode.topicTitle
             isResolvingVideo = false
             return@LaunchedEffect
         }
@@ -176,7 +201,6 @@ fun CampVideoStudyStudioDialog(
             subject = subject,
             episode = activeEpisode
         )
-        resolvedCandidates = candidates
         val best = candidates.firstOrNull()
         if (best != null && best.videoId.length == 11) {
             val updated = activeEpisode.copy(
@@ -212,6 +236,15 @@ fun CampVideoStudyStudioDialog(
     var showPasteLinkDialog by remember { mutableStateOf(false) }
     var customUrlInput by remember { mutableStateOf(activeEpisode.customUrl) }
 
+    fun selectEpisode(ep: CampDayEpisode) {
+        activeEpisode = ep
+        liveActiveVideoId = ep.videoId
+        liveVideoTitle = ep.topicTitle
+        livePlaybackSeconds = 0
+        useMobileWatchFallback = false
+        onEpisodeChanged?.invoke(ep)
+    }
+
     fun activeVideoUrlWithTimestamp(targetSec: Int = livePlaybackSeconds): String {
         val vid = liveActiveVideoId.ifBlank { activeEpisode.videoId }
         return if (vid.length == 11) {
@@ -229,6 +262,7 @@ fun CampVideoStudyStudioDialog(
         isAiLoading = true
         aiAnswer = ""
         aiSavedToNotes = false
+        showMathPanel = false
         scope.launch {
             val compass = CoachingEngine.buildAiSystemCompassPrompt(context)
             val mentionedSec = BookCampManager.extractMentionedTimestampSeconds(cleanQ)
@@ -256,9 +290,9 @@ fun CampVideoStudyStudioDialog(
 
             val fullPrompt = """
                 [AKTİF İZLENEN DERS VİDEOSU]
-                • Kamp: $campTitle
+                • Kamp / Liste: $campTitle
                 • Ders: $subject
-                • Gün / Konu: ${activeEpisode.dayNumber}. Gün - ${activeEpisode.topicTitle}
+                • Bölüm / Konu: ${activeEpisode.dayNumber}. Ders - ${activeEpisode.topicTitle}
                 • Video Başlığı: ${liveVideoTitle.ifBlank { activeEpisode.topicTitle }}
                 • Aktif Video Linki: $watchUrl
                 • Odaklanılan Video Zamanı: $formattedTime (${effectiveSec}. saniye)
@@ -315,15 +349,16 @@ fun CampVideoStudyStudioDialog(
     }
 
     fun toggleFocusTimerFromStudio() {
+        val cleanSubject = CoachingEngine.formatCleanLeagueSubject(subject).ifBlank { "Odak" }
         val focusLabel = CoachingEngine.buildFormattedFocusSubject(
-            title = subject.ifBlank { "Kamp" },
-            subNote = "${activeEpisode.dayNumber}. Gün ${activeEpisode.topicTitle}".take(42)
+            title = cleanSubject,
+            subNote = "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42)
         )
         when (timerState.timerPhase) {
             TimerPhase.IDLE -> {
-                CoachingEngine.selectFocusTitle(context, subject.ifBlank { "Kamp" })
-                CoachingEngine.setFocusSubNote(context, "${activeEpisode.dayNumber}. Gün ${activeEpisode.topicTitle}".take(42))
-                CoachingEngine.updateLivePresenceOfflineFirst(context, true, focusLabel)
+                CoachingEngine.selectFocusTitle(context, cleanSubject)
+                CoachingEngine.setFocusSubNote(context, "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42))
+                CoachingEngine.updateLivePresenceOfflineFirst(context, true, cleanSubject)
                 val intent = Intent(context, FocusTimerService::class.java).apply {
                     action = FocusTimerService.ACTION_START
                     putExtra(FocusTimerService.EXTRA_MODE, TimerMode.STOPWATCH.name)
@@ -352,7 +387,7 @@ fun CampVideoStudyStudioDialog(
     if (showPasteLinkDialog) {
         AlertDialog(
             onDismissRequest = { showPasteLinkDialog = false },
-            title = { Text("YouTube Video veya Liste Bağlantısı", fontWeight = FontWeight.Bold) },
+            title = { Text("YouTube Video Bağlantısı", fontWeight = FontWeight.Bold) },
             text = {
                 OutlinedTextField(
                     value = customUrlInput,
@@ -373,10 +408,7 @@ fun CampVideoStudyStudioDialog(
                             playlistId = pId.ifBlank { activeEpisode.playlistId },
                             customUrl = customUrlInput.trim()
                         )
-                        activeEpisode = updated
-                        if (vId.length == 11) liveActiveVideoId = vId
-                        useMobileWatchFallback = false
-                        onEpisodeChanged?.invoke(updated)
+                        selectEpisode(updated)
                         showPasteLinkDialog = false
                     }
                 ) {
@@ -391,11 +423,21 @@ fun CampVideoStudyStudioDialog(
         )
     }
 
+    // Bounded responsive video height so AI Assistant always gets generous, balanced screen real estate
+    val videoHeightDp = remember(screenHeightDp, isVideoCollapsed) {
+        if (isVideoCollapsed) {
+            64.dp
+        } else {
+            (screenHeightDp * 0.29f).dp.coerceIn(156.dp, 218.dp)
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
-            dismissOnClickOutside = false
+            dismissOnClickOutside = false,
+            decorFitsSystemWindows = false
         )
     ) {
         Surface(
@@ -403,8 +445,14 @@ fun CampVideoStudyStudioDialog(
             color = colorScheme.background,
             contentColor = colorScheme.onBackground
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                // ── Top Studio Header (Camp Info + Live Focus Timer + Close) ──
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .imePadding()
+            ) {
+                // ── 1. Slim Studio Top Bar (Title + Focus Timer + Close) ──
                 Surface(
                     color = colorScheme.surface,
                     tonalElevation = 2.dp,
@@ -413,7 +461,7 @@ fun CampVideoStudyStudioDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -423,18 +471,19 @@ fun CampVideoStudyStudioDialog(
                         ) {
                             IconButton(
                                 onClick = onDismiss,
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                                     contentDescription = "Kapat",
-                                    tint = colorScheme.onSurface
+                                    tint = colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
                                 )
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = campTitle,
+                                    text = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
                                     style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.onSurface,
@@ -442,7 +491,7 @@ fun CampVideoStudyStudioDialog(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${activeEpisode.dayNumber}. Gün • ${activeEpisode.topicTitle}",
+                                    text = campTitle,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = colorScheme.primary,
                                     maxLines = 1,
@@ -451,7 +500,9 @@ fun CampVideoStudyStudioDialog(
                             }
                         }
 
-                        // Live Synced Focus Timer Pill
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        // Compact Live Focus Timer Pill
                         Surface(
                             onClick = { toggleFocusTimerFromStudio() },
                             shape = RoundedCornerShape(50),
@@ -462,19 +513,19 @@ fun CampVideoStudyStudioDialog(
                             )
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
                                     imageVector = if (isFocusing) Icons.Default.Pause else Icons.Default.PlayArrow,
                                     contentDescription = if (isFocusing) "Duraklat" else "Odak Başlat",
                                     tint = if (isFocusing) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(15.dp)
+                                    modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = if (isFocusing || isPaused) formattedTimer else "Odak Başlat",
-                                    style = MaterialTheme.typography.labelMedium,
+                                    text = if (isFocusing || isPaused) formattedTimer else "Odak",
+                                    style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isFocusing) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
                                 )
@@ -483,8 +534,8 @@ fun CampVideoStudyStudioDialog(
                     }
                 }
 
-                // ── Upper Half: Direct Auto-Playing Video Player (with Opera-Style Ad Blocker) ──
-                val playerUrl = remember(activeEpisode, adBlockerEnabled, useMobileWatchFallback) {
+                // ── 2. Bounded, Clipped & Collapsible Video Player Viewport ──
+                val playerUrl = remember(activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.dayNumber, adBlockerEnabled, useMobileWatchFallback) {
                     if (useMobileWatchFallback && activeEpisode.videoId.length == 11) {
                         activeEpisode.buildMobileWatchUrl(livePlaybackSeconds)
                     } else {
@@ -495,24 +546,25 @@ fun CampVideoStudyStudioDialog(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .height(videoHeightDp)
+                        .clipToBounds()
                         .background(Color.Black),
                     contentAlignment = Alignment.Center
                 ) {
                     if (isResolvingVideo) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
+                                modifier = Modifier.size(22.dp),
                                 color = colorScheme.primary,
-                                strokeWidth = 2.5.dp
+                                strokeWidth = 2.dp
                             )
                             Text(
-                                text = "Ders videosu doğrudan açılıyor...",
+                                text = "Ders videosu hazırlanıyor...",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.85f)
+                                color = Color.White.copy(alpha = 0.9f)
                             )
                         }
                     } else {
@@ -539,64 +591,80 @@ fun CampVideoStudyStudioDialog(
                     }
                 }
 
-                // ── Action Strip Directly Underneath Video (Day Nav + AdBlock + Player Mode + Link + YouTube) ──
+                // ── 3. Slim Controls Strip (Prev/Next Episode + Collapse + AdBlock + Mode + Done + YouTube) ──
                 Surface(
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                            .padding(horizontal = 8.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // Day episode navigation
-                        val currentIdx = allEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
+                        val currentIdx = safeEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
                         IconButton(
                             onClick = {
-                                if (currentIdx > 0) {
-                                    val prev = allEpisodes[currentIdx - 1]
-                                    activeEpisode = prev
-                                    useMobileWatchFallback = false
-                                    onEpisodeChanged?.invoke(prev)
-                                }
+                                if (currentIdx > 0) selectEpisode(safeEpisodes[currentIdx - 1])
                             },
                             enabled = currentIdx > 0,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(24.dp)
                         ) {
-                            Icon(Icons.Default.ChevronLeft, contentDescription = "Önceki Gün", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Önceki Ders", modifier = Modifier.size(18.dp))
                         }
                         Text(
-                            text = "${activeEpisode.dayNumber}. Gün",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "${activeEpisode.dayNumber}/${safeEpisodes.size}",
+                            style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
                         IconButton(
                             onClick = {
-                                if (currentIdx in 0 until allEpisodes.lastIndex) {
-                                    val next = allEpisodes[currentIdx + 1]
-                                    activeEpisode = next
-                                    useMobileWatchFallback = false
-                                    onEpisodeChanged?.invoke(next)
-                                }
+                                if (currentIdx in 0 until safeEpisodes.lastIndex) selectEpisode(safeEpisodes[currentIdx + 1])
                             },
-                            enabled = currentIdx in 0 until allEpisodes.lastIndex,
-                            modifier = Modifier.size(26.dp)
+                            enabled = currentIdx in 0 until safeEpisodes.lastIndex,
+                            modifier = Modifier.size(24.dp)
                         ) {
-                            Icon(Icons.Default.ChevronRight, contentDescription = "Sonraki Gün", modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Sonraki Ders", modifier = Modifier.size(18.dp))
                         }
 
-                        // Opera-Style Ad Blocker quick toggle pill (synced with Settings)
+                        // Collapse / Expand video player toggle for maximum AI reading comfort
+                        Surface(
+                            onClick = { isVideoCollapsed = !isVideoCollapsed },
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.surface,
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isVideoCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                    contentDescription = if (isVideoCollapsed) "Videoyu Büyüt" else "Videoyu Küçült",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = if (isVideoCollapsed) "Büyüt" else "Küçült",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        // Ad Blocker quick toggle
                         Surface(
                             onClick = {
                                 val nextVal = !adBlockerEnabled
                                 UserAiPreferences.setVideoAdBlockerEnabled(context, nextVal)
                                 Toast.makeText(
                                     context,
-                                    if (nextVal) "Video reklam engelleyici açıldı" else "Video reklam engelleyici kapatıldı",
+                                    if (nextVal) "Reklam engelleyici açıldı" else "Reklam engelleyici kapatıldı",
                                     Toast.LENGTH_SHORT
                                 ).show()
                             },
@@ -608,26 +676,27 @@ fun CampVideoStudyStudioDialog(
                             )
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Shield,
                                     contentDescription = "Reklam Engelleyici",
                                     tint = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(13.dp)
+                                    modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = if (adBlockerEnabled) "Reklamsız" else "Reklam Açık",
+                                    text = if (adBlockerEnabled) "Reklamsız" else "Reklam",
                                     style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant
                                 )
                             }
                         }
 
-                        // Alternate Player toggle (Embed <-> Mobile Watch fallback if video forbids embed)
+                        // Embed <-> Mobile Watch mode switch
                         if (activeEpisode.videoId.length == 11) {
                             Surface(
                                 onClick = { useMobileWatchFallback = !useMobileWatchFallback },
@@ -636,26 +705,27 @@ fun CampVideoStudyStudioDialog(
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.SwapHoriz,
-                                        contentDescription = "Oynatıcı Değiştir",
+                                        contentDescription = "Oynatıcı",
                                         tint = colorScheme.primary,
-                                        modifier = Modifier.size(13.dp)
+                                        modifier = Modifier.size(12.dp)
                                     )
                                     Text(
-                                        text = if (useMobileWatchFallback) "Sade Mod" else "Tam Mod",
+                                        text = if (useMobileWatchFallback) "Sade" else "Tam",
                                         style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 10.sp,
                                         color = colorScheme.onSurface
                                     )
                                 }
                             }
                         }
 
-                        // Paste direct video link button
+                        // Paste custom link
                         Surface(
                             onClick = {
                                 customUrlInput = activeVideoUrlWithTimestamp(0)
@@ -666,22 +736,12 @@ fun CampVideoStudyStudioDialog(
                             border = BorderStroke(1.dp, colorScheme.outlineVariant)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Link,
-                                    contentDescription = "Link Yapıştır",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = "Link",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colorScheme.onSurface
-                                )
+                                Icon(Icons.Default.Link, contentDescription = "Link", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
+                                Text("Link", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
                             }
                         }
 
@@ -693,35 +753,22 @@ fun CampVideoStudyStudioDialog(
                                 border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.45f))
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Günü Tamamla",
-                                        tint = Color(0xFF10B981),
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Text(
-                                        text = "Bitti",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF10B981)
-                                    )
+                                    Icon(Icons.Default.Check, contentDescription = "Tamamla", tint = Color(0xFF10B981), modifier = Modifier.size(12.dp))
+                                    Text("Bitti", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
                                 }
                             }
                         }
 
-                        // Direct YouTube external link button (jumps to current second)
                         Surface(
                             onClick = {
                                 runCatching {
-                                    val extIntent = Intent(
-                                        Intent.ACTION_VIEW,
-                                        Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds))
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds)))
                                     )
-                                    context.startActivity(extIntent)
                                 }
                             },
                             shape = RoundedCornerShape(8.dp),
@@ -729,92 +776,43 @@ fun CampVideoStudyStudioDialog(
                             contentColor = colorScheme.onPrimary
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                    contentDescription = "YouTube'da Aç",
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = "YouTube",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "YouTube", modifier = Modifier.size(12.dp))
+                                Text("YouTube", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
 
-                // Optional quick alternative direct videos strip (when multiple matching lessons resolved)
-                if (resolvedCandidates.size > 1) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        resolvedCandidates.forEachIndexed { idx, cand ->
-                            val selected = cand.videoId == liveActiveVideoId
-                            Surface(
-                                onClick = {
-                                    val updated = activeEpisode.copy(
-                                        videoId = cand.videoId,
-                                        customUrl = "https://www.youtube.com/watch?v=${cand.videoId}"
-                                    )
-                                    activeEpisode = updated
-                                    liveActiveVideoId = cand.videoId
-                                    liveVideoTitle = cand.title
-                                    livePlaybackSeconds = 0
-                                    useMobileWatchFallback = false
-                                    onEpisodeChanged?.invoke(updated)
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (selected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
-                                )
-                            ) {
-                                Text(
-                                    text = "${idx + 1}. ${cand.title.take(30)}${if (cand.durationLabel.isNotBlank()) " (${cand.durationLabel})" else ""}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 10.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // ── Lower Half: AI Tutor (with Math Panel & Live Timestamp Context) & Quick Notes ──
+                // ── 4. Spacious Lower Workspace (AI Asistan | Hızlı Not | Bölümler) ──
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Tab Switcher: AI'ya Anlık Sor | Hızlı Not Al
+                    // Compact Tab Row
+                    val tabItems = remember(safeEpisodes.size) {
+                        buildList {
+                            add(Triple(0, "AI Asistan", Icons.Default.AutoAwesome))
+                            add(Triple(1, "Hızlı Not", Icons.Default.EditNote))
+                            if (safeEpisodes.size > 1) {
+                                add(Triple(2, "Bölümler (${safeEpisodes.size})", Icons.Default.PlaylistPlay))
+                            }
+                        }
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        val tabs = listOf(
-                            "AI'ya Anlık Sor" to Icons.Default.AutoAwesome,
-                            "Hızlı Not Al" to Icons.Default.EditNote
-                        )
-                        tabs.forEachIndexed { index, (label, icon) ->
-                            val selected = activeTab == index
+                        tabItems.forEach { (tabId, label, icon) ->
+                            val selected = activeTab == tabId
                             Surface(
-                                onClick = { activeTab = index },
+                                onClick = { activeTab = tabId },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
                                 color = if (selected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -824,7 +822,7 @@ fun CampVideoStudyStudioDialog(
                                 )
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
+                                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center
                                 ) {
@@ -832,326 +830,403 @@ fun CampVideoStudyStudioDialog(
                                         imageVector = icon,
                                         contentDescription = null,
                                         tint = if (selected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
                                         text = label,
-                                        style = MaterialTheme.typography.labelMedium,
+                                        style = MaterialTheme.typography.labelSmall,
                                         fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
+                                        color = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
                         }
                     }
 
-                    if (activeTab == 0) {
-                        if (!studioAiEnabled) {
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth(),
-                                shape = RoundedCornerShape(14.dp),
-                                color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(20.dp),
-                                    verticalArrangement = Arrangement.Center,
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Text(
-                                        text = "Video Stüdyosu AI Asistanı Kapalı",
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Text(
-                                        text = "Ayarlar > Yapay Zeka & API bölümünden Video Stüdyosu AI özelliğini dilediğin zaman açabilirsin.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    OutlinedButton(
-                                        onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text("Stüdyo AI'yı Şimdi Aç")
-                                    }
-                                }
-                            }
-                        } else {
-                            // Live Video Timestamp Quick-Ask Chip + Contextual Prompt Chips
-                            val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                    when (activeTab) {
+                        0 -> {
+                            if (!studioAiEnabled) {
                                 Surface(
-                                    onClick = {
-                                        val stampPrefix = if (livePlaybackSeconds > 0) {
-                                            "$liveTimeLabel dakikasındaki formülü/adımı neden öyle yaptık? "
-                                        } else {
-                                            "4.5 dakikadaki formül neden öyle? "
-                                        }
-                                        aiQuestion = stampPrefix
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = colorScheme.primary.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
                                 ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.AccessTime,
-                                            contentDescription = null,
-                                            tint = colorScheme.primary,
-                                            modifier = Modifier.size(13.dp)
-                                        )
-                                        Text(
-                                            text = if (livePlaybackSeconds > 0) "Şu Anı Sor ($liveTimeLabel)" else "Dakikadaki Adımı Sor",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.primary
-                                        )
-                                    }
-                                }
-
-                                listOf(
-                                    "Bu videodaki formülleri adım adım çıkar",
-                                    "Konunun kritik püf noktalarını özetle",
-                                    "ÖSYM bu konudan nasıl sorar?",
-                                    "Örnek soru ve adım adım çözümü"
-                                ).forEach { chipPrompt ->
-                                    Surface(
-                                        onClick = {
-                                            aiQuestion = chipPrompt
-                                            triggerAiTutorQuestion(chipPrompt)
-                                        },
-                                        shape = RoundedCornerShape(8.dp),
-                                        color = colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
-                                    ) {
-                                        Text(
-                                            text = chipPrompt,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Collapsible Mathematics & Formula Symbol Panel (∑)
-                            MathSymbolKeyboardPanel(
-                                visible = showMathPanel,
-                                onInsertSymbol = { sym ->
-                                    aiQuestion = MathSymbolCatalog.insertSymbol(aiQuestion, sym)
-                                }
-                            )
-
-                            // Question input row with ∑ Math Symbol Toggle
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                MathSymbolToggleButton(
-                                    expanded = showMathPanel,
-                                    onClick = { showMathPanel = !showMathPanel }
-                                )
-                                OutlinedTextField(
-                                    value = aiQuestion,
-                                    onValueChange = { aiQuestion = it },
-                                    placeholder = {
-                                        Text(
-                                            text = "Örn: 4.5 dakikadaki formül neden öyle?",
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    },
-                                    singleLine = true,
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Button(
-                                    onClick = { triggerAiTutorQuestion(aiQuestion) },
-                                    enabled = aiQuestion.isNotBlank() && !isAiLoading,
-                                    shape = RoundedCornerShape(12.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
-                                ) {
-                                    if (isAiLoading) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(18.dp),
-                                            color = colorScheme.onPrimary,
-                                            strokeWidth = 2.dp
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.Send,
-                                            contentDescription = "Sor",
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Structured Math & Step-by-Step AI Response Box
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.35f))
-                            ) {
-                                if (aiAnswer.isBlank() && !isAiLoading) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "İzlediğin video ve aktif saniye (${liveTimeLabel}) AI'ya otomatik bağlanır. Anlamadığın formülü veya dakikayı doğrudan sorabilirsin.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                } else {
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(12.dp)
-                                            .verticalScroll(rememberScrollState()),
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                            .padding(18.dp),
+                                        verticalArrangement = Arrangement.Center,
+                                        horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        if (isAiLoading && aiAnswer.isBlank()) {
+                                        Text(
+                                            text = "Video Stüdyosu AI Asistanı Kapalı",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Text(
+                                            text = "Ayarlar > Yapay Zeka, API & Video Stüdyosu bölümünden dilediğin zaman açabilirsin.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        OutlinedButton(
+                                            onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
+                                            shape = RoundedCornerShape(10.dp)
+                                        ) {
+                                            Text("Stüdyo AI'yı Şimdi Aç")
+                                        }
+                                    }
+                                }
+                            } else {
+                                val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
+
+                                // ── Spacious AI Assistant Response Canvas (Always Prominent!) ──
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxWidth()
+                                        .heightIn(min = 120.dp),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                ) {
+                                    if (aiAnswer.isBlank() && !isAiLoading) {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .verticalScroll(rememberScrollState())
+                                                .padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Text(
+                                                text = "İzlediğin video ve aktif süre ($liveTimeLabel) AI asistanına bağlı. Anlamadığın formülü veya dakikayı doğrudan sorabilirsin.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = colorScheme.onSurfaceVariant
+                                            )
+
+                                            // Live Timestamp Chip + Concise Quick Prompts inside empty canvas
                                             Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .horizontalScroll(rememberScrollState()),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                                             ) {
-                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                                Text(
-                                                    text = "Video bağlamı ve formüller analiz ediliyor...",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                        } else {
-                                            SelectionContainer {
-                                                RichSolutionContent(
-                                                    text = aiAnswer,
-                                                    textColor = colorScheme.onSurface,
-                                                    fontSize = 14.sp,
-                                                    lineHeight = 22.sp
-                                                )
+                                                Surface(
+                                                    onClick = {
+                                                        aiQuestion = if (livePlaybackSeconds > 0) {
+                                                            "$liveTimeLabel dakikasındaki formülü/adımı neden öyle yaptık? "
+                                                        } else {
+                                                            "4.5 dakikadaki formül neden öyle? "
+                                                        }
+                                                    },
+                                                    shape = RoundedCornerShape(9.dp),
+                                                    color = colorScheme.primary.copy(alpha = 0.14f),
+                                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.AccessTime,
+                                                            contentDescription = null,
+                                                            tint = colorScheme.primary,
+                                                            modifier = Modifier.size(13.dp)
+                                                        )
+                                                        Text(
+                                                            text = if (livePlaybackSeconds > 0) "Şu Anı Sor ($liveTimeLabel)" else "Dakikayı Sor",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = colorScheme.primary
+                                                        )
+                                                    }
+                                                }
+                                                listOf(
+                                                    "Bu dersteki formülleri adım adım çıkar",
+                                                    "Konunun püf noktalarını özetle",
+                                                    "ÖSYM bu konudan nasıl sorar?"
+                                                ).forEach { chipPrompt ->
+                                                    Surface(
+                                                        onClick = {
+                                                            aiQuestion = chipPrompt
+                                                            triggerAiTutorQuestion(chipPrompt)
+                                                        },
+                                                        shape = RoundedCornerShape(9.dp),
+                                                        color = colorScheme.surface,
+                                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                                    ) {
+                                                        Text(
+                                                            text = chipPrompt,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = colorScheme.onSurface,
+                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
-                                        if (aiAnswer.isNotBlank() && !isAiLoading) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.End
-                                            ) {
-                                                TextButton(
-                                                    onClick = {
-                                                        saveTextToNotes(
-                                                            noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Gün (${activeEpisode.topicTitle})",
-                                                            bodyText = aiAnswer,
-                                                            onDone = { aiSavedToNotes = true }
-                                                        )
-                                                    },
-                                                    enabled = !aiSavedToNotes
+                                    } else {
+                                        Column(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(12.dp)
+                                                .verticalScroll(rememberScrollState()),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (isAiLoading && aiAnswer.isBlank()) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
-                                                    Icon(
-                                                        imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
-                                                        contentDescription = null,
-                                                        modifier = Modifier.size(16.dp)
+                                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                                    Text(
+                                                        text = "Video bağlamı ve formüller analiz ediliyor...",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = colorScheme.onSurfaceVariant
                                                     )
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text(if (aiSavedToNotes) "Notlara Kaydedildi" else "Notlara Kaydet")
+                                                }
+                                            } else {
+                                                SelectionContainer {
+                                                    RichSolutionContent(
+                                                        text = aiAnswer,
+                                                        textColor = colorScheme.onSurface,
+                                                        fontSize = 14.sp,
+                                                        lineHeight = 22.sp
+                                                    )
+                                                }
+                                            }
+                                            if (aiAnswer.isNotBlank() && !isAiLoading) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    TextButton(
+                                                        onClick = {
+                                                            aiAnswer = ""
+                                                            aiQuestion = if (livePlaybackSeconds > 0) {
+                                                                "$liveTimeLabel dakikasındaki adım neden öyle? "
+                                                            } else ""
+                                                        }
+                                                    ) {
+                                                        Text("Yeni Soru")
+                                                    }
+                                                    TextButton(
+                                                        onClick = {
+                                                            saveTextToNotes(
+                                                                noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle})",
+                                                                bodyText = aiAnswer,
+                                                                onDone = { aiSavedToNotes = true }
+                                                            )
+                                                        },
+                                                        enabled = !aiSavedToNotes
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
+                                                            contentDescription = null,
+                                                            modifier = Modifier.size(15.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(4.dp))
+                                                        Text(if (aiSavedToNotes) "Kaydedildi" else "Notlara Kaydet")
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
+                                // Collapsible ∑ Math Symbol Panel docked above input bar
+                                MathSymbolKeyboardPanel(
+                                    visible = showMathPanel,
+                                    onInsertSymbol = { sym ->
+                                        aiQuestion = MathSymbolCatalog.insertSymbol(aiQuestion, sym)
+                                    }
+                                )
+
+                                // Bottom-docked Question Input Bar (Always visible & balanced)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    MathSymbolToggleButton(
+                                        expanded = showMathPanel,
+                                        onClick = { showMathPanel = !showMathPanel }
+                                    )
+                                    OutlinedTextField(
+                                        value = aiQuestion,
+                                        onValueChange = { aiQuestion = it },
+                                        placeholder = {
+                                            Text(
+                                                text = "Örn: 4.5 dakikadaki formül neden öyle?",
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                fontSize = 13.sp
+                                            )
+                                        },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Button(
+                                        onClick = { triggerAiTutorQuestion(aiQuestion) },
+                                        enabled = aiQuestion.isNotBlank() && !isAiLoading,
+                                        shape = RoundedCornerShape(12.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                                    ) {
+                                        if (isAiLoading) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                color = colorScheme.onPrimary,
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.Send,
+                                                contentDescription = "Sor",
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
-                    } else {
-                        // Tab 2: Quick Note Taking while watching (with timestamp stamp button)
-                        OutlinedTextField(
-                            value = quickNoteText,
-                            onValueChange = {
-                                quickNoteText = it
-                                noteSavedSuccess = false
-                            },
-                            placeholder = {
-                                Text("${activeEpisode.dayNumber}. Gün (${activeEpisode.topicTitle}) ders notlarını buraya yaz...")
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+
+                        1 -> {
+                            // Tab 2: Quick Note Taking while watching
+                            OutlinedTextField(
+                                value = quickNoteText,
+                                onValueChange = {
+                                    quickNoteText = it
+                                    noteSavedSuccess = false
+                                },
+                                placeholder = {
+                                    Text("${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle}) notlarını buraya yaz...")
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                            )
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                OutlinedButton(
-                                    onClick = {
-                                        val stamp = "[${BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)}] "
-                                        quickNoteText = if (quickNoteText.isBlank()) stamp else "$quickNoteText\n$stamp"
-                                    },
-                                    shape = RoundedCornerShape(9.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Zaman Ekle", fontSize = 11.sp)
+                                    OutlinedButton(
+                                        onClick = {
+                                            val stamp = "[${BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)}] "
+                                            quickNoteText = if (quickNoteText.isBlank()) stamp else "$quickNoteText\n$stamp"
+                                        },
+                                        shape = RoundedCornerShape(9.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Zaman Ekle", fontSize = 11.sp)
+                                    }
+                                    if (noteSavedSuccess) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "Kaydedildi",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                 }
-                                if (noteSavedSuccess) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "Kaydedildi",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colorScheme.primary,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+
+                                Button(
+                                    onClick = {
+                                        saveTextToNotes(
+                                            noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle})",
+                                            bodyText = quickNoteText,
+                                            onDone = { noteSavedSuccess = true }
+                                        )
+                                    },
+                                    enabled = quickNoteText.isNotBlank(),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
+                                    Text("Notlara Kaydet", fontWeight = FontWeight.Bold)
                                 }
                             }
+                        }
 
-                            Button(
-                                onClick = {
-                                    saveTextToNotes(
-                                        noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Gün (${activeEpisode.topicTitle})",
-                                        bodyText = quickNoteText,
-                                        onDone = { noteSavedSuccess = true }
-                                    )
-                                },
-                                enabled = quickNoteText.isNotBlank(),
-                                shape = RoundedCornerShape(10.dp)
+                        else -> {
+                            // Tab 3: Real Playlist Episodes Selector (1-tap exact video switch)
+                            LazyColumn(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("Notlara Kaydet", fontWeight = FontWeight.Bold)
+                                items(safeEpisodes, key = { "${it.dayNumber}_${it.videoId}" }) { ep ->
+                                    val isCurrent = ep.dayNumber == activeEpisode.dayNumber
+                                    Surface(
+                                        onClick = {
+                                            selectEpisode(ep)
+                                            if (studioAiEnabled) activeTab = 0
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isCurrent) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isCurrent) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isCurrent) Icons.Default.PlayArrow else Icons.Default.PlayCircleOutline,
+                                                contentDescription = null,
+                                                tint = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "${ep.dayNumber}. Ders • ${ep.topicTitle}",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                                    color = if (isCurrent) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            if (isCurrent) {
+                                                Text(
+                                                    text = "Oynuyor",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1217,12 +1292,6 @@ private const val STUDIO_AD_BLOCKER_JS = """
 })();
 """
 
-/**
- * Lightweight, low-end device friendly YouTube WebView:
- * - Opera-style toggleable network + DOM/player ad-blocker (`adBlockerEnabled`)
- * - Live playback telemetry JS bridge (`SharkStudioBridge`) reporting current second, title, and URL to AI
- * - Cleanly stops, unloads, and destroys itself on dispose to protect low-RAM devices.
- */
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 private fun DistractionFreeYouTubeWebView(
@@ -1336,8 +1405,10 @@ private fun DistractionFreeYouTubeWebView(
 }
 
 /**
- * Dialog for configuring a library book's Camp Binding (Catalog selection, YouTube playlist/video link,
- * AI daily topic slicing, and 1-tap distribution into the weekly plan).
+ * Mark 62 Real-Playlist Video Binding Dialog:
+ * - Searches YouTube for genuinely relevant top-ranked playlists ("YouTube'da Bul") without fabricating fake camps.
+ * - Absorbs REAL YouTube playlist videos (stripping intro/promo videos, keeping exact real order, count & videoIds).
+ * - Lets students jump directly to any real lesson (e.g. Lesson 4) or detach video support cleanly.
  */
 @Composable
 fun ResourceCampConfigDialog(
@@ -1353,29 +1424,33 @@ fun ResourceCampConfigDialog(
 
     var campTitle by remember(initialBinding) { mutableStateOf(initialBinding.campTitle) }
     var instructor by remember(initialBinding) { mutableStateOf(initialBinding.instructor) }
-    var totalDaysText by remember(initialBinding) { mutableStateOf(initialBinding.totalDays.toString()) }
     var currentDayText by remember(initialBinding) { mutableStateOf(initialBinding.currentDay.toString()) }
     var youtubeUrl by remember(initialBinding) { mutableStateOf(initialBinding.youtubeUrl) }
-    var customTopics by remember(initialBinding) {
-        mutableStateOf(initialBinding.episodes.map { it.topicTitle })
-    }
-    var isAiSlicing by remember { mutableStateOf(false) }
+    var loadedEpisodes by remember(initialBinding) { mutableStateOf(initialBinding.episodes) }
+    var isFromRealPlaylist by remember(initialBinding) { mutableStateOf(initialBinding.isFromRealPlaylist) }
+
+    var isFetchingPlaylist by remember { mutableStateOf(false) }
+    var isAutoSearching by remember { mutableStateOf(false) }
     var isDistributing by remember { mutableStateOf(false) }
     var statusNotice by remember { mutableStateOf<String?>(null) }
 
-    val matchingCatalog = remember(resource.title, resource.subject) {
-        val tr = java.util.Locale("tr")
-        val titleLower = resource.title.lowercase(tr)
-        val subjLower = resource.subject.lowercase(tr)
-        val matched = BookCampManager.BuiltInCampCatalog.filter { tpl ->
-            val tplSubj = tpl.subject.lowercase(tr)
-            tplSubj.contains(subjLower) ||
-                subjLower.contains(tplSubj.substringAfter(" ")) ||
-                tpl.matchKeywords.any { kw -> titleLower.contains(kw.lowercase(tr)) }
-        }.sortedByDescending { tpl ->
-            tpl.matchKeywords.any { kw -> titleLower.contains(kw.lowercase(tr)) }
-        }
-        matched.ifEmpty { BookCampManager.BuiltInCampCatalog.take(6) }
+    val (parsedVid, parsedPlId) = remember(youtubeUrl) { BookCampManager.parseYouTubeUrlIds(youtubeUrl) }
+    val hasValidMedia = loadedEpisodes.any { it.videoId.length == 11 } || parsedVid.length == 11 || parsedPlId.isNotBlank()
+
+    fun buildAndSaveBinding(): ResourceCampBinding {
+        val total = loadedEpisodes.size.coerceAtLeast(1)
+        val cur = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, total)
+        return BookCampManager.saveResourceCampBinding(
+            context = context,
+            resource = resource,
+            campTitle = campTitle.ifBlank { resource.title },
+            instructor = instructor,
+            totalDays = total,
+            currentDay = cur,
+            youtubeUrl = youtubeUrl,
+            realEpisodes = loadedEpisodes,
+            isFromRealPlaylist = isFromRealPlaylist && loadedEpisodes.isNotEmpty()
+        )
     }
 
     AlertDialog(
@@ -1383,7 +1458,7 @@ fun ResourceCampConfigDialog(
         title = {
             Column {
                 Text(
-                    text = "Kitap Kampı & Günlük Planlayıcı",
+                    text = "Video Oynatma Listesi Bağlantısı",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -1401,58 +1476,53 @@ fun ResourceCampConfigDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "Hazır Kamp Kataloğundan Seç",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorScheme.onSurfaceVariant
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    matchingCatalog.forEach { tpl ->
-                        val isSelected = campTitle.equals(tpl.title, ignoreCase = true)
-                        Surface(
-                            onClick = {
-                                campTitle = tpl.title
-                                instructor = tpl.instructor
-                                totalDaysText = tpl.totalDays.toString()
-                                customTopics = tpl.dayTopics
-                                statusNotice = "${tpl.title} (${tpl.totalDays} Gün) seçildi."
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant
+                // 1. Auto-search YouTube strictly for this book
+                OutlinedButton(
+                    onClick = {
+                        if (isAutoSearching || isFetchingPlaylist) return@OutlinedButton
+                        isAutoSearching = true
+                        statusNotice = "YouTube'da bu kitaba uygun liste aranıyor..."
+                        scope.launch {
+                            val discovered = BookCampManager.discoverAndSyncRealCampForResource(
+                                context = context,
+                                resource = resource,
+                                forceRefresh = true
                             )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
-                            ) {
-                                Text(
-                                    text = tpl.title,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) colorScheme.onPrimaryContainer else colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "${tpl.instructor} • ${tpl.totalDays} Gün",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = colorScheme.primary
-                                )
+                            isAutoSearching = false
+                            if (discovered.hasVerifiedVideoSupport) {
+                                campTitle = discovered.campTitle
+                                instructor = discovered.instructor
+                                youtubeUrl = discovered.youtubeUrl
+                                loadedEpisodes = discovered.episodes
+                                isFromRealPlaylist = discovered.isFromRealPlaylist
+                                currentDayText = discovered.currentDay.toString()
+                                statusNotice = "Gerçek liste bulundu: ${discovered.episodes.size} ders videosu (tanıtımlar filtrelendi)."
+                                onSaved(discovered)
+                            } else {
+                                loadedEpisodes = emptyList()
+                                isFromRealPlaylist = false
+                                statusNotice = "Bu kitap için YouTube ilk sıralarında alakalı video listesi bulunamadı. İstersen aşağıya kendi YouTube linkini yapıştırabilirsin."
                             }
                         }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    if (isAutoSearching) {
+                        CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("YouTube'da Bu Kitap İçin Ara", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
 
+                // 2. Manual YouTube Playlist / Video Link + Fetch Real Videos button
                 OutlinedTextField(
-                    value = campTitle,
-                    onValueChange = { campTitle = it },
-                    label = { Text("Kamp Adı") },
+                    value = youtubeUrl,
+                    onValueChange = { youtubeUrl = it },
+                    label = { Text("YouTube Oynatma Listesi veya Video Linki") },
+                    placeholder = { Text("https://youtube.com/playlist?list=...") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -1462,115 +1532,101 @@ fun ResourceCampConfigDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = instructor,
-                        onValueChange = { instructor = it },
-                        label = { Text("Eğitmen / Kanal") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = totalDaysText,
-                        onValueChange = { totalDaysText = it.filter { c -> c.isDigit() } },
-                        label = { Text("Toplam Gün") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.width(100.dp)
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = currentDayText,
-                        onValueChange = { currentDayText = it.filter { c -> c.isDigit() } },
-                        label = { Text("Aktif Gün") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.width(105.dp)
-                    )
-                    OutlinedTextField(
-                        value = youtubeUrl,
-                        onValueChange = { youtubeUrl = it },
-                        label = { Text("YouTube Playlist / Video Linki (Opsiyonel)") },
-                        placeholder = { Text("https://youtube.com/playlist?list=...") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                // AI Daily Slicer + Distribute to Weekly Plan buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
                     OutlinedButton(
                         onClick = {
-                            if (isAiSlicing) return@OutlinedButton
-                            isAiSlicing = true
-                            val days = (totalDaysText.toIntOrNull() ?: 30).coerceIn(3, 90)
+                            if (isFetchingPlaylist || parsedPlId.isBlank()) {
+                                if (parsedVid.length == 11) {
+                                    loadedEpisodes = listOf(
+                                        CampDayEpisode(
+                                            dayNumber = 1,
+                                            topicTitle = campTitle.ifBlank { resource.title },
+                                            videoId = parsedVid,
+                                            customUrl = youtubeUrl.trim()
+                                        )
+                                    )
+                                    isFromRealPlaylist = false
+                                    currentDayText = "1"
+                                    statusNotice = "Tekil YouTube videosu bağlandı."
+                                } else {
+                                    statusNotice = "Geçerli bir YouTube oynatma listesi veya video linki gir."
+                                }
+                                return@OutlinedButton
+                            }
+                            isFetchingPlaylist = true
+                            statusNotice = "Oynatma listesindeki gerçek ders videoları çekiliyor..."
                             scope.launch {
-                                val sliced = BookCampManager.generateDailyCampTopicsWithAi(
-                                    context = context,
-                                    bookTitle = campTitle.ifBlank { resource.title },
-                                    subject = resource.subject,
-                                    instructor = instructor,
-                                    totalDays = days
-                                )
-                                customTopics = sliced
-                                isAiSlicing = false
-                                statusNotice = "Kamp $days günlük konulara ayrıldı."
+                                val (plTitle, eps) = BookCampManager.fetchRealPlaylistEpisodes(youtubeUrl)
+                                isFetchingPlaylist = false
+                                if (eps.isNotEmpty()) {
+                                    if (plTitle.isNotBlank()) campTitle = plTitle
+                                    loadedEpisodes = eps
+                                    isFromRealPlaylist = true
+                                    currentDayText = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, eps.size).toString()
+                                    statusNotice = "${eps.size} gerçek ders videosu sırasıyla çekildi (tanıtımlar atlandı)."
+                                } else {
+                                    statusNotice = "Oynatma listesi okunamadı. Bağlantının herkese açık olduğundan emin ol."
+                                }
                             }
                         },
+                        enabled = !isFetchingPlaylist && youtubeUrl.isNotBlank(),
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        if (isAiSlicing) {
-                            CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                        if (isFetchingPlaylist) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
                         Spacer(modifier = Modifier.width(5.dp))
-                        Text("AI ile Günlere Böl", fontSize = 11.sp)
+                        Text("Listeyi Çek", fontSize = 11.sp)
                     }
 
-                    OutlinedButton(
-                        onClick = {
-                            if (isDistributing) return@OutlinedButton
-                            isDistributing = true
-                            val days = (totalDaysText.toIntOrNull() ?: 30).coerceIn(1, 120)
-                            val curDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, days)
-                            val saved = BookCampManager.saveResourceCampBinding(
-                                context = context,
-                                resource = resource,
-                                campTitle = campTitle,
-                                instructor = instructor,
-                                totalDays = days,
-                                currentDay = curDay,
-                                youtubeUrl = youtubeUrl,
-                                customDayTopics = customTopics
-                            )
-                            onSaved(saved)
-                            scope.launch {
-                                val added = BookCampManager.distributeCampToWeeklyPlan(context, saved)
-                                isDistributing = false
-                                statusNotice = "$added kamp günü haftalık plana eklendi."
-                                Toast.makeText(context, "$added kamp günü haftalık plana eklendi", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
+                    if (hasValidMedia && loadedEpisodes.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = {
+                                if (isDistributing) return@OutlinedButton
+                                isDistributing = true
+                                val saved = buildAndSaveBinding()
+                                onSaved(saved)
+                                scope.launch {
+                                    val added = BookCampManager.distributeCampToWeeklyPlan(context, saved)
+                                    isDistributing = false
+                                    statusNotice = "$added ders haftalık plana eklendi."
+                                    Toast.makeText(context, "$added ders haftalık plana eklendi", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Plana Dağıt", fontSize = 11.sp)
+                        }
+                    }
+                }
+
+                if (hasValidMedia) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text("Plana Dağıt (7 Gün)", fontSize = 11.sp)
+                        OutlinedTextField(
+                            value = campTitle,
+                            onValueChange = { campTitle = it },
+                            label = { Text("Liste Adı") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = currentDayText,
+                            onValueChange = { currentDayText = it.filter { c -> c.isDigit() } },
+                            label = { Text("Aktif Ders") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.width(96.dp)
+                        )
                     }
                 }
 
@@ -1583,94 +1639,103 @@ fun ResourceCampConfigDialog(
                     )
                 }
 
-                // Preview of upcoming 5 camp days
-                val previewDays = (totalDaysText.toIntOrNull() ?: 30).coerceIn(1, 120)
-                val startDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, previewDays)
-                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
-                Text(
-                    text = "Yaklaşan Kamp Günleri",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurfaceVariant
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    for (d in startDay..minOf(previewDays, startDay + 4)) {
-                        val topic = customTopics.getOrElse(d - 1) { "${resource.subject} • $d. Gün" }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(colorScheme.surfaceVariant.copy(alpha = 0.4f))
-                                .clickable { currentDayText = d.toString() }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "$d. Gün • $topic",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (d == startDay) colorScheme.primary else colorScheme.onSurface,
-                                fontWeight = if (d == startDay) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (d == startDay) {
+                // Real episode preview (tapping selects the exact episode to start from)
+                if (loadedEpisodes.isNotEmpty()) {
+                    val selectedDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, loadedEpisodes.size)
+                    val startIdx = (selectedDay - 1).coerceAtLeast(0)
+                    val window = loadedEpisodes.drop(startIdx).take(6)
+                    HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Text(
+                        text = "Gerçek Liste Sırası (${loadedEpisodes.size} Ders • Seçmek için dokun)",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        window.forEach { ep ->
+                            val isSelected = ep.dayNumber == selectedDay
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isSelected) colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                        else colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                    )
+                                    .clickable { currentDayText = ep.dayNumber.toString() }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
                                 Text(
-                                    text = "Seçili",
+                                    text = "${ep.dayNumber}. ${ep.topicTitle}",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
+                                    color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                if (isSelected) {
+                                    Text(
+                                        text = "Seçili",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
+                    }
+                }
+
+                if (initialBinding.hasVerifiedVideoSupport) {
+                    TextButton(
+                        onClick = {
+                            val cleared = BookCampManager.clearResourceVideoBinding(context, resource)
+                            onSaved(cleared)
+                            onDismiss()
+                        },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = colorScheme.error,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Video Desteğini Kaldır", color = colorScheme.error, fontSize = 12.sp)
                     }
                 }
             }
         },
         confirmButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        val days = (totalDaysText.toIntOrNull() ?: 30).coerceIn(1, 120)
-                        val curDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, days)
-                        val saved = BookCampManager.saveResourceCampBinding(
-                            context = context,
-                            resource = resource,
-                            campTitle = campTitle,
-                            instructor = instructor,
-                            totalDays = days,
-                            currentDay = curDay,
-                            youtubeUrl = youtubeUrl,
-                            customDayTopics = customTopics
-                        )
-                        onSaved(saved)
-                        onOpenStudio(saved)
-                    },
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Icon(Icons.Default.PlayCircleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Stüdyoda İzle")
+                if (hasValidMedia) {
+                    OutlinedButton(
+                        onClick = {
+                            val saved = buildAndSaveBinding()
+                            onSaved(saved)
+                            onOpenStudio(saved)
+                        },
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.PlayCircleOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("İzle")
+                    }
                 }
 
                 Button(
                     onClick = {
-                        val days = (totalDaysText.toIntOrNull() ?: 30).coerceIn(1, 120)
-                        val curDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, days)
-                        val saved = BookCampManager.saveResourceCampBinding(
-                            context = context,
-                            resource = resource,
-                            campTitle = campTitle,
-                            instructor = instructor,
-                            totalDays = days,
-                            currentDay = curDay,
-                            youtubeUrl = youtubeUrl,
-                            customDayTopics = customTopics
-                        )
-                        onSaved(saved)
+                        if (hasValidMedia) {
+                            val saved = buildAndSaveBinding()
+                            onSaved(saved)
+                        }
                         onDismiss()
                     },
+                    enabled = hasValidMedia,
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Kaydet")

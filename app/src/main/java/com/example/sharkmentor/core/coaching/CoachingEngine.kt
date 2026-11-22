@@ -163,7 +163,7 @@ data class LiveFocusPresence(
     }
 
     fun formattedLeagueStatus(nowMillis: Long = System.currentTimeMillis()): String {
-        val cleanSubj = activeSubject.trim().ifBlank { "Odak" }
+        val cleanSubj = CoachingEngine.formatCleanLeagueSubject(activeSubject).ifBlank { "Odak" }
         val mins = elapsedMinutes(nowMillis)
         return if (mins > 0) {
             "Masada • $cleanSubj ($mins dk)"
@@ -470,6 +470,77 @@ object CoachingEngine {
         }
     }
 
+    /**
+     * Normalizes a raw focus subject (which may contain book titles, sub-notes, camp days, or topics like
+     * "AYT Kimya • Organik Kimya 4. Gün" or "AYT Matematik - Türev Test 4") into a clean, concise league label
+     * (e.g. "AYT Kimya", "AYT Matematik", "TYT", "Kitap Okuma").
+     */
+    fun formatCleanLeagueSubject(rawSubject: String): String {
+        val trimmed = rawSubject.trim()
+        if (trimmed.isBlank()) return ""
+        var primary = trimmed
+            .substringBefore("•")
+            .substringBefore("·")
+            .substringBefore(" - ")
+            .substringBefore(" – ")
+            .substringBefore(" — ")
+            .substringBefore(":")
+            .substringBefore("|")
+            .substringBefore("(")
+            .replace(Regex("""\b\d{1,3}\.\s*[Gg]ün\b.*"""), "")
+            .replace(
+                Regex(
+                    """\b(Konu Anlatımı|Soru Çözümü|Video Ders Kampı|Video Kampı|Kampı|Tekrar|Test\s*\d*)\b""",
+                    RegexOption.IGNORE_CASE
+                ),
+                ""
+            )
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .trimEnd('-', '•', ':', '|', ',')
+            .trim()
+
+        if (primary.isBlank()) primary = trimmed.take(24)
+
+        val words = primary.split(" ").filter { it.isNotBlank() }
+        if (words.size > 3 || primary.length > 22) {
+            val lower = primary.lowercase(Locale("tr"))
+            val examPrefix = when {
+                lower.contains("tyt-ayt") || lower.contains("tyt ayt") -> "TYT-AYT"
+                lower.contains("ayt") -> "AYT"
+                lower.contains("tyt") -> "TYT"
+                lower.contains("lgs") -> "LGS"
+                lower.contains("kpss") -> "KPSS"
+                lower.contains("tus") -> "TUS"
+                lower.contains("dgs") -> "DGS"
+                lower.contains("ales") -> "ALES"
+                else -> ""
+            }
+            val subjectName = when {
+                lower.contains("matematik") || Regex("""\bmat\b""").containsMatchIn(lower) -> "Matematik"
+                lower.contains("geometri") || Regex("""\bgeo\b""").containsMatchIn(lower) -> "Geometri"
+                lower.contains("fizik") -> "Fizik"
+                lower.contains("kimya") -> "Kimya"
+                lower.contains("biyoloji") -> "Biyoloji"
+                lower.contains("türkçe") || lower.contains("turkce") -> "Türkçe"
+                lower.contains("edebiyat") -> "Edebiyat"
+                lower.contains("paragraf") -> "Paragraf"
+                lower.contains("tarih") -> "Tarih"
+                lower.contains("coğrafya") || lower.contains("cografya") -> "Coğrafya"
+                lower.contains("felsefe") -> "Felsefe"
+                lower.contains("din") -> "Din Kültürü"
+                lower.contains("fen") -> "Fen Bilimleri"
+                lower.contains("ingilizce") -> "İngilizce"
+                else -> ""
+            }
+            if (subjectName.isNotBlank()) {
+                return if (examPrefix.isNotBlank()) "$examPrefix $subjectName" else subjectName
+            }
+            return words.take(2).joinToString(" ").take(22).trim()
+        }
+        return primary
+    }
+
     // ── Offline-First Live Presence Broadcast (Shark League & Friends) ───────
 
     fun updateLivePresenceOfflineFirst(
@@ -480,7 +551,7 @@ object CoachingEngine {
     ) {
         ensureInitialized(context)
         val appCtx = context.applicationContext
-        val cleanSubject = subject.trim().ifBlank { "Odak" }
+        val cleanSubject = formatCleanLeagueSubject(subject).ifBlank { "Odak" }
         val effectiveStart = if (isStudying) {
             if (_livePresence.value.isStudying && _livePresence.value.startedAtMillis > 0L) {
                 _livePresence.value.startedAtMillis
@@ -514,7 +585,7 @@ object CoachingEngine {
 
     /**
      * Called on periodic timer ticks and network reconnects so an offline-started
-     * focus session automatically publishes its live status ("Masada • AYT • Türev")
+     * focus session automatically publishes its live status ("Masada • AYT Kimya")
      * to Shark League as soon as connectivity becomes available.
      */
     fun flushPendingPresenceIfConnected(context: Context) {
@@ -529,11 +600,12 @@ object CoachingEngine {
     private fun pushLivePresenceToFirestore(context: Context, presence: LiveFocusPresence) {
         val uid = GoogleServicesHelper.getCurrentUser(context = context)?.uid ?: return
         val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return
+        val cleanLeagueSubject = formatCleanLeagueSubject(presence.activeSubject).ifBlank { "Odak" }
 
         val studentData: Map<String, Any> = if (presence.isStudying) {
             mapOf(
                 "isStudying" to true,
-                "activeSubject" to presence.activeSubject.ifBlank { "Odak" },
+                "activeSubject" to cleanLeagueSubject,
                 "activeSessionStartedAtMillis" to presence.startedAtMillis,
                 "lastActive" to FieldValue.serverTimestamp()
             )
@@ -558,7 +630,7 @@ object CoachingEngine {
         val leagueData: Map<String, Any> = if (presence.isStudying) {
             mapOf(
                 "isStudying" to true,
-                "activeSubject" to presence.activeSubject.ifBlank { "Odak" },
+                "activeSubject" to cleanLeagueSubject,
                 "activeSessionStartedAtMillis" to presence.startedAtMillis
             )
         } else {

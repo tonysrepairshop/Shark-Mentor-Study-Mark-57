@@ -29,12 +29,10 @@ import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PersonOff
-import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.SelfImprovement
@@ -55,7 +53,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.badges.SharkBadgeCatalog
 import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.data.AppThemeMode
@@ -99,7 +96,6 @@ fun SettingsScreen(
     val context = LocalContext.current
     val topBarPrefs = remember(context) { TopBarPreferences.getInstance(context) }
     val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
-    val userAiPrefs = remember(context) { UserAiPreferences.initialize(context) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     var showTimeDialog by remember { mutableStateOf(false) }
@@ -292,7 +288,6 @@ fun SettingsScreen(
                     Text(
                         when (activeSubPage) {
                             "coaching_support" -> "Kapsamlı Destek & Çalışma"
-                            "studio_ai_controls" -> "Video Stüdyosu & Modül AI"
                             "focus_wellness" -> "Odak Sağlığı & Hatırlatmalar"
                             "topbar_hub" -> "Üst Bar Kontrolleri"
                             "topbar_weather" -> "Hava Durumu"
@@ -306,7 +301,7 @@ fun SettingsScreen(
                         onClick = {
                             when (activeSubPage) {
                                 "topbar_weather", "topbar_texts" -> activeSubPage = "topbar_hub"
-                                "topbar_hub", "coaching_support", "studio_ai_controls", "focus_wellness" -> activeSubPage = null
+                                "topbar_hub", "coaching_support", "focus_wellness" -> activeSubPage = null
                                 else -> onBackClick()
                             }
                         }
@@ -344,20 +339,15 @@ fun SettingsScreen(
 
                     // 2. Yapay Zeka, Video Stüdyosu & Notlar
                     Text(
-                        "Yapay Zeka, Video Stüdyosu & Notlar",
+                        "Yapay Zeka & Notlar",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
                     )
                     SettingRow(
                         icon = Icons.Default.AutoAwesome,
-                        label = "Yapay Zeka & API Ayarları",
+                        label = "Yapay Zeka, API & Video Stüdyosu",
                         onClick = onOpenAiSettings
-                    )
-                    SettingRow(
-                        icon = Icons.Default.PlayCircleOutline,
-                        label = "Video Stüdyosu, Reklam Engelleyici & Modül AI",
-                        onClick = { activeSubPage = "studio_ai_controls" }
                     )
                     SettingRow(
                         icon = Icons.Default.EditNote,
@@ -367,9 +357,9 @@ fun SettingsScreen(
 
                     HorizontalDivider()
 
-                    // 3. Üst Bar, Akıllı Öneriler & Odak Sağlığı
+                    // 3. Üst Bar & Odak Sağlığı
                     Text(
-                        "Üst Bar, Akıllı Öneriler & Odak Sağlığı",
+                        "Üst Bar & Odak Sağlığı",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -494,16 +484,6 @@ fun SettingsScreen(
                 )
             }
 
-            "studio_ai_controls" -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
-                ) {
-                    StudioAndModuleAiControlsContent(userAiPrefs = userAiPrefs)
-                }
-            }
-
             "focus_wellness" -> {
                 Box(
                     modifier = Modifier
@@ -550,139 +530,6 @@ fun SettingsScreen(
                     TopBarTextSettingsContent(prefs = topBarPrefs)
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun StudioAndModuleAiControlsContent(
-    userAiPrefs: UserAiPreferences
-) {
-    val context = LocalContext.current
-    val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
-    val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
-    val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
-    val drawingAiEnabled by userAiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
-    val colorScheme = MaterialTheme.colorScheme
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text(
-            text = "Video Stüdyosu Kontrolleri",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = colorScheme.primary
-        )
-        ModuleControlSwitchCard(
-            icon = Icons.Default.Block,
-            title = "Video Reklam Engelleyici",
-            subtitle = "Video Stüdyosu'nda reklam ağlarını ve video içi reklamları engeller.",
-            checked = videoAdBlockerEnabled,
-            onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
-        )
-        ModuleControlSwitchCard(
-            icon = Icons.Default.PlayCircleOutline,
-            title = "Video Stüdyosu AI Asistanı",
-            subtitle = "İzlenen video bağlantısı ve dakikaya göre AI soru sorma panelini açar.",
-            checked = videoStudioAiEnabled,
-            onCheckedChange = { userAiPrefs.setVideoStudioAiEnabled(context, it) }
-        )
-
-        HorizontalDivider()
-
-        Text(
-            text = "Notlar & Çizim AI Kontrolleri",
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = colorScheme.primary
-        )
-        ModuleControlSwitchCard(
-            icon = Icons.Default.EditNote,
-            title = "Notlar & PDF AI Asistanı",
-            subtitle = "Not ve PDF ekranlarındaki yapay zeka asistan butonunu ve panelini yönetir.",
-            checked = notesAiEnabled,
-            onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
-        )
-        ModuleControlSwitchCard(
-            icon = Icons.Default.Brush,
-            title = "Çizim Paneli AI (Kement Çözüm)",
-            subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu yönetir.",
-            checked = drawingAiEnabled,
-            onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
-        )
-
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = colorScheme.primaryContainer.copy(alpha = 0.35f),
-            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.25f)),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "Tüm modül AI özellikleri seçili API anahtarınızı kullanır; özel anahtar girilmediyse yerleşik Gemini anahtarı ile kesintisiz çalışır.",
-                style = MaterialTheme.typography.bodySmall,
-                color = colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(12.dp)
-            )
-        }
-    }
-}
-
-@Composable
-private fun ModuleControlSwitchCard(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = colorScheme.surfaceVariant.copy(alpha = 0.38f),
-        border = BorderStroke(
-            1.dp,
-            if (checked) colorScheme.primary.copy(alpha = 0.4f) else colorScheme.outlineVariant.copy(alpha = 0.5f)
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = colorScheme.primary,
-                modifier = Modifier.size(22.dp)
-            )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorScheme.onSurface
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange
-            )
         }
     }
 }

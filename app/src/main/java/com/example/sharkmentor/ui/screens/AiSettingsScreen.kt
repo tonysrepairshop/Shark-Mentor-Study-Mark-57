@@ -121,8 +121,6 @@ fun AiSettingsScreen(
     val savedProvider by userAiPrefs.selectedAiProvider.collectAsStateWithLifecycle()
     val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
-    val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
-    val drawingAiEnabled by userAiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
 
     // Editable local states
     var geminiKeysInput by remember(savedGemini) { mutableStateOf(savedGemini) }
@@ -366,7 +364,7 @@ fun AiSettingsScreen(
                     }
                 }
 
-                // Modular AI & Video Studio Controls
+                // Video Studio AI & Ad Blocker Controls (Notes & Drawing AI live exclusively in Note Settings)
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                     shape = RoundedCornerShape(16.dp),
@@ -378,7 +376,7 @@ fun AiSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "Modül AI & Video Stüdyosu Kontrolleri",
+                            text = "Video Stüdyosu Kontrolleri",
                             style = MaterialTheme.typography.titleMedium,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
@@ -395,20 +393,6 @@ fun AiSettingsScreen(
                             subtitle = "Video Stüdyosu'nda reklam isteklerini ve video içi reklamları engeller",
                             checked = videoAdBlockerEnabled,
                             onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        AiModuleToggleRow(
-                            title = "Notlar & PDF AI Asistanı",
-                            subtitle = "Not ve PDF ekranlarındaki yapay zeka asistanını açar/kapatır",
-                            checked = notesAiEnabled,
-                            onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
-                        )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-                        AiModuleToggleRow(
-                            title = "Çizim Paneli AI (Kement Çözüm)",
-                            subtitle = "Kementle seçilen alanlarda AI'ya Sor kısayolunu açar/kapatır",
-                            checked = drawingAiEnabled,
-                            onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
                         )
                     }
                 }

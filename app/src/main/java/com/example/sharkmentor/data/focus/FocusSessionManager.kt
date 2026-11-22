@@ -61,9 +61,11 @@ class FocusSessionManager(private val context: Context) {
             if (uid != null) {
                 val db = GoogleServicesHelper.getFirebaseFirestore(context)
                 if (db != null) {
+                    val cleanLeagueSubject = com.example.sharkmentor.core.coaching.CoachingEngine
+                        .formatCleanLeagueSubject(subject).ifBlank { "Odak" }
                     val updates = hashMapOf<String, Any>(
                         "isStudying" to true,
-                        "activeSubject" to subject,
+                        "activeSubject" to cleanLeagueSubject,
                         "sessionStartTime" to FieldValue.serverTimestamp()
                     )
                     db.collection("students").document(uid)

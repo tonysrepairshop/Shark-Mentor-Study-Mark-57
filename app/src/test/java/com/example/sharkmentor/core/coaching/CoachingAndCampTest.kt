@@ -86,7 +86,7 @@ class CoachingAndCampTest {
             startedAtMillis = now - (42L * 60_000L)
         )
         assertEquals(42, presence.elapsedMinutes(now))
-        assertEquals("Masada • AYT • Türev Test 4 (42 dk)", presence.formattedLeagueStatus(now))
+        assertEquals("Masada • AYT (42 dk)", presence.formattedLeagueStatus(now))
     }
 
     @Test

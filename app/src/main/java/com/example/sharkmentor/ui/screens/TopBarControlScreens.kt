@@ -885,15 +885,6 @@ fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
                 }
             }
         }
-
-        SectionContainer(title = "Akıllı Öneri Motoru") {
-            SwitchSettingRow(
-                title = "Uygulama İçi Akıllı Öneriler",
-                subtitle = "Yağmurlu havada yağmur sesi başlatma gibi hava durumu ve odak bağlamlı önerileri açar",
-                checked = settings.inAppSuggestionsEnabled,
-                onCheckedChange = prefs::setInAppSuggestionsEnabled
-            )
-        }
     }
 }
 
