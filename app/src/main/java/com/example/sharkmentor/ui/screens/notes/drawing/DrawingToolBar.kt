@@ -89,6 +89,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.ui.screens.notes.NoteFontOption
 import com.example.sharkmentor.ui.screens.notes.NoteRichTextHelper
 import kotlin.math.atan2
@@ -1166,6 +1168,11 @@ fun PenLassoActionsPanel(
     showAskAiAction: Boolean = true,
     onDismiss: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val drawingAiEnabled by remember(context) {
+        UserAiPreferences.initialize(context)
+    }.drawingAiEnabled.collectAsStateWithLifecycle()
+    val effectiveShowAskAi = showAskAiAction && drawingAiEnabled
     val colorScheme = MaterialTheme.colorScheme
     val onSurfaceColor = colorScheme.onSurface
     val primaryColor = colorScheme.primary
@@ -1189,7 +1196,7 @@ fun PenLassoActionsPanel(
         )
 
         if (controller.hasActiveLasso) {
-            if (showAskAiAction) {
+            if (effectiveShowAskAi) {
                 MiniActionPill(
                     label = "AI'ya Sor",
                     isPrimary = true,

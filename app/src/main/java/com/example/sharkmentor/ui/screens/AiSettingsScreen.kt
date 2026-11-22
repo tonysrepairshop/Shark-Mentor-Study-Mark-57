@@ -41,6 +41,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +52,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -117,6 +119,10 @@ fun AiSettingsScreen(
     val savedGrokList by userAiPrefs.discoveredGrokModels.collectAsStateWithLifecycle()
 
     val savedProvider by userAiPrefs.selectedAiProvider.collectAsStateWithLifecycle()
+    val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
+    val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
+    val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
+    val drawingAiEnabled by userAiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
 
     // Editable local states
     var geminiKeysInput by remember(savedGemini) { mutableStateOf(savedGemini) }
@@ -293,7 +299,7 @@ fun AiSettingsScreen(
                             ) {
                                 "Özel anahtar girilmediğinde varsayılan Gemini (${UserAiPreferences.STANDARD_GEMINI_MODEL}) kullanılır. Dilediğiniz sağlayıcıya API anahtarı ekleyip modellerini listeleyebilir ve test edebilirsiniz."
                             } else {
-                                "Sağlayıcı tercihiniz: ${selectedProvider.label}. Her sağlayıcı için modelleri çekip seçebilir ve bağlantıyı test edebilirsiniz."
+                                "Sağlayıcı tercihiniz: ${selectedProvider.label}. Video Stüdyosu dahil tüm AI modülleri bu seçimi kullanır."
                             }
                             Text(
                                 text = bannerSub,
@@ -324,7 +330,7 @@ fun AiSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Sohbette kullanılacak birincil AI sağlayıcısını seçin:",
+                            text = "Sohbet, Video Stüdyosu ve analizlerde kullanılacak birincil AI sağlayıcısını seçin:",
                             style = MaterialTheme.typography.bodySmall,
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -357,6 +363,53 @@ fun AiSettingsScreen(
                                 )
                             }
                         }
+                    }
+                }
+
+                // Modular AI & Video Studio Controls
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Modül AI & Video Stüdyosu Kontrolleri",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        AiModuleToggleRow(
+                            title = "Video Stüdyosu AI Asistanı",
+                            subtitle = "İzlenen video bağlantısı ve dakikaya göre soru sorma",
+                            checked = videoStudioAiEnabled,
+                            onCheckedChange = userAiPrefs::setVideoStudioAiEnabled
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        AiModuleToggleRow(
+                            title = "Video Reklam Engelleyici",
+                            subtitle = "Video Stüdyosu'nda reklam isteklerini ve video içi reklamları engeller",
+                            checked = videoAdBlockerEnabled,
+                            onCheckedChange = userAiPrefs::setVideoAdBlockerEnabled
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        AiModuleToggleRow(
+                            title = "Notlar & PDF AI Asistanı",
+                            subtitle = "Not ve PDF ekranlarındaki yapay zeka asistanını açar/kapatır",
+                            checked = notesAiEnabled,
+                            onCheckedChange = userAiPrefs::setNotesAiEnabled
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        AiModuleToggleRow(
+                            title = "Çizim Paneli AI (Kement Çözüm)",
+                            subtitle = "Kementle seçilen alanlarda AI'ya Sor kısayolunu açar/kapatır",
+                            checked = drawingAiEnabled,
+                            onCheckedChange = userAiPrefs::setDrawingAiEnabled
+                        )
                     }
                 }
 
@@ -1165,4 +1218,44 @@ private fun AiKeyField(
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+@Composable
+private fun AiModuleToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }

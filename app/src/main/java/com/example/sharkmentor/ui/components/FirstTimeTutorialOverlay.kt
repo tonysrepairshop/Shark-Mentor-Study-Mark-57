@@ -104,8 +104,8 @@ fun FirstTimeTutorialOverlay(
                 icon = Icons.Default.Flag
             ),
             TutorialStep(
-                title = "Kitap Kampları ve Bölünmüş Video Stüdyosu",
-                description = "Kütüphanedeki kitaplarını video kamplarıyla eşleştirip haftalık plana dağıtabilir; videoyu uygulama içinde izlerken alttan AI'ya soru sorup not alabilirsin.",
+                title = "Video Stüdyosu, Zaman Damgalı AI ve Matematik Paneli",
+                description = "Kamp videoları doğrudan oynatılır; izlediğin dakikaya göre AI'ya soru sorabilir, reklam engelleyiciyi Ayarlar'dan yönetebilir ve ∑ paneliyle formül yazabilirsin.",
                 icon = Icons.Default.PlayCircleOutline
             ),
             TutorialStep(
@@ -115,7 +115,7 @@ fun FirstTimeTutorialOverlay(
             ),
             TutorialStep(
                 title = "Kement ile Anında AI Çözüm",
-                description = "Notlarda veya PDF üzerinde kementle bir soruyu çevreleyip doğrudan AI'ya çözdürebilir ya da ekran görüntüsü kırpabilirsin.",
+                description = "Notlarda veya PDF üzerinde kementle bir soruyu çevreleyip doğrudan AI'ya çözdürebilir; Not ve Çizim AI özelliklerini Ayarlar'dan açıp kapatabilirsin.",
                 icon = Icons.Default.Star
             ),
             TutorialStep(
@@ -124,8 +124,8 @@ fun FirstTimeTutorialOverlay(
                 icon = Icons.Default.PlayArrow
             ),
             TutorialStep(
-                title = "Üst Bar, Hızlı DM ve Kişiselleştirme",
-                description = "Üst bar ayarlarından motivasyon sözleri ve animasyon seçebilir, DM simgesinden mesajlarına, Profil'den hedef sınavına hızla ulaşabilirsin.",
+                title = "Akıllı Üst Bar ve Odak Sağlığı",
+                description = "Üst bar yenileme sıklığını, hava durumuna göre uygulama içi önerileri ve uzun oturumlarda su/duruş hatırlatmalarını Ayarlar'dan özelleştirebilirsin.",
                 icon = Icons.Default.Email
             )
         )

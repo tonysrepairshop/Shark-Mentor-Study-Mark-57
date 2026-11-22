@@ -190,15 +190,19 @@ fun MainScreen(
     val countdownText = uiState.targetCountdownText
 
     val weatherRepository = remember(context) { WeatherRepository.getInstance(context) }
-    val weatherState by weatherRepository.weatherState.collectAsState()
-    val weatherSettings by weatherRepository.settings.collectAsState()
+    val weatherState by weatherRepository.weatherState.collectAsStateWithLifecycle()
+    val weatherSettings by weatherRepository.settings.collectAsStateWithLifecycle()
     var showWeatherDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         weatherRepository.refreshWeather()
     }
     val topBarPreferences = remember(context) { TopBarPreferences.getInstance(context) }
-    val topBarSettings by topBarPreferences.settings.collectAsState()
-    val isAnyFocusRunning by FocusSessionState.isAnyFocusRunning.collectAsState()
+    val topBarSettings by topBarPreferences.settings.collectAsStateWithLifecycle()
+    val isAnyFocusRunning by FocusSessionState.isAnyFocusRunning.collectAsStateWithLifecycle()
+    val liveTimerState by com.example.sharkmentor.core.service.FocusTimerService.timerStateFlow.collectAsStateWithLifecycle()
+    val elapsedFocusMinutes = remember(liveTimerState.timeElapsedMillis / 60_000L, isAnyFocusRunning) {
+        if (isAnyFocusRunning) (liveTimerState.timeElapsedMillis / 60_000L).toInt() else 0
+    }
     val hasUnreadDm by com.example.sharkmentor.core.notification.SocialNotificationMonitor.hasUnreadDmFlow.collectAsStateWithLifecycle()
     var showFirstTimeTutorial by remember {
         mutableStateOf(com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.shouldShowTutorial(context))
@@ -307,12 +311,25 @@ fun MainScreen(
                                         isCampus = uiState.isCampus,
                                         topBarSettings = topBarSettings,
                                         isAnyFocusRunning = isAnyFocusRunning,
+                                        elapsedFocusMinutes = elapsedFocusMinutes,
                                         isPaceKeep = isPaceKeep,
                                         weatherState = weatherState,
                                         weatherSettings = weatherSettings,
                                         hasUnreadDm = hasUnreadDm,
                                         onWeatherClick = { showWeatherDialog = true },
                                         onOpenSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
+                                        onStartZenSound = { sound, msg ->
+                                            com.example.sharkmentor.core.audio.ZenAudioManager.playSound(context, sound)
+                                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                        },
+                                        onNavigateRoute = { route ->
+                                            runCatching {
+                                                navController.navigate(route) { launchSingleTop = true }
+                                            }
+                                        },
+                                        onWellnessAck = { msg ->
+                                            android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                        },
                                         onOpenDmInbox = {
                                             com.example.sharkmentor.ui.components.PendingLeagueNavigationBus.openDmInboxDirectly.value = true
                                             com.example.sharkmentor.core.notification.SocialNotificationMonitor.clearUnreadDmIndicator()
@@ -586,6 +603,7 @@ private fun SharkMentorTopBar(
     countdown: String,
     topBarSettings: TopBarSettings,
     isAnyFocusRunning: Boolean = false,
+    elapsedFocusMinutes: Int = 0,
     isPaceKeep: Boolean = false,
     isCampus: Boolean,
     weatherState: WeatherUiState,
@@ -593,6 +611,9 @@ private fun SharkMentorTopBar(
     hasUnreadDm: Boolean = false,
     onWeatherClick: () -> Unit,
     onOpenSharkAi: () -> Unit,
+    onStartZenSound: (com.example.sharkmentor.core.audio.ZenSound, String) -> Unit = { _, _ -> },
+    onNavigateRoute: (String) -> Unit = {},
+    onWellnessAck: (String) -> Unit = {},
     onOpenDmInbox: () -> Unit = {},
     onCountdownClick: () -> Unit = {},
     onMenuClick: () -> Unit
@@ -629,7 +650,13 @@ private fun SharkMentorTopBar(
                         },
                         modifier = Modifier.weight(1f),
                         topBarSettings = topBarSettings,
-                        showBubble = showBubbleFrame
+                        showBubble = showBubbleFrame,
+                        weatherState = weatherState,
+                        isAnyFocusRunning = isAnyFocusRunning,
+                        elapsedFocusMinutes = elapsedFocusMinutes,
+                        onStartZenSound = onStartZenSound,
+                        onNavigateRoute = onNavigateRoute,
+                        onWellnessAck = onWellnessAck
                     )
                     com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
                         hasUnread = hasUnreadDm,

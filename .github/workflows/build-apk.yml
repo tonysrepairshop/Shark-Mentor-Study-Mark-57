@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 59 APK
+name: Build SharkMentor Mark 60 APK
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - main
       - mark-57
       - mark-59
+      - mark-60
   workflow_dispatch:
 
 permissions:
@@ -259,7 +260,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark59-debug-apk
+          name: SharkMentor-Mark60-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -268,8 +269,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark59-debug.apk
-          gh release delete mark59-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark59-apk SharkMentor-Mark59-debug.apk \
-            --title "Shark Mentor Study Mark 59 (Debug APK)" \
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark60-debug.apk
+          gh release delete mark60-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark60-apk SharkMentor-Mark60-debug.apk \
+            --title "Shark Mentor Study Mark 60 (Debug APK)" \
             --notes "Otomatik bulut derlemesi ile üretilen doğrudan telefona kurulabilir APK paketi."

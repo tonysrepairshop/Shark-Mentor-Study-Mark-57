@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -72,7 +73,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -83,6 +83,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
@@ -94,8 +95,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.sharkmentor.core.ai.ApiKeyRotator
-import com.example.sharkmentor.core.ai.GeminiRestClient
+import com.example.sharkmentor.core.ai.MultiProviderAiClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.coaching.AppStudyMode
 import com.example.sharkmentor.core.coaching.BookCampManager
@@ -115,6 +115,7 @@ import com.example.sharkmentor.data.local.entity.PlanFolderEntity
 import com.example.sharkmentor.data.local.entity.ResourceEntity
 import com.example.sharkmentor.data.local.entity.TopicGoalEntity
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
+import com.example.sharkmentor.ui.components.RichSolutionContent
 import java.util.Calendar
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -945,15 +946,15 @@ fun DuolingoCoachingPathView(
     var selectedDayIso by remember { mutableIntStateOf(todayIso) }
 
     // Observe active plan folder & tasks + library resources + topic mastery goals
-    val activeFolders by db.planDao().getAllActiveFolders().collectAsState(initial = emptyList())
+    val activeFolders by db.planDao().getAllActiveFolders().collectAsStateWithLifecycle(initialValue = emptyList())
     val selectedFolder = activeFolders.firstOrNull()
     val folderTasksFlow = remember(selectedFolder?.id) {
         if (selectedFolder != null) db.planDao().getTasksForFolder(selectedFolder.id)
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }
-    val allFolderTasks by folderTasksFlow.collectAsState(initial = emptyList())
-    val libraryResources by db.goalsDao().getAllResourcesFlow().collectAsState(initial = emptyList())
-    val topicGoals by db.goalsDao().getAllTopicGoalsFlow().collectAsState(initial = emptyList())
+    val allFolderTasks by folderTasksFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val libraryResources by db.goalsDao().getAllResourcesFlow().collectAsStateWithLifecycle(initialValue = emptyList())
+    val topicGoals by db.goalsDao().getAllTopicGoalsFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     val campBindings by BookCampManager.bindingsByResourceId.collectAsStateWithLifecycle()
 
     // Single-resource focus filter so books are NOT interleaved/mixed together
@@ -1094,34 +1095,45 @@ fun DuolingoCoachingPathView(
         )
 
         // 2. Macro Target Compass Banner ("Ana Pusula")
+        val compassBrush = Brush.horizontalGradient(
+            colors = listOf(
+                colorScheme.primaryContainer.copy(alpha = 0.78f),
+                colorScheme.tertiaryContainer.copy(alpha = 0.50f),
+                colorScheme.surfaceVariant.copy(alpha = 0.55f)
+            )
+        )
         Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = colorScheme.primaryContainer.copy(alpha = 0.55f),
-            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
-            modifier = Modifier.fillMaxWidth()
+            shape = RoundedCornerShape(18.dp),
+            color = Color.Transparent,
+            border = BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.48f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(compassBrush)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(11.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Surface(
                         shape = CircleShape,
-                        color = colorScheme.primary.copy(alpha = 0.18f),
-                        modifier = Modifier.size(36.dp)
+                        color = colorScheme.primary,
+                        shadowElevation = 2.dp,
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
                             Icon(
                                 imageVector = Icons.Default.Explore,
                                 contentDescription = null,
-                                tint = colorScheme.primary,
+                                tint = colorScheme.onPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -1140,6 +1152,21 @@ fun DuolingoCoachingPathView(
                             color = colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (targetContext.examType.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = colorScheme.primary.copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
+                    ) {
+                        Text(
+                            text = targetContext.examType,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                 }
@@ -1394,7 +1421,7 @@ fun DuolingoCoachingPathView(
         val shortDays = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
         ) {
             shortDays.forEachIndexed { idx, label ->
                 val dayNum = idx + 1
@@ -1403,24 +1430,48 @@ fun DuolingoCoachingPathView(
                 Surface(
                     onClick = { selectedDayIso = dayNum },
                     modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isSelected) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    shape = RoundedCornerShape(12.dp),
+                    color = when {
+                        isSelected -> colorScheme.primary
+                        isToday -> colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        else -> colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                    },
                     border = BorderStroke(
-                        1.dp,
-                        if (isSelected) colorScheme.primary
-                        else if (isToday) colorScheme.primary.copy(alpha = 0.5f)
-                        else colorScheme.outlineVariant.copy(alpha = 0.3f)
-                    )
+                        width = if (isSelected || isToday) 1.3.dp else 1.dp,
+                        color = when {
+                            isSelected -> colorScheme.primary
+                            isToday -> colorScheme.primary.copy(alpha = 0.6f)
+                            else -> colorScheme.outlineVariant.copy(alpha = 0.35f)
+                        }
+                    ),
+                    shadowElevation = if (isSelected) 2.dp else 0.dp
                 ) {
                     Column(
-                        modifier = Modifier.padding(vertical = 7.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
                         Text(
                             text = label,
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface
+                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Medium,
+                            color = when {
+                                isSelected -> colorScheme.onPrimary
+                                isToday -> colorScheme.primary
+                                else -> colorScheme.onSurface
+                            }
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(if (isToday) 5.dp else 4.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when {
+                                        isSelected -> colorScheme.onPrimary
+                                        isToday -> colorScheme.primary
+                                        else -> Color.Transparent
+                                    }
+                                )
                         )
                     }
                 }
@@ -1429,14 +1480,28 @@ fun DuolingoCoachingPathView(
 
         // 7. Duolingo-Style Winding Daily Node Path
         val completedCount = pathNodes.count { it.isCompleted }
+        val totalNodes = pathNodes.size.coerceAtLeast(1)
+        val pathProgressFraction by animateFloatAsState(
+            targetValue = completedCount.toFloat() / totalNodes.toFloat(),
+            label = "coaching_path_progress"
+        )
         val firstIncompleteIndex = pathNodes.indexOfFirst { !it.isCompleted }.let {
             if (it == -1) pathNodes.lastIndex else it
         }
+        val isMonochromeTheme =
+            colorScheme.primary.red == colorScheme.primary.green &&
+                colorScheme.primary.green == colorScheme.primary.blue &&
+                colorScheme.secondary.red == colorScheme.secondary.green
+        val completedAccent = if (isMonochromeTheme) colorScheme.primary else Color(0xFF10B981)
+        val allDone = pathNodes.isNotEmpty() && completedCount == pathNodes.size
 
         Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(22.dp),
             color = colorScheme.surface,
-            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            border = BorderStroke(
+                1.2.dp,
+                if (allDone) completedAccent.copy(alpha = 0.55f) else colorScheme.primary.copy(alpha = 0.25f)
+            ),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(
@@ -1450,46 +1515,63 @@ fun DuolingoCoachingPathView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "${CoachingEngine.isoDayLabelTr(selectedDayIso)} Yol Haritası",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.ExtraBold,
                             color = colorScheme.onSurface
                         )
                         Text(
-                            text = "Video Kampı • Kaynaktan Soru & Odak • Mini Kontrol",
+                            text = "Kamp Videosu • Soru & Odak • Mini Kontrol",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant
                         )
                     }
                     Surface(
                         shape = RoundedCornerShape(50),
-                        color = colorScheme.primary.copy(alpha = 0.14f)
+                        color = if (allDone) completedAccent.copy(alpha = 0.16f) else colorScheme.primary.copy(alpha = 0.15f),
+                        border = BorderStroke(
+                            1.dp,
+                            if (allDone) completedAccent.copy(alpha = 0.45f) else colorScheme.primary.copy(alpha = 0.35f)
+                        )
                     ) {
                         Text(
                             text = "$completedCount / ${pathNodes.size} Adım",
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (allDone) completedAccent else colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                LinearProgressIndicator(
+                    progress = { pathProgressFraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(7.dp)
+                        .clip(CircleShape),
+                    color = if (allDone) completedAccent else colorScheme.primary,
+                    trackColor = colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
                 pathNodes.forEachIndexed { idx, node ->
                     val isCurrentActive = idx == firstIncompleteIndex && !node.isCompleted
                     val horizShiftDp = when (idx % 4) {
-                        1 -> (-18).dp
-                        3 -> 18.dp
+                        1 -> (-12).dp
+                        3 -> 12.dp
                         else -> 0.dp
                     }
 
                     DuolingoPathNodeCard(
                         node = node,
                         isCurrentStep = isCurrentActive,
+                        completedAccent = completedAccent,
                         modifier = Modifier
                             .fillMaxWidth()
                             .offset(x = horizShiftDp),
@@ -1504,19 +1586,29 @@ fun DuolingoCoachingPathView(
 
                     if (idx < pathNodes.lastIndex) {
                         val lineDone = node.isCompleted
-                        val lineColor = if (lineDone) colorScheme.primary else colorScheme.outlineVariant
+                        val connectorColor = when {
+                            lineDone -> completedAccent
+                            isCurrentActive -> colorScheme.primary.copy(alpha = 0.7f)
+                            else -> colorScheme.outlineVariant.copy(alpha = 0.75f)
+                        }
                         Canvas(
                             modifier = Modifier
                                 .width(40.dp)
                                 .height(26.dp)
                         ) {
+                            val centerX = size.width / 2f
                             drawLine(
-                                color = lineColor,
-                                start = Offset(size.width / 2f, 0f),
-                                end = Offset(size.width / 2f, size.height),
-                                strokeWidth = 6f,
+                                color = connectorColor,
+                                start = Offset(centerX, 0f),
+                                end = Offset(centerX, size.height),
+                                strokeWidth = if (lineDone || isCurrentActive) 6.5f else 5f,
                                 cap = StrokeCap.Round,
-                                pathEffect = if (lineDone) null else PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                                pathEffect = if (lineDone) null else PathEffect.dashPathEffect(floatArrayOf(9f, 7f), 0f)
+                            )
+                            drawCircle(
+                                color = connectorColor,
+                                radius = if (lineDone) 4.5f else 3.5f,
+                                center = Offset(centerX, size.height / 2f)
                             )
                         }
                     }
@@ -1550,36 +1642,66 @@ private fun FilledTonalIconButtonSmall(
 private fun DuolingoPathNodeCard(
     node: DuolingoPathNode,
     isCurrentStep: Boolean,
+    completedAccent: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val nodeAccent = when {
-        node.isCompleted -> Color(0xFF10B981)
-        isCurrentStep -> colorScheme.primary
-        else -> colorScheme.secondary
+    val stepKindAccent = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.primary
+        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.tertiary
+        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.secondary
     }
+    val stepKindContainer = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.primaryContainer
+        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.tertiaryContainer
+        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.secondaryContainer
+    }
+    val stepKindOnAccent = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.onPrimary
+        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.onTertiary
+        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.onSecondary
+    }
+    val nodeAccent = if (node.isCompleted) completedAccent else stepKindAccent
     val nodeIcon = when (node.kind) {
         DuolingoNodeKind.VIDEO_CAMP -> Icons.Default.PlayCircleOutline
         DuolingoNodeKind.PRACTICE_FOCUS -> Icons.Default.Book
         DuolingoNodeKind.ERROR_REVIEW -> Icons.Default.Quiz
     }
 
+    val cardBackgroundBrush = when {
+        node.isCompleted -> Brush.horizontalGradient(
+            listOf(
+                completedAccent.copy(alpha = 0.10f),
+                colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            )
+        )
+        isCurrentStep -> Brush.horizontalGradient(
+            listOf(
+                stepKindContainer.copy(alpha = 0.72f),
+                stepKindContainer.copy(alpha = 0.28f),
+                colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            )
+        )
+        else -> Brush.horizontalGradient(
+            listOf(
+                stepKindContainer.copy(alpha = 0.26f),
+                colorScheme.surfaceVariant.copy(alpha = 0.48f)
+            )
+        )
+    }
+
     Surface(
         onClick = onClick,
         modifier = modifier,
         shape = RoundedCornerShape(18.dp),
-        color = when {
-            node.isCompleted -> colorScheme.surfaceVariant.copy(alpha = 0.35f)
-            isCurrentStep -> colorScheme.primaryContainer.copy(alpha = 0.45f)
-            else -> colorScheme.surfaceVariant.copy(alpha = 0.55f)
-        },
+        color = Color.Transparent,
         border = BorderStroke(
             width = if (isCurrentStep) 1.8.dp else 1.dp,
             color = when {
-                node.isCompleted -> Color(0xFF10B981).copy(alpha = 0.55f)
-                isCurrentStep -> colorScheme.primary
-                else -> colorScheme.outlineVariant.copy(alpha = 0.45f)
+                node.isCompleted -> completedAccent.copy(alpha = 0.55f)
+                isCurrentStep -> nodeAccent
+                else -> nodeAccent.copy(alpha = 0.32f)
             }
         ),
         shadowElevation = if (isCurrentStep) 4.dp else 0.dp
@@ -1587,26 +1709,44 @@ private fun DuolingoPathNodeCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .background(cardBackgroundBrush)
+                .padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(11.dp)
         ) {
+            // Subtle vertical color rail indicating step identity
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(42.dp)
+                    .clip(CircleShape)
+                    .background(nodeAccent.copy(alpha = if (isCurrentStep || node.isCompleted) 0.95f else 0.55f))
+            )
+
             // Circular Duolingo Node Badge
             Surface(
                 shape = CircleShape,
-                color = if (node.isCompleted) Color(0xFF10B981) else nodeAccent.copy(alpha = 0.18f),
+                color = when {
+                    node.isCompleted -> completedAccent
+                    isCurrentStep -> nodeAccent
+                    else -> nodeAccent.copy(alpha = 0.16f)
+                },
                 border = BorderStroke(
-                    2.dp,
-                    if (node.isCompleted) Color(0xFF10B981) else nodeAccent
+                    width = 2.dp,
+                    color = nodeAccent
                 ),
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(46.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = if (node.isCompleted) Icons.Default.Check else nodeIcon,
                         contentDescription = null,
-                        tint = if (node.isCompleted) Color.White else nodeAccent,
-                        modifier = Modifier.size(24.dp)
+                        tint = when {
+                            node.isCompleted -> Color.White
+                            isCurrentStep -> stepKindOnAccent
+                            else -> nodeAccent
+                        },
+                        modifier = Modifier.size(23.dp)
                     )
                 }
             }
@@ -1618,7 +1758,7 @@ private fun DuolingoPathNodeCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
-                        color = nodeAccent.copy(alpha = 0.14f)
+                        color = nodeAccent.copy(alpha = 0.16f)
                     ) {
                         Text(
                             text = node.kind.badgeLabel,
@@ -1630,13 +1770,19 @@ private fun DuolingoPathNodeCard(
                         )
                     }
                     if (isCurrentStep) {
-                        Text(
-                            text = "Sıradaki Adım",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = nodeAccent
+                        ) {
+                            Text(
+                                text = "Sırada",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = stepKindOnAccent,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1662,7 +1808,7 @@ private fun DuolingoPathNodeCard(
 
             Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = if (node.isCompleted) Color(0xFF10B981).copy(alpha = 0.14f) else colorScheme.primary
+                color = if (node.isCompleted) completedAccent.copy(alpha = 0.16f) else nodeAccent
             ) {
                 Text(
                     text = when {
@@ -1673,7 +1819,7 @@ private fun DuolingoPathNodeCard(
                     },
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = if (node.isCompleted) Color(0xFF10B981) else colorScheme.onPrimary,
+                    color = if (node.isCompleted) completedAccent else stepKindOnAccent,
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                 )
             }
@@ -1834,13 +1980,14 @@ private fun MiniTopicMasteryCheckDialog(
 
         val text = withContext(Dispatchers.IO) {
             runCatching {
-                UserAiPreferences.initialize(context)
-                com.example.sharkmentor.core.ai.GeminiAiFactory.generateContent(
-                    contents = listOf(com.example.sharkmentor.core.ai.GeminiContent.userText(prompt)),
+                MultiProviderAiClient.executeUnifiedTextPrompt(
+                    context = context,
                     systemPrompt = compass,
-                    taskType = com.example.sharkmentor.core.ai.AiTaskType.LIGHT_INTERACTION
-                ).text
-            }.getOrNull()
+                    userPrompt = prompt,
+                    temperature = 0.25f,
+                    maxTokens = 1024
+                )
+            }.getOrNull()?.takeIf { it.isNotBlank() }
         }
 
         checkContent = text ?: """
@@ -1871,7 +2018,7 @@ private fun MiniTopicMasteryCheckDialog(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(230.dp)
+                    .height(240.dp)
             ) {
                 if (isLoading) {
                     Column(
@@ -1893,11 +2040,15 @@ private fun MiniTopicMasteryCheckDialog(
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState())
                     ) {
-                        Text(
-                            text = checkContent,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurface
-                        )
+                        SelectionContainer {
+                            RichSolutionContent(
+                                text = checkContent,
+                                textColor = colorScheme.onSurface,
+                                accentColor = colorScheme.primary,
+                                fontSize = 13.5.sp,
+                                lineHeight = 20.sp
+                            )
+                        }
                     }
                 }
             }

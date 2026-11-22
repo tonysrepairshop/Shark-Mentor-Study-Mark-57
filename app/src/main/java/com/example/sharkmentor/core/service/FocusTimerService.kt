@@ -160,12 +160,34 @@ class FocusTimerService : Service() {
         }
     }
 
-    // ── Lift nudge state ─────────────────────────────────────────────────────
+    // ── Lift nudge & Wellness reminder state ─────────────────────────────────
     /** [SystemClock.elapsedRealtime] of the last nudge notification posted. */
     private var lastNudgeTimestamp: Long = 0L
 
     /** Phone lift count at the last AFK collector emission — used to detect increases. */
     private var previousLiftCount: Int = 0
+
+    /** Wellness reminder milestone buckets (hydration & posture) for active focus session. */
+    private var lastHydrationBucket: Int = 0
+    private var lastPostureBucket: Int = 0
+
+    /** Cached notification large icon bitmap so 1-second timer ticks never re-decode PNGs on low-end devices. */
+    private var cachedLargeIconResId: Int = 0
+    private var cachedLargeIconBitmap: android.graphics.Bitmap? = null
+
+    private fun getCachedLargeIcon(iconRes: Int): android.graphics.Bitmap? {
+        if (iconRes == 0) return null
+        val existing = cachedLargeIconBitmap
+        if (cachedLargeIconResId == iconRes && existing != null && !existing.isRecycled) {
+            return existing
+        }
+        return runCatching {
+            BitmapFactory.decodeResource(resources, iconRes)?.also { bmp ->
+                cachedLargeIconResId = iconRes
+                cachedLargeIconBitmap = bmp
+            }
+        }.getOrNull()
+    }
 
     private fun currentScreenOnMillis(): Long {
         return if (lastScreenOnTimestamp > 0L) {
@@ -236,6 +258,8 @@ class FocusTimerService : Service() {
             notificationManager.cancel(NOTIFICATION_ID)
             notificationManager.cancel(ALERT_NOTIFICATION_ID)
             notificationManager.cancel(NUDGE_NOTIFICATION_ID)
+            notificationManager.cancel(WELLNESS_HYDRATION_NOTIFICATION_ID)
+            notificationManager.cancel(WELLNESS_POSTURE_NOTIFICATION_ID)
         } catch (e: Exception) {
             Log.e("FocusTimerService", "Error dismissing notifications", e)
         }
@@ -347,9 +371,11 @@ class FocusTimerService : Service() {
         startTicker()
         startWatchdog()
 
-        // Reset nudge state for the new session
+        // Reset nudge & wellness state for the new session
         lastNudgeTimestamp = 0L
         previousLiftCount  = 0
+        lastHydrationBucket = 0
+        lastPostureBucket   = 0
 
         afkSensor.resetLiftCount()
         afkSensor.start()
@@ -570,9 +596,9 @@ class FocusTimerService : Service() {
         watchdogJob?.cancel()
         watchdogJob = serviceScope.launch(Dispatchers.Default) {
             while (isActive && _timerStateFlow.value.timerPhase == TimerPhase.FOCUSING) {
-                delay(500)
                 val blacklist = BlockerPreferences.instance.blacklist.value
                 if (blacklist.isNotEmpty()) {
+                    delay(800L)
                     val foregroundPackage = UsageStatsHelper.getForegroundPackage(this@FocusTimerService)
                     if (foregroundPackage != null && blacklist.contains(foregroundPackage) && foregroundPackage != packageName) {
                         // 1. Immediately send to Home Screen to collapse the blocked app (Bypasses BAL)
@@ -589,6 +615,9 @@ class FocusTimerService : Service() {
                         }
                         startActivity(blockIntent)
                     }
+                } else {
+                    // Save CPU/battery on low-end devices when no apps are blocked
+                    delay(2_500L)
                 }
             }
         }
@@ -621,6 +650,7 @@ class FocusTimerService : Service() {
             if ((newElapsed / 15_000L) > (current.timeElapsedMillis / 15_000L)) {
                 com.example.sharkmentor.core.coaching.CoachingEngine.flushPendingPresenceIfConnected(applicationContext)
             }
+            checkWellnessReminders(newElapsed)
         }
 
         val newState: TimerState = when (current.timerPhase) {
@@ -870,6 +900,77 @@ class FocusTimerService : Service() {
                 setShowBadge(false)
             }
         )
+        notificationManager.createNotificationChannel(
+            NotificationChannel(CHANNEL_WELLNESS_ID, "Odak Sağlığı Hatırlatmaları", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "Uzun çalışma seanslarında su içme ve oturma/duruş hatırlatmaları"
+                setShowBadge(false)
+            }
+        )
+    }
+
+    private fun checkWellnessReminders(elapsedMillis: Long) {
+        val elapsedMinutes = (elapsedMillis / 60_000L).toInt()
+        if (elapsedMinutes <= 0) return
+        val topBarSettings = runCatching {
+            com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(applicationContext).settings.value
+        }.getOrNull() ?: return
+
+        if (topBarSettings.hydrationReminderEnabled) {
+            val interval = topBarSettings.hydrationIntervalMinutes.coerceIn(20, 120)
+            val bucket = elapsedMinutes / interval
+            if (bucket > lastHydrationBucket && bucket >= 1) {
+                lastHydrationBucket = bucket
+                postHydrationReminderNotification(elapsedMinutes)
+            }
+        }
+        if (topBarSettings.postureReminderEnabled) {
+            val interval = topBarSettings.postureIntervalMinutes.coerceIn(20, 120)
+            val bucket = elapsedMinutes / interval
+            if (bucket > lastPostureBucket && bucket >= 1) {
+                lastPostureBucket = bucket
+                postPostureReminderNotification(elapsedMinutes)
+            }
+        }
+    }
+
+    private fun postHydrationReminderNotification(elapsedMinutes: Int) {
+        val activeShark = AppIconManager.getActiveIcon(this)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
+        val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
+        val message = "$elapsedMinutes dakikadır odaktasın. Bir bardak su içerek zihnini taze tut."
+        notificationManager.notify(
+            WELLNESS_HYDRATION_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, CHANNEL_WELLNESS_ID)
+                .setSmallIcon(smallIconRes)
+                .setLargeIcon(largeIconBitmap)
+                .setColor(getColor(R.color.shark_blue_primary))
+                .setContentTitle("Su İçme Hatırlatması")
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun postPostureReminderNotification(elapsedMinutes: Int) {
+        val activeShark = AppIconManager.getActiveIcon(this)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
+        val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
+        val message = "$elapsedMinutes dakikadır masadasın. Sırtını dikleştir, omuzlarını gevşet ve gözlerini 20 sn uzağa odakla."
+        notificationManager.notify(
+            WELLNESS_POSTURE_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, CHANNEL_WELLNESS_ID)
+                .setSmallIcon(smallIconRes)
+                .setLargeIcon(largeIconBitmap)
+                .setColor(getColor(R.color.shark_blue_primary))
+                .setContentTitle("Oturma ve Duruş Uyarısı")
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build()
+        )
     }
 
     private fun buildNotification(state: TimerState): Notification {
@@ -887,7 +988,7 @@ class FocusTimerService : Service() {
         )
 
         val activeShark = AppIconManager.getActiveIcon(this)
-        val largeIconBitmap = BitmapFactory.decodeResource(resources, activeShark.iconRes)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -918,7 +1019,7 @@ class FocusTimerService : Service() {
 
     private fun postPresenceAlertNotification() {
         val activeShark = AppIconManager.getActiveIcon(this)
-        val largeIconBitmap = BitmapFactory.decodeResource(resources, activeShark.iconRes)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
 
         notificationManager.notify(ALERT_NOTIFICATION_ID,
@@ -936,7 +1037,7 @@ class FocusTimerService : Service() {
 
     private fun postBreakStartNotification() {
         val activeShark = AppIconManager.getActiveIcon(this)
-        val largeIconBitmap = BitmapFactory.decodeResource(resources, activeShark.iconRes)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
 
         notificationManager.notify(ALERT_NOTIFICATION_ID,
@@ -954,7 +1055,7 @@ class FocusTimerService : Service() {
 
     private fun postBreakCompleteNotification() {
         val activeShark = AppIconManager.getActiveIcon(this)
-        val largeIconBitmap = BitmapFactory.decodeResource(resources, activeShark.iconRes)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
 
         notificationManager.notify(ALERT_NOTIFICATION_ID,
@@ -976,7 +1077,7 @@ class FocusTimerService : Service() {
      */
     private fun postLiftNudgeNotification() {
         val activeShark = AppIconManager.getActiveIcon(this)
-        val largeIconBitmap = BitmapFactory.decodeResource(resources, activeShark.iconRes)
+        val largeIconBitmap = getCachedLargeIcon(activeShark.iconRes)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) activeShark.notificationSmallIconRes else R.drawable.ic_notification_original
 
         val messages = listOf(
@@ -1034,12 +1135,15 @@ class FocusTimerService : Service() {
         const val EXTRA_SHOW_BLOCK_OVERLAY = "extra_show_block_overlay"
 
         // Notification channels / IDs
-        private const val CHANNEL_ID       = "shark_focus_channel"
-        private const val CHANNEL_ALERT_ID = "shark_alert_channel"
-        private const val CHANNEL_NUDGE_ID = "shark_nudge_channel"
-        private const val NOTIFICATION_ID       = 1001
-        private const val ALERT_NOTIFICATION_ID  = 1002
-        private const val NUDGE_NOTIFICATION_ID  = 1003
+        private const val CHANNEL_ID          = "shark_focus_channel"
+        private const val CHANNEL_ALERT_ID    = "shark_alert_channel"
+        private const val CHANNEL_NUDGE_ID    = "shark_nudge_channel"
+        private const val CHANNEL_WELLNESS_ID = "shark_wellness_channel"
+        private const val NOTIFICATION_ID                    = 1001
+        private const val ALERT_NOTIFICATION_ID              = 1002
+        private const val NUDGE_NOTIFICATION_ID              = 1003
+        private const val WELLNESS_HYDRATION_NOTIFICATION_ID = 1004
+        private const val WELLNESS_POSTURE_NOTIFICATION_ID   = 1005
 
         // PendingIntent request codes
         private const val REQUEST_OPEN             = 100

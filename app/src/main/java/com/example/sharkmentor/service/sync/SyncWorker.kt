@@ -139,6 +139,30 @@ class SyncWorker(
             Log.d(TAG, "Immediate plan sync enqueued with KEEP policy (15s debounce)")
         }
 
+        fun enqueueForceFullSync(context: Context) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val oneTimeRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+                .setConstraints(constraints)
+                .setInputData(androidx.work.workDataOf(INPUT_FORCE_PULL to true))
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    15,
+                    TimeUnit.SECONDS
+                )
+                .addTag(UNIQUE_IMMEDIATE_WORK)
+                .build()
+
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                "sharkmentor_force_full_sync",
+                ExistingWorkPolicy.REPLACE,
+                oneTimeRequest
+            )
+            Log.i(TAG, "Force full sync enqueued with REPLACE policy")
+        }
+
         fun cancelAllSync(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_PERIODIC_WORK)
             WorkManager.getInstance(context).cancelAllWorkByTag(UNIQUE_IMMEDIATE_WORK)
@@ -205,6 +229,11 @@ class SyncWorker(
             Log.d(syncTag, ">>> STARTING FULL SYNC CYCLE <<<")
             val defaultInstitution = userPrefs.institutionId.takeIf { !it.isNullOrBlank() } ?: "INDIVIDUAL"
             val studentName = sanitizeTurkishText(userPrefs.studentName ?: "Öğrenci")
+
+            // Flush any queued offline live presence snapshot when network is available
+            runCatching {
+                com.example.sharkmentor.core.coaching.CoachingEngine.flushPendingPresenceIfConnected(context)
+            }
 
             // 1a. Outbound Deletions FIRST (prevents deleted items from being restored by pulls)
             var uploadedCount = coroutineScope {

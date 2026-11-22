@@ -1,6 +1,7 @@
 package com.example.sharkmentor.ui.screens
 
 import android.graphics.Color as AndroidColor
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,7 +49,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,9 +68,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.data.topbar.TopBarAnimationType
 import com.example.sharkmentor.data.topbar.TopBarFontOption
 import com.example.sharkmentor.data.topbar.TopBarPreferences
+import com.example.sharkmentor.data.topbar.TopBarRefreshInterval
 import com.example.sharkmentor.data.topbar.TopBarSettings
 import com.example.sharkmentor.data.topbar.TopBarTextSource
 import kotlinx.coroutines.launch
@@ -87,7 +91,8 @@ fun TopBarControlHubContent(
     onToggleHideDuringFocus: (Boolean) -> Unit,
     onOpenWeatherSettings: () -> Unit,
     onOpenTextSettings: () -> Unit,
-    onOpenCountdownSettings: () -> Unit
+    onOpenCountdownSettings: () -> Unit,
+    onToggleInAppSuggestions: ((Boolean) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -117,19 +122,28 @@ fun TopBarControlHubContent(
                 checked = settings.hideDuringFocus,
                 onCheckedChange = onToggleHideDuringFocus
             )
+            if (onToggleInAppSuggestions != null) {
+                SectionDivider()
+                SwitchSettingRow(
+                    title = "Uygulama İçi Akıllı Öneriler",
+                    subtitle = "Yağmurlu havada yağmur sesi açma gibi tek dokunuşluk öneriler sunar",
+                    checked = settings.inAppSuggestionsEnabled,
+                    onCheckedChange = onToggleInAppSuggestions
+                )
+            }
         }
 
         SectionContainer(title = "Alt Ayarlar") {
             NavigationSettingRow(
-                icon = Icons.Rounded.WbSunny,
-                title = "Hava Durumu Ayarları",
-                onClick = onOpenWeatherSettings
+                icon = Icons.Rounded.TextFields,
+                title = "Üst Bar Yazıları & Yenileme Sıklığı",
+                onClick = onOpenTextSettings
             )
             SectionDivider()
             NavigationSettingRow(
-                icon = Icons.Rounded.TextFields,
-                title = "Üst Bar Yazıları",
-                onClick = onOpenTextSettings
+                icon = Icons.Rounded.WbSunny,
+                title = "Hava Durumu Ayarları",
+                onClick = onOpenWeatherSettings
             )
             SectionDivider()
             NavigationSettingRow(
@@ -141,9 +155,10 @@ fun TopBarControlHubContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
-    val settings by prefs.settings.collectAsState()
+    val settings by prefs.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
 
     var showQuoteDialog by remember { mutableStateOf(false) }
@@ -166,6 +181,57 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
                     selected = settings.textSource == source,
                     onClick = { prefs.setTextSource(source) }
                 )
+            }
+            if (settings.textSource == TopBarTextSource.AI_SUGGESTIONS) {
+                SectionDivider()
+                SwitchSettingRow(
+                    title = "Uygulama İçi Akıllı Öneriler",
+                    subtitle = "Hava durumuna göre ambiyans sesi (ör. yağmur sesi) ve hızlı kısayollar önerir",
+                    checked = settings.inAppSuggestionsEnabled,
+                    onCheckedChange = prefs::setInAppSuggestionsEnabled
+                )
+            }
+        }
+
+        // Wide Fixed-Interval Scale for Top Bar Text Refresh Frequency
+        SectionContainer(title = "Yenileme Sıklığı (${settings.refreshInterval.label})") {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Üst bardaki öneri ve motivasyon yazılarının sabit yenilenme aralığını seçin:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    TopBarRefreshInterval.entries.forEach { option ->
+                        val isSelected = settings.refreshInterval == option
+                        Surface(
+                            onClick = { prefs.setRefreshInterval(option) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                            )
+                        ) {
+                            Text(
+                                text = option.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -707,3 +773,127 @@ private fun RadioOptionRow(
         )
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
+    val settings by prefs.settings.collectAsStateWithLifecycle()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        SectionContainer(title = "Uzun Çalışma Sağlık Hatırlatmaları") {
+            SwitchSettingRow(
+                title = "Su İçme Hatırlatması",
+                subtitle = "Uzun odak oturumlarında belirli aralıklarla su içme bildirimi ve üst bar uyarısı gönderir",
+                checked = settings.hydrationReminderEnabled,
+                onCheckedChange = prefs::setHydrationReminderEnabled
+            )
+            if (settings.hydrationReminderEnabled) {
+                SectionDivider()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Su hatırlatma aralığı: Her ${settings.hydrationIntervalMinutes} dk",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(30, 45, 60, 90).forEach { mins ->
+                            val selected = settings.hydrationIntervalMinutes == mins
+                            Surface(
+                                onClick = { prefs.setHydrationIntervalMinutes(mins) },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ) {
+                                Text(
+                                    text = "$mins dk",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            SectionDivider()
+
+            SwitchSettingRow(
+                title = "Oturma & Duruş Uyarısı",
+                subtitle = "Uzun süre masada kalındığında sırtını dikleştirme ve göz dinlendirme uyarısı verir",
+                checked = settings.postureReminderEnabled,
+                onCheckedChange = prefs::setPostureReminderEnabled
+            )
+            if (settings.postureReminderEnabled) {
+                SectionDivider()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Duruş uyarısı aralığı: Her ${settings.postureIntervalMinutes} dk",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(30, 45, 50, 60, 90).forEach { mins ->
+                            val selected = settings.postureIntervalMinutes == mins
+                            Surface(
+                                onClick = { prefs.setPostureIntervalMinutes(mins) },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ) {
+                                Text(
+                                    text = "$mins dk",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        SectionContainer(title = "Akıllı Öneri Motoru") {
+            SwitchSettingRow(
+                title = "Uygulama İçi Akıllı Öneriler",
+                subtitle = "Yağmurlu havada yağmur sesi başlatma gibi hava durumu ve odak bağlamlı önerileri açar",
+                checked = settings.inAppSuggestionsEnabled,
+                onCheckedChange = prefs::setInAppSuggestionsEnabled
+            )
+        }
+    }
+}
+

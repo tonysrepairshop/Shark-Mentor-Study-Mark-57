@@ -62,6 +62,12 @@ class SharkMentorApplication : Application() {
 
         // ── Offload Heavy/Fragile Startup Tasks to Background Thread ────
         appScope.launch {
+            // 0. Pre-warm SharedPreferences-backed engines off main thread (zero first-frame hitch on low-end devices)
+            runCatching { com.example.sharkmentor.core.coaching.CoachingEngine.ensureInitialized(applicationContext) }
+            runCatching { com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(applicationContext) }
+            runCatching { com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences.ensureLoaded(applicationContext) }
+            runCatching { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(applicationContext) }
+
             runCatching {
                 com.example.sharkmentor.core.util.PdfLibraryManager.init(applicationContext)
             }.onFailure { e ->

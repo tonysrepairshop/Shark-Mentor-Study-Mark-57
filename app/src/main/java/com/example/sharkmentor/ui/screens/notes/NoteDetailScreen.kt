@@ -195,6 +195,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.sharkmentor.core.ai.DocumentAiScope
+import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.util.DocumentTextExtractor
 import com.example.sharkmentor.core.util.NoteStyleParser
 import com.example.sharkmentor.core.util.PaperPattern
@@ -904,6 +905,9 @@ fun NoteDetailScreen(
         }
     }
 
+    val aiPrefs = remember(context) { UserAiPreferences.initialize(context) }
+    val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
+    val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
@@ -1275,17 +1279,19 @@ fun NoteDetailScreen(
                 }
             },
             actions = {
-                IconButton(
-                    onClick = {
-                        onIsolatedNoteAiClick(vmTitle, buildJoinedPlainText())
-                        showAiSheet = true
+                if (notesAiEnabled) {
+                    IconButton(
+                        onClick = {
+                            onIsolatedNoteAiClick(vmTitle, buildJoinedPlainText())
+                            showAiSheet = true
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Not AI Asistanı",
+                            tint = primaryColor
+                        )
                     }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "Not AI Asistanı",
-                        tint = primaryColor
-                    )
                 }
                 IconButton(
                     onClick = {
@@ -2872,10 +2878,14 @@ fun NoteDetailScreen(
                                     modifier = Modifier.matchParentSize(),
                                     defaultTextBoxColor = noteTextColor,
                                     onTwoFingerScroll = { dy, _ -> noteListState.dispatchRawDelta(-dy) },
-                                    onLassoAskAi = { cropBmp ->
-                                        lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
-                                        lassoAiSourceLabel = "Not • Sayfa ${pageIndex + 1}"
-                                        lassoAiCropBitmap = cropBmp
+                                    onLassoAskAi = if (drawingAiEnabled) {
+                                        { cropBmp ->
+                                            lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+                                            lassoAiSourceLabel = "Not • Sayfa ${pageIndex + 1}"
+                                            lassoAiCropBitmap = cropBmp
+                                        }
+                                    } else {
+                                        null
                                     }
                                 )
 
@@ -3486,7 +3496,7 @@ fun NoteDetailScreen(
         )
     }
 
-    if (showAiSheet) {
+    if (showAiSheet && notesAiEnabled) {
         val hasMultiplePages = pdfPagePaths.size > 1 || pageFieldValues.size > 1
         val aiHeaderTitle = when {
             pdfPagePaths.isNotEmpty() -> "Not Asistanı • PDF S.${activePdfPageIndex + 1}"

@@ -21,21 +21,25 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.filled.Tune
 import com.example.sharkmentor.data.topbar.TopBarPreferences
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Analytics
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PersonOff
+import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -51,7 +55,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.badges.SharkBadgeCatalog
+import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.data.AppThemeMode
 import com.example.sharkmentor.core.data.ThemePalette
 import com.example.sharkmentor.core.data.ThemePreferences
@@ -59,6 +65,7 @@ import com.example.sharkmentor.core.util.AppIconManager
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.core.util.SharkAppIcon
 import com.example.sharkmentor.data.local.SharkMentorDatabase
+import com.example.sharkmentor.service.sync.SyncWorker
 import com.example.sharkmentor.ui.components.ReflectionTimeDialog
 import kotlinx.coroutines.CoroutineScope
 import com.example.sharkmentor.ui.components.SpecialMemberConfig
@@ -83,10 +90,16 @@ fun SettingsScreen(
     onAccountDeleted: () -> Unit = {}
 ) {
     var activeSubPage by remember { mutableStateOf<String?>(null) }
-    BackHandler(enabled = activeSubPage != null) { activeSubPage = when (activeSubPage) { "topbar_weather", "topbar_texts" -> "topbar_hub"; "topbar_hub" -> null; else -> null } }
+    BackHandler(enabled = activeSubPage != null) {
+        activeSubPage = when (activeSubPage) {
+            "topbar_weather", "topbar_texts" -> "topbar_hub"
+            else -> null
+        }
+    }
     val context = LocalContext.current
     val topBarPrefs = remember(context) { TopBarPreferences.getInstance(context) }
     val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
+    val userAiPrefs = remember(context) { UserAiPreferences.initialize(context) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     var showTimeDialog by remember { mutableStateOf(false) }
@@ -273,158 +286,404 @@ fun SettingsScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-           
-                TopAppBar(
+            TopAppBar(
                 expandedHeight = 50.dp,
-              title = { Text(when (activeSubPage) { "coaching_support" -> "Kapsamlı Destek & Çalışma"; "topbar_hub" -> "Üst Bar Kontrolleri"; "topbar_weather" -> "Hava Durumu"; "topbar_texts" -> "Üst Bar Yazıları"; else -> "Ayarlar" }) },  
+                title = {
+                    Text(
+                        when (activeSubPage) {
+                            "coaching_support" -> "Kapsamlı Destek & Çalışma"
+                            "studio_ai_controls" -> "Video Stüdyosu & Modül AI"
+                            "focus_wellness" -> "Odak Sağlığı & Hatırlatmalar"
+                            "topbar_hub" -> "Üst Bar Kontrolleri"
+                            "topbar_weather" -> "Hava Durumu"
+                            "topbar_texts" -> "Üst Bar Yazıları & Sıklık"
+                            else -> "Ayarlar"
+                        }
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = { when (activeSubPage) { "topbar_weather", "topbar_texts" -> activeSubPage = "topbar_hub"; "topbar_hub", "coaching_support" -> activeSubPage = null; else -> onBackClick() } }) {
+                    IconButton(
+                        onClick = {
+                            when (activeSubPage) {
+                                "topbar_weather", "topbar_texts" -> activeSubPage = "topbar_hub"
+                                "topbar_hub", "coaching_support", "studio_ai_controls", "focus_wellness" -> activeSubPage = null
+                                else -> onBackClick()
+                            }
+                        }
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
                     }
                 }
-           )
+            )
         }
     ) { padding ->
-               when (activeSubPage) { null -> {
-                    Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            ThemeSelectorSection(
-                themeMode = themeMode,
-                onThemeModeToggle = { mode ->
-                    if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
-                        com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
+        when (activeSubPage) {
+            null -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    // 1. Kapsamlı Destek & Çalışma Düzeni
+                    Text(
+                        "Kapsamlı Destek & Çalışma Düzeni",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    SettingRow(
+                        icon = Icons.Default.Route,
+                        label = "Kapsamlı Destek, Çalışma Saati & Başlıklar",
+                        onClick = { activeSubPage = "coaching_support" }
+                    )
+
+                    HorizontalDivider()
+
+                    // 2. Yapay Zeka, Video Stüdyosu & Notlar
+                    Text(
+                        "Yapay Zeka, Video Stüdyosu & Notlar",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    SettingRow(
+                        icon = Icons.Default.AutoAwesome,
+                        label = "Yapay Zeka & API Ayarları",
+                        onClick = onOpenAiSettings
+                    )
+                    SettingRow(
+                        icon = Icons.Default.PlayCircleOutline,
+                        label = "Video Stüdyosu, Reklam Engelleyici & Modül AI",
+                        onClick = { activeSubPage = "studio_ai_controls" }
+                    )
+                    SettingRow(
+                        icon = Icons.Default.EditNote,
+                        label = "Not & Çizim Özellikleri",
+                        onClick = onOpenNoteSettings
+                    )
+
+                    HorizontalDivider()
+
+                    // 3. Üst Bar, Akıllı Öneriler & Odak Sağlığı
+                    Text(
+                        "Üst Bar, Akıllı Öneriler & Odak Sağlığı",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    SettingRow(
+                        icon = Icons.Default.Tune,
+                        label = "Üst Bar, Yazılar & Yenileme Sıklığı",
+                        onClick = { activeSubPage = "topbar_hub" }
+                    )
+                    SettingRow(
+                        icon = Icons.Default.WaterDrop,
+                        label = "Odak Sağlığı (Su & Duruş Hatırlatmaları)",
+                        onClick = { activeSubPage = "focus_wellness" }
+                    )
+                    SettingRow(
+                        icon = Icons.Default.AccessTime,
+                        label = "Gün Değerlendirmesi Saati",
+                        onClick = { showTimeDialog = true }
+                    )
+
+                    HorizontalDivider()
+
+                    // 4. Odak Modülleri & Analiz
+                    Text(
+                        "Odak Modülleri & Analiz",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    SettingRow(
+                        icon = Icons.Default.SelfImprovement,
+                        label = "Zen Odası",
+                        onClick = onOpenZenRoom
+                    )
+                    SettingRow(
+                        icon = Icons.Default.Block,
+                        label = "Uygulama Engelleyici",
+                        onClick = onOpenAppBlocker
+                    )
+                    SettingRow(
+                        icon = Icons.Default.Analytics,
+                        label = "Detaylı Analiz",
+                        onClick = onOpenAnalysis
+                    )
+                    SettingRow(
+                        icon = Icons.Default.History,
+                        label = "Çalışma Geçmişi",
+                        onClick = onOpenHistory
+                    )
+
+                    HorizontalDivider()
+
+                    // 5. Görünüm & Kişiselleştirme
+                    ThemeSelectorSection(
+                        themeMode = themeMode,
+                        onThemeModeToggle = { mode ->
+                            if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
+                                com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
+                            }
+                            themePrefs.setThemeMode(mode)
+                        },
+                        currentPalette = currentPalette,
+                        onSelectPalette = { palette ->
+                            if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
+                                com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
+                            }
+                            themePrefs.setPalette(palette)
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    AppIconSelectorSection(snackbarHostState = snackbarHostState)
+
+                    HorizontalDivider()
+
+                    // 6. Sosyal, Senkronizasyon & Hesap
+                    Text(
+                        "Sosyal, Senkronizasyon & Hesap",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    SettingRow(
+                        icon = Icons.Default.Refresh,
+                        label = "Verileri Şimdi Senkronize Et",
+                        onClick = {
+                            SyncWorker.enqueueForceFullSync(context)
+                            CoachingEngine.flushPendingPresenceIfConnected(context)
+                            coroutineScope.launch {
+                                snackbarHostState.currentSnackbarData?.dismiss()
+                                snackbarHostState.showSnackbar("Bulut senkronizasyonu başlatıldı.")
+                            }
+                        }
+                    )
+                    SettingRow(
+                        icon = Icons.Default.PersonOff,
+                        label = "Engellenen Kullanıcılar",
+                        onClick = { showBlockedUsersDialog = true }
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Button(
+                        onClick = { executePermanentAccountDeletion(context, onAccountDeleted) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.DeleteForever, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Hesabı Kalıcı Sil", fontWeight = FontWeight.Bold)
                     }
-                    themePrefs.setThemeMode(mode)
-                },
-                currentPalette = currentPalette,
-                onSelectPalette = { palette ->
-                    if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
-                        com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
-                    }
-                    themePrefs.setPalette(palette)
                 }
-            )
-HorizontalDivider()
+            }
 
-           AppIconSelectorSection(snackbarHostState = snackbarHostState)
-                        HorizontalDivider()
+            "coaching_support" -> {
+                com.example.sharkmentor.ui.coaching.ComprehensiveSupportSettingsScreen(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                )
+            }
 
-            Text("Kapsamlı Destek & Çalışma Düzeni", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            "studio_ai_controls" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                ) {
+                    StudioAndModuleAiControlsContent(userAiPrefs = userAiPrefs)
+                }
+            }
 
-            SettingRow(
-                icon = Icons.Default.Tune,
-                label = "Kapsamlı Destek, Çalışma Saati & Başlıklar",
-                onClick = { activeSubPage = "coaching_support" }
-            )
+            "focus_wellness" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                ) {
+                    FocusWellnessSettingsContent(prefs = topBarPrefs)
+                }
+            }
 
-            HorizontalDivider()
+            "topbar_hub" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                ) {
+                    TopBarControlHubContent(
+                        settings = topBarSettings,
+                        onToggleHideBubbles = topBarPrefs::setHideBubbles,
+                        onToggleHideTopBarMenu = topBarPrefs::setHideTopBarMenu,
+                        onToggleHideDuringFocus = topBarPrefs::setHideDuringFocus,
+                        onOpenWeatherSettings = { activeSubPage = "topbar_weather" },
+                        onOpenTextSettings = { activeSubPage = "topbar_texts" },
+                        onOpenCountdownSettings = { onOpenCountdownSettings() },
+                        onToggleInAppSuggestions = topBarPrefs::setInAppSuggestionsEnabled
+                    )
+                }
+            }
 
-            Text("Yapay Zeka & API", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            "topbar_weather" -> {
+                WeatherSettingsTab(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                )
+            }
 
-            SettingRow(
-                icon = Icons.Default.Tune,
-                label = "Yapay Zeka & API Ayarları",
-                onClick = onOpenAiSettings
-            )
-
-            HorizontalDivider()
-
-            Text("Notlar & Çizim", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-
-            SettingRow(
-                icon = Icons.Default.EditNote,
-                label = "Not Özellikleri",
-                onClick = onOpenNoteSettings
-            )
-
-            HorizontalDivider()
-
-           Text("Üst Bar Kontrolleri", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-           SettingRow(icon = Icons.Default.Tune, label = "Üst Bar Kontrolleri", onClick = { activeSubPage = "topbar_hub" })
-
-            HorizontalDivider()
-
-            Text("Bildirim & Hedefler", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-
-            SettingRow(
-                icon = Icons.Default.AccessTime,
-                label = "Gün Değerlendirmesi Saati",
-                onClick = { showTimeDialog = true }
-            )
-
-
-            HorizontalDivider()
-
-            Text("Odak Modülleri", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-
-            SettingRow(
-                icon = Icons.Default.SelfImprovement,
-                label = "Zen Odası",
-                onClick = onOpenZenRoom
-            )
-
-            SettingRow(
-                icon = Icons.Default.Block,
-                label = "Uygulama Engelleyici",
-                onClick = onOpenAppBlocker
-            )
-
-            HorizontalDivider()
-
-            Text("Sosyal & Güvenlik", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-
-            SettingRow(
-                icon = Icons.Default.PersonOff,
-                label = "Engellenen Kullanıcılar",
-                onClick = { showBlockedUsersDialog = true }
-            )
-
-            HorizontalDivider()
-
-            Text("Analiz & Geçmiş", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-
-            SettingRow(
-                icon = Icons.Default.Analytics,
-                label = "Detaylı Analiz",
-                onClick = onOpenAnalysis
-            )
-
-            SettingRow(
-                icon = Icons.Default.History,
-                label = "Çalışma Geçmişi",
-                onClick = onOpenHistory
-            )
-
-            HorizontalDivider()
-
-            Text("Hesap", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.error)
-
-            Button(
-                onClick = { executePermanentAccountDeletion(context, onAccountDeleted) },
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.DeleteForever, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Hesabı Kalıcı Sil", fontWeight = FontWeight.Bold)
+            "topbar_texts" -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                ) {
+                    TopBarTextSettingsContent(prefs = topBarPrefs)
+                }
             }
         }
-        } "coaching_support" -> {
-            com.example.sharkmentor.ui.coaching.ComprehensiveSupportSettingsScreen(
-                modifier = Modifier.fillMaxSize().padding(padding)
-            )
-        } "topbar_hub" -> { Box(modifier = Modifier.fillMaxSize().padding(padding)) { TopBarControlHubContent(settings = topBarSettings, onToggleHideBubbles = topBarPrefs::setHideBubbles, onToggleHideTopBarMenu = topBarPrefs::setHideTopBarMenu, onToggleHideDuringFocus = topBarPrefs::setHideDuringFocus, onOpenWeatherSettings = { activeSubPage = "topbar_weather" }, onOpenTextSettings = { activeSubPage = "topbar_texts" }, onOpenCountdownSettings = { onOpenCountdownSettings() }) } } "topbar_weather" -> {
-            WeatherSettingsTab(modifier = Modifier.fillMaxSize().padding(padding))
-                } "topbar_texts" -> { Box(modifier = Modifier.fillMaxSize().padding(padding)) { TopBarTextSettingsContent(prefs = topBarPrefs) } }
     }
 }
+
+@Composable
+private fun StudioAndModuleAiControlsContent(
+    userAiPrefs: UserAiPreferences
+) {
+    val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
+    val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
+    val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
+    val drawingAiEnabled by userAiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
+    val colorScheme = MaterialTheme.colorScheme
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Text(
+            text = "Video Stüdyosu Kontrolleri",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = colorScheme.primary
+        )
+        ModuleControlSwitchCard(
+            icon = Icons.Default.Block,
+            title = "Video Reklam Engelleyici",
+            subtitle = "Video Stüdyosu'nda reklam ağlarını ve video içi reklamları engeller.",
+            checked = videoAdBlockerEnabled,
+            onCheckedChange = userAiPrefs::setVideoAdBlockerEnabled
+        )
+        ModuleControlSwitchCard(
+            icon = Icons.Default.PlayCircleOutline,
+            title = "Video Stüdyosu AI Asistanı",
+            subtitle = "İzlenen video bağlantısı ve dakikaya göre AI soru sorma panelini açar.",
+            checked = videoStudioAiEnabled,
+            onCheckedChange = userAiPrefs::setVideoStudioAiEnabled
+        )
+
+        HorizontalDivider()
+
+        Text(
+            text = "Notlar & Çizim AI Kontrolleri",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = colorScheme.primary
+        )
+        ModuleControlSwitchCard(
+            icon = Icons.Default.EditNote,
+            title = "Notlar & PDF AI Asistanı",
+            subtitle = "Not ve PDF ekranlarındaki yapay zeka asistan butonunu ve panelini yönetir.",
+            checked = notesAiEnabled,
+            onCheckedChange = userAiPrefs::setNotesAiEnabled
+        )
+        ModuleControlSwitchCard(
+            icon = Icons.Default.Brush,
+            title = "Çizim Paneli AI (Kement Çözüm)",
+            subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu yönetir.",
+            checked = drawingAiEnabled,
+            onCheckedChange = userAiPrefs::setDrawingAiEnabled
+        )
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = colorScheme.primaryContainer.copy(alpha = 0.35f),
+            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.25f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "Tüm modül AI özellikleri seçili API anahtarınızı kullanır; özel anahtar girilmediyse yerleşik Gemini anahtarı ile kesintisiz çalışır.",
+                style = MaterialTheme.typography.bodySmall,
+                color = colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModuleControlSwitchCard(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colorScheme.surfaceVariant.copy(alpha = 0.38f),
+        border = BorderStroke(
+            1.dp,
+            if (checked) colorScheme.primary.copy(alpha = 0.4f) else colorScheme.outlineVariant.copy(alpha = 0.5f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = colorScheme.primary,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange
+            )
+        }
+    }
 }
 
 

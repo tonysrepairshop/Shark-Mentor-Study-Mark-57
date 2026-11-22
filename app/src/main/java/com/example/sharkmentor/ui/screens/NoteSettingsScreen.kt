@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Edit
@@ -41,6 +42,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences
 import kotlin.math.PI
 import kotlin.math.roundToInt
@@ -68,6 +71,9 @@ fun NoteSettingsScreen(
         NoteDrawingPreferences.ensureLoaded(context)
     }
 
+    val userAiPrefs = remember(context) { UserAiPreferences.initialize(context) }
+    val notesAiEnabled by userAiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
+    val drawingAiEnabled by userAiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     val pressureEnabled by NoteDrawingPreferences.pressureSensitivityEnabled.collectAsStateWithLifecycle()
     val pressureStrength by NoteDrawingPreferences.pressureSensitivityStrength.collectAsStateWithLifecycle()
     val scribbleEnabled by NoteDrawingPreferences.scribbleToEraseEnabled.collectAsStateWithLifecycle()
@@ -107,6 +113,48 @@ fun NoteSettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Text(
+                text = "Not & Çizim Yapay Zeka Özellikleri",
+                style = MaterialTheme.typography.labelMedium,
+                color = primaryColor
+            )
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(modifier = Modifier.padding(14.dp)) {
+                    NoteFeatureSwitchHeader(
+                        icon = Icons.Default.AutoAwesome,
+                        title = "Notlar & PDF AI Asistanı",
+                        subtitle = "Not ve PDF üst barındaki AI asistanını açar veya gizler.",
+                        checked = notesAiEnabled,
+                        onCheckedChange = userAiPrefs::setNotesAiEnabled
+                    )
+                }
+            }
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Box(modifier = Modifier.padding(14.dp)) {
+                    NoteFeatureSwitchHeader(
+                        icon = Icons.Default.AutoFixHigh,
+                        title = "Çizim Paneli AI (Kement Çözüm)",
+                        subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu açar veya gizler.",
+                        checked = drawingAiEnabled,
+                        onCheckedChange = userAiPrefs::setDrawingAiEnabled
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
             Text(
                 text = "Kalem ve Çizim Davranışı",
                 style = MaterialTheme.typography.labelMedium,

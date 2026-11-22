@@ -106,6 +106,12 @@ object UserAiPreferences {
 
     private const val KEY_AI_PROVIDER = "selected_ai_provider"
 
+    // ── Mark 60: Modular Feature Toggles (Studio AI, Ad Blocker, Notes AI, Drawing AI) ──
+    private const val KEY_VIDEO_STUDIO_AI_ENABLED = "video_studio_ai_enabled"
+    private const val KEY_VIDEO_AD_BLOCKER_ENABLED = "video_ad_blocker_enabled"
+    private const val KEY_NOTES_AI_ENABLED = "notes_ai_enabled"
+    private const val KEY_DRAWING_AI_ENABLED = "drawing_ai_enabled"
+
     private val gson = Gson()
     private val stringListType = object : TypeToken<List<String>>() {}.type
     private val modelOptionListType = object : TypeToken<List<GeminiModelOption>>() {}.type
@@ -179,6 +185,19 @@ object UserAiPreferences {
     // ── Selected Active Provider ─────────────────────────────────────────────
     private val _selectedAiProvider = MutableStateFlow(AiProviderChoice.AUTO)
     val selectedAiProvider: StateFlow<AiProviderChoice> = _selectedAiProvider.asStateFlow()
+
+    // ── Modular AI & Video Studio Toggles ────────────────────────────────────
+    private val _videoStudioAiEnabled = MutableStateFlow(true)
+    val videoStudioAiEnabled: StateFlow<Boolean> = _videoStudioAiEnabled.asStateFlow()
+
+    private val _videoAdBlockerEnabled = MutableStateFlow(true)
+    val videoAdBlockerEnabled: StateFlow<Boolean> = _videoAdBlockerEnabled.asStateFlow()
+
+    private val _notesAiEnabled = MutableStateFlow(true)
+    val notesAiEnabled: StateFlow<Boolean> = _notesAiEnabled.asStateFlow()
+
+    private val _drawingAiEnabled = MutableStateFlow(true)
+    val drawingAiEnabled: StateFlow<Boolean> = _drawingAiEnabled.asStateFlow()
 
     @Synchronized
     fun init(context: Context) {
@@ -273,6 +292,11 @@ object UserAiPreferences {
         _selectedAiProvider.value = AiProviderChoice.fromId(
             prefs.getString(KEY_AI_PROVIDER, AiProviderChoice.AUTO.id)
         )
+
+        _videoStudioAiEnabled.value = prefs.getBoolean(KEY_VIDEO_STUDIO_AI_ENABLED, true)
+        _videoAdBlockerEnabled.value = prefs.getBoolean(KEY_VIDEO_AD_BLOCKER_ENABLED, true)
+        _notesAiEnabled.value = prefs.getBoolean(KEY_NOTES_AI_ENABLED, true)
+        _drawingAiEnabled.value = prefs.getBoolean(KEY_DRAWING_AI_ENABLED, true)
     }
 
     fun initialize(context: Context): UserAiPreferences {
@@ -822,6 +846,30 @@ object UserAiPreferences {
         ApiKeyRotator.invalidateAndReset()
     }
 
+    fun setVideoStudioAiEnabled(context: Context? = null, enabled: Boolean) {
+        context?.let { init(it) }
+        _videoStudioAiEnabled.value = enabled
+        sharedPrefs?.edit()?.putBoolean(KEY_VIDEO_STUDIO_AI_ENABLED, enabled)?.apply()
+    }
+
+    fun setVideoAdBlockerEnabled(context: Context? = null, enabled: Boolean) {
+        context?.let { init(it) }
+        _videoAdBlockerEnabled.value = enabled
+        sharedPrefs?.edit()?.putBoolean(KEY_VIDEO_AD_BLOCKER_ENABLED, enabled)?.apply()
+    }
+
+    fun setNotesAiEnabled(context: Context? = null, enabled: Boolean) {
+        context?.let { init(it) }
+        _notesAiEnabled.value = enabled
+        sharedPrefs?.edit()?.putBoolean(KEY_NOTES_AI_ENABLED, enabled)?.apply()
+    }
+
+    fun setDrawingAiEnabled(context: Context? = null, enabled: Boolean) {
+        context?.let { init(it) }
+        _drawingAiEnabled.value = enabled
+        sharedPrefs?.edit()?.putBoolean(KEY_DRAWING_AI_ENABLED, enabled)?.apply()
+    }
+
     /** Only for pure-JVM unit tests to ensure isolated state between test cases. */
     @Synchronized
     internal fun resetForTesting() {
@@ -846,6 +894,10 @@ object UserAiPreferences {
         _selectedGrokModel.value = DEFAULT_GROK_MODEL
         _discoveredGrokModels.value = emptyList()
         _selectedAiProvider.value = AiProviderChoice.AUTO
+        _videoStudioAiEnabled.value = true
+        _videoAdBlockerEnabled.value = true
+        _notesAiEnabled.value = true
+        _drawingAiEnabled.value = true
         ApiKeyRotator.invalidateAndReset()
     }
 

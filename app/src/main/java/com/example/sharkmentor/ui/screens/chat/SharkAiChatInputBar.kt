@@ -14,6 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+import com.example.sharkmentor.ui.components.MathSymbolCatalog
+import com.example.sharkmentor.ui.components.MathSymbolKeyboardPanel
+import com.example.sharkmentor.ui.components.MathSymbolToggleButton
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SharkAiChatInputBar(
@@ -25,6 +29,7 @@ fun SharkAiChatInputBar(
     onShowPersonaSheet: () -> Unit
 ) {
     val isImeOpen = WindowInsets.isImeVisible
+    var showMathPanel by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -43,10 +48,17 @@ fun SharkAiChatInputBar(
                     trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                 )
             }
+            MathSymbolKeyboardPanel(
+                visible = showMathPanel,
+                onInsertSymbol = { sym ->
+                    onInputTextChanged(MathSymbolCatalog.insertSymbol(inputText, sym))
+                },
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 IconButton(
                     onClick = onShowPersonaSheet,
@@ -60,6 +72,11 @@ fun SharkAiChatInputBar(
                         tint = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
+
+                MathSymbolToggleButton(
+                    expanded = showMathPanel,
+                    onClick = { showMathPanel = !showMathPanel }
+                )
 
                 OutlinedTextField(
                     value = inputText,

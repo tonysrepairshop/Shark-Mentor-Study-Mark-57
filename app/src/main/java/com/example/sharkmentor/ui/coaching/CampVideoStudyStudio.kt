@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -29,32 +30,31 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -67,11 +67,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,12 +89,12 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.sharkmentor.core.ai.ApiKeyRotator
-import com.example.sharkmentor.core.ai.GeminiRestClient
+import com.example.sharkmentor.core.ai.MultiProviderAiClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.coaching.BookCampManager
 import com.example.sharkmentor.core.coaching.CampDayEpisode
 import com.example.sharkmentor.core.coaching.CoachingEngine
+import com.example.sharkmentor.core.coaching.ResolvedYouTubeVideo
 import com.example.sharkmentor.core.coaching.ResourceCampBinding
 import com.example.sharkmentor.core.service.FocusTimerService
 import com.example.sharkmentor.core.timer.TimerMode
@@ -100,16 +102,32 @@ import com.example.sharkmentor.core.timer.TimerPhase
 import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.NoteEntity
 import com.example.sharkmentor.data.local.entity.ResourceEntity
+import com.example.sharkmentor.ui.components.MathSymbolCatalog
+import com.example.sharkmentor.ui.components.MathSymbolKeyboardPanel
+import com.example.sharkmentor.ui.components.MathSymbolToggleButton
+import com.example.sharkmentor.ui.components.RichSolutionContent
+import com.example.sharkmentor.ui.components.formatMathAsPlainText
 import java.io.ByteArrayInputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private const val STUDIO_MATH_FORMAT_RULES = """
+ANLAŞILIRLIK VE MATEMATİKSEL YAZIM KURALLARI:
+- Karmaşık ham LaTeX kodları veya karışık paragraf yığınları yazma; adım adım, ferah ve net açıkla.
+- Önemli formülleri ve denklemleri ayrı satırda temiz matematik sembolleriyle (², ³, √, ·, ×, ÷, ±, Δ, π, ≤, ≥, ≠, ∫, ∑) yaz.
+- Çözüm veya açıklamayı **1. Adım:**, **2. Adım:**, **Sonuç:** başlıklarıyla düzenli ayır.
+- Gereksiz giriş cümleleri veya yapay selamlamalar kullanma; doğrudan soruya odaklan.
+"""
+
 /**
- * Split-Screen In-App Camp Video Study Studio:
- * - Upper half: Distraction-free YouTube embed/mobile player + direct "YouTube'da Aç" link + live synced Focus Timer.
- * - Lower half: Instant Contextual AI Tutor ("AI'ya Sor") & Quick Note Taking ("Hızlı Not") saved directly to Notes.
+ * Split-Screen In-App Camp Video Study Studio (Mark 60):
+ * - Direct YouTube video auto-resolution (plays the day's matching lesson directly — never a search page).
+ * - Opera-style toggleable Video Ad Blocker (network request filter + player ad-skipper JS, synced with Settings).
+ * - Live active video URL, title, playback timestamp (`mm:ss`) & caption transcript context passed to Studio AI.
+ * - Unified AI provider/key routing (uses user's selected API key if set, otherwise built-in fixed Gemini key).
+ * - Structured math/formula rendering (`RichSolutionContent`) + interactive `∑` Math Symbol Panel.
  */
 @Composable
 fun CampVideoStudyStudioDialog(
@@ -125,8 +143,53 @@ fun CampVideoStudyStudioDialog(
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
 
+    LaunchedEffect(context) {
+        UserAiPreferences.initialize(context)
+    }
+    val studioAiEnabled by UserAiPreferences.videoStudioAiEnabled.collectAsStateWithLifecycle()
+    val adBlockerEnabled by UserAiPreferences.videoAdBlockerEnabled.collectAsStateWithLifecycle()
+
     var activeEpisode by remember(initialEpisode) { mutableStateOf(initialEpisode) }
-    var activeTab by remember { mutableIntStateOf(0) } // 0 = AI'ya Sor, 1 = Hızlı Not
+    var activeTab by remember(studioAiEnabled) { mutableIntStateOf(if (studioAiEnabled) 0 else 1) } // 0 = AI'ya Sor, 1 = Hızlı Not
+
+    // Direct video resolution state (never falls back to YouTube search page if resolvable)
+    var resolvedCandidates by remember { mutableStateOf<List<ResolvedYouTubeVideo>>(emptyList()) }
+    var isResolvingVideo by remember { mutableStateOf(activeEpisode.videoId.length != 11) }
+    var useMobileWatchFallback by remember(activeEpisode.dayNumber, activeEpisode.videoId) { mutableStateOf(false) }
+
+    // Live playback telemetry from WebView JS Bridge
+    var livePlaybackSeconds by remember { mutableIntStateOf(0) }
+    var liveVideoTitle by remember { mutableStateOf(activeEpisode.topicTitle) }
+    var liveActiveVideoId by remember(activeEpisode.videoId) { mutableStateOf(activeEpisode.videoId) }
+
+    LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.searchQuery) {
+        livePlaybackSeconds = 0
+        if (activeEpisode.videoId.length == 11) {
+            liveActiveVideoId = activeEpisode.videoId
+            isResolvingVideo = false
+            return@LaunchedEffect
+        }
+        isResolvingVideo = true
+        val candidates = BookCampManager.resolveDirectVideosForEpisode(
+            context = context,
+            campTitle = campTitle,
+            subject = subject,
+            episode = activeEpisode
+        )
+        resolvedCandidates = candidates
+        val best = candidates.firstOrNull()
+        if (best != null && best.videoId.length == 11) {
+            val updated = activeEpisode.copy(
+                videoId = best.videoId,
+                customUrl = "https://www.youtube.com/watch?v=${best.videoId}"
+            )
+            activeEpisode = updated
+            liveActiveVideoId = best.videoId
+            liveVideoTitle = best.title.ifBlank { activeEpisode.topicTitle }
+            onEpisodeChanged?.invoke(updated)
+        }
+        isResolvingVideo = false
+    }
 
     // Live Focus Timer state
     val timerState by FocusTimerService.timerStateFlow.collectAsStateWithLifecycle()
@@ -139,6 +202,7 @@ fun CampVideoStudyStudioDialog(
     var aiAnswer by remember { mutableStateOf("") }
     var isAiLoading by remember { mutableStateOf(false) }
     var aiSavedToNotes by remember { mutableStateOf(false) }
+    var showMathPanel by remember { mutableStateOf(false) }
 
     // Quick Note state
     var quickNoteText by remember { mutableStateOf("") }
@@ -148,43 +212,93 @@ fun CampVideoStudyStudioDialog(
     var showPasteLinkDialog by remember { mutableStateOf(false) }
     var customUrlInput by remember { mutableStateOf(activeEpisode.customUrl) }
 
+    fun activeVideoUrlWithTimestamp(targetSec: Int = livePlaybackSeconds): String {
+        val vid = liveActiveVideoId.ifBlank { activeEpisode.videoId }
+        return if (vid.length == 11) {
+            if (targetSec > 0) "https://www.youtube.com/watch?v=$vid&t=${targetSec}s"
+            else "https://www.youtube.com/watch?v=$vid"
+        } else {
+            activeEpisode.buildExternalYouTubeUrl(targetSec)
+        }
+    }
+
     fun triggerAiTutorQuestion(questionText: String) {
+        if (!studioAiEnabled) return
         val cleanQ = questionText.trim()
         if (cleanQ.isBlank() || isAiLoading) return
         isAiLoading = true
+        aiAnswer = ""
         aiSavedToNotes = false
         scope.launch {
             val compass = CoachingEngine.buildAiSystemCompassPrompt(context)
+            val mentionedSec = BookCampManager.extractMentionedTimestampSeconds(cleanQ)
+            val effectiveSec = mentionedSec ?: livePlaybackSeconds
+            val formattedTime = BookCampManager.formatSecondsAsTimestamp(effectiveSec)
+            val currentVid = liveActiveVideoId.ifBlank { activeEpisode.videoId }
+            val watchUrl = activeVideoUrlWithTimestamp(effectiveSec)
+
+            val transcriptExcerpt = if (currentVid.length == 11) {
+                BookCampManager.fetchYouTubeTranscriptWindow(
+                    videoId = currentVid,
+                    centerSeconds = effectiveSec,
+                    windowRadiusSeconds = 75
+                )
+            } else ""
+
+            val transcriptSection = if (transcriptExcerpt.isNotBlank()) {
+                """
+                [VİDEONUN $formattedTime CİVARINDAKİ KONUŞMA METNİ / ALTYAZI]
+                $transcriptExcerpt
+                """.trimIndent()
+            } else {
+                "[NOT: Videoda otomatik altyazı verisi bulunamadı; konu, başlık, zaman damgası ve pedagojik müfredat bilgisiyle net açıkla.]"
+            }
+
             val fullPrompt = """
-                $compass
-                [AKTİF KAMP VİDEOSU BAĞLAMI]
+                [AKTİF İZLENEN DERS VİDEOSU]
                 • Kamp: $campTitle
                 • Ders: $subject
                 • Gün / Konu: ${activeEpisode.dayNumber}. Gün - ${activeEpisode.topicTitle}
+                • Video Başlığı: ${liveVideoTitle.ifBlank { activeEpisode.topicTitle }}
+                • Aktif Video Linki: $watchUrl
+                • Odaklanılan Video Zamanı: $formattedTime (${effectiveSec}. saniye)
 
-                Öğrencinin videoyu izlerken sorduğu soru: "$cleanQ"
-                Doğrudan, adım adım, net ve anlaşılır şekilde açıkla. Gereksiz giriş cümleleri kullanma.
+                $transcriptSection
+
+                Öğrencinin sorusu: "$cleanQ"
+                Öğrencinin belirttiği dakika/formül veya kavramı doğrudan, adım adım, sade ve eksiksiz açıkla.
             """.trimIndent()
+
+            val systemInstruction = "$compass\n\n$STUDIO_MATH_FORMAT_RULES"
 
             val response = withContext(Dispatchers.IO) {
                 runCatching {
-                    UserAiPreferences.initialize(context)
-                    com.example.sharkmentor.core.ai.GeminiAiFactory.generateContent(
-                        contents = listOf(com.example.sharkmentor.core.ai.GeminiContent.userText(fullPrompt)),
-                        systemPrompt = compass,
-                        taskType = com.example.sharkmentor.core.ai.AiTaskType.LIGHT_INTERACTION
-                    ).text
+                    MultiProviderAiClient.executeUnifiedTextPrompt(
+                        context = context,
+                        systemPrompt = systemInstruction,
+                        userPrompt = fullPrompt,
+                        temperature = 0.25f,
+                        maxTokens = 4096,
+                        onPartialText = { partial ->
+                            if (partial.isNotBlank()) {
+                                aiAnswer = partial
+                            }
+                        }
+                    )
                 }
             }
             isAiLoading = false
-            aiAnswer = response.getOrElse {
-                "Bağlantı kurulamadı. Lütfen internet bağlantınızı veya AI ayarlarınızı kontrol edin."
+            val finalOutput = response.getOrNull()?.trim().orEmpty()
+            if (finalOutput.isNotBlank()) {
+                aiAnswer = finalOutput
+            } else if (aiAnswer.isBlank()) {
+                aiAnswer = "Bağlantı kurulamadı. İnternet bağlantınızı veya Ayarlar > Yapay Zeka & API bölümünü kontrol edin."
             }
         }
     }
 
     fun saveTextToNotes(noteTitle: String, bodyText: String, onDone: () -> Unit) {
-        val cleanBody = bodyText.trim()
+        val cleanBody = formatMathAsPlainText(bodyText).trim()
         if (cleanBody.isBlank()) return
         scope.launch(Dispatchers.IO) {
             val note = NoteEntity(
@@ -260,6 +374,8 @@ fun CampVideoStudyStudioDialog(
                             customUrl = customUrlInput.trim()
                         )
                         activeEpisode = updated
+                        if (vId.length == 11) liveActiveVideoId = vId
+                        useMobileWatchFallback = false
                         onEpisodeChanged?.invoke(updated)
                         showPasteLinkDialog = false
                     }
@@ -367,21 +483,63 @@ fun CampVideoStudyStudioDialog(
                     }
                 }
 
-                // ── Upper Half: Embedded Distraction-Free Video Player ────────
-                val embedUrl = remember(activeEpisode) { activeEpisode.buildInAppEmbedUrl() }
+                // ── Upper Half: Direct Auto-Playing Video Player (with Opera-Style Ad Blocker) ──
+                val playerUrl = remember(activeEpisode, adBlockerEnabled, useMobileWatchFallback) {
+                    if (useMobileWatchFallback && activeEpisode.videoId.length == 11) {
+                        activeEpisode.buildMobileWatchUrl(livePlaybackSeconds)
+                    } else {
+                        activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true)
+                    }
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f)
-                        .background(Color.Black)
+                        .background(Color.Black),
+                    contentAlignment = Alignment.Center
                 ) {
-                    DistractionFreeYouTubeWebView(
-                        url = embedUrl,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    if (isResolvingVideo) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = colorScheme.primary,
+                                strokeWidth = 2.5.dp
+                            )
+                            Text(
+                                text = "Ders videosu doğrudan açılıyor...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.85f)
+                            )
+                        }
+                    } else {
+                        DistractionFreeYouTubeWebView(
+                            url = playerUrl,
+                            adBlockerEnabled = adBlockerEnabled,
+                            onPlaybackTelemetry = { seconds, title, currentUrl ->
+                                if (seconds >= 0) livePlaybackSeconds = seconds
+                                if (title.isNotBlank() && !title.equals("YouTube", ignoreCase = true)) {
+                                    liveVideoTitle = title.removeSuffix(" - YouTube").trim()
+                                }
+                                val (parsedVid, _) = BookCampManager.parseYouTubeUrlIds(currentUrl)
+                                if (parsedVid.length == 11) {
+                                    liveActiveVideoId = parsedVid
+                                }
+                            },
+                            onEmbedRestricted = {
+                                if (!useMobileWatchFallback && activeEpisode.videoId.length == 11) {
+                                    useMobileWatchFallback = true
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
 
-                // ── Action Strip Directly Underneath Video (Day Nav + Link + YouTube Redirect) ──
+                // ── Action Strip Directly Underneath Video (Day Nav + AdBlock + Player Mode + Link + YouTube) ──
                 Surface(
                     color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
                     modifier = Modifier.fillMaxWidth()
@@ -389,71 +547,150 @@ fun CampVideoStudyStudioDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         // Day episode navigation
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        val currentIdx = allEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
+                        IconButton(
+                            onClick = {
+                                if (currentIdx > 0) {
+                                    val prev = allEpisodes[currentIdx - 1]
+                                    activeEpisode = prev
+                                    useMobileWatchFallback = false
+                                    onEpisodeChanged?.invoke(prev)
+                                }
+                            },
+                            enabled = currentIdx > 0,
+                            modifier = Modifier.size(26.dp)
                         ) {
-                            val currentIdx = allEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
-                            IconButton(
-                                onClick = {
-                                    if (currentIdx > 0) {
-                                        val prev = allEpisodes[currentIdx - 1]
-                                        activeEpisode = prev
-                                        onEpisodeChanged?.invoke(prev)
-                                    }
-                                },
-                                enabled = currentIdx > 0,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ChevronLeft,
-                                    contentDescription = "Önceki Gün",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Text(
-                                text = "${activeEpisode.dayNumber}. Gün",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Önceki Gün", modifier = Modifier.size(18.dp))
+                        }
+                        Text(
+                            text = "${activeEpisode.dayNumber}. Gün",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        IconButton(
+                            onClick = {
+                                if (currentIdx in 0 until allEpisodes.lastIndex) {
+                                    val next = allEpisodes[currentIdx + 1]
+                                    activeEpisode = next
+                                    useMobileWatchFallback = false
+                                    onEpisodeChanged?.invoke(next)
+                                }
+                            },
+                            enabled = currentIdx in 0 until allEpisodes.lastIndex,
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Sonraki Gün", modifier = Modifier.size(18.dp))
+                        }
+
+                        // Opera-Style Ad Blocker quick toggle pill (synced with Settings)
+                        Surface(
+                            onClick = {
+                                val nextVal = !adBlockerEnabled
+                                UserAiPreferences.setVideoAdBlockerEnabled(context, nextVal)
+                                Toast.makeText(
+                                    context,
+                                    if (nextVal) "Video reklam engelleyici açıldı" else "Video reklam engelleyici kapatıldı",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surface,
+                            border = BorderStroke(
+                                1.dp,
+                                if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.5f) else colorScheme.outlineVariant
                             )
-                            IconButton(
-                                onClick = {
-                                    if (currentIdx in 0 until allEpisodes.lastIndex) {
-                                        val next = allEpisodes[currentIdx + 1]
-                                        activeEpisode = next
-                                        onEpisodeChanged?.invoke(next)
-                                    }
-                                },
-                                enabled = currentIdx in 0 until allEpisodes.lastIndex,
-                                modifier = Modifier.size(28.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ChevronRight,
-                                    contentDescription = "Sonraki Gün",
-                                    modifier = Modifier.size(18.dp)
+                                    imageVector = Icons.Default.Shield,
+                                    contentDescription = "Reklam Engelleyici",
+                                    tint = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = if (adBlockerEnabled) "Reklamsız" else "Reklam Açık",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant
                                 )
                             }
                         }
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            // Paste direct video link button
+                        // Alternate Player toggle (Embed <-> Mobile Watch fallback if video forbids embed)
+                        if (activeEpisode.videoId.length == 11) {
                             Surface(
-                                onClick = {
-                                    customUrlInput = activeEpisode.customUrl
-                                    showPasteLinkDialog = true
-                                },
+                                onClick = { useMobileWatchFallback = !useMobileWatchFallback },
                                 shape = RoundedCornerShape(8.dp),
                                 color = colorScheme.surface,
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SwapHoriz,
+                                        contentDescription = "Oynatıcı Değiştir",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = if (useMobileWatchFallback) "Sade Mod" else "Tam Mod",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+
+                        // Paste direct video link button
+                        Surface(
+                            onClick = {
+                                customUrlInput = activeVideoUrlWithTimestamp(0)
+                                showPasteLinkDialog = true
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.surface,
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = "Link Yapıştır",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "Link",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        if (onMarkCompleted != null) {
+                            Surface(
+                                onClick = { onMarkCompleted(activeEpisode) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFF10B981).copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.45f))
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
@@ -461,93 +698,111 @@ fun CampVideoStudyStudioDialog(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.Link,
-                                        contentDescription = "Link Yapıştır",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = "Link",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorScheme.onSurface
-                                    )
-                                }
-                            }
-
-                            if (onMarkCompleted != null) {
-                                Surface(
-                                    onClick = { onMarkCompleted(activeEpisode) },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = colorScheme.primary.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.4f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Günü Tamamla",
-                                            tint = colorScheme.primary,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "Bitti",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.primary
-                                        )
-                                    }
-                                }
-                            }
-
-                            // Direct YouTube external link button
-                            Surface(
-                                onClick = {
-                                    runCatching {
-                                        val extIntent = Intent(
-                                            Intent.ACTION_VIEW,
-                                            Uri.parse(activeEpisode.buildExternalYouTubeUrl())
-                                        )
-                                        context.startActivity(extIntent)
-                                    }
-                                },
-                                shape = RoundedCornerShape(8.dp),
-                                color = colorScheme.primary,
-                                contentColor = colorScheme.onPrimary
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                        contentDescription = "YouTube'da Aç",
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Günü Tamamla",
+                                        tint = Color(0xFF10B981),
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Text(
-                                        text = "YouTube'da Aç",
+                                        text = "Bitti",
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF10B981)
                                     )
                                 }
+                            }
+                        }
+
+                        // Direct YouTube external link button (jumps to current second)
+                        Surface(
+                            onClick = {
+                                runCatching {
+                                    val extIntent = Intent(
+                                        Intent.ACTION_VIEW,
+                                        Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds))
+                                    )
+                                    context.startActivity(extIntent)
+                                }
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = "YouTube'da Aç",
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "YouTube",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
                 }
 
-                // ── Lower Half: AI Tutor & Quick Notes Split Panel ────────────
+                // Optional quick alternative direct videos strip (when multiple matching lessons resolved)
+                if (resolvedCandidates.size > 1) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        resolvedCandidates.forEachIndexed { idx, cand ->
+                            val selected = cand.videoId == liveActiveVideoId
+                            Surface(
+                                onClick = {
+                                    val updated = activeEpisode.copy(
+                                        videoId = cand.videoId,
+                                        customUrl = "https://www.youtube.com/watch?v=${cand.videoId}"
+                                    )
+                                    activeEpisode = updated
+                                    liveActiveVideoId = cand.videoId
+                                    liveVideoTitle = cand.title
+                                    livePlaybackSeconds = 0
+                                    useMobileWatchFallback = false
+                                    onEpisodeChanged?.invoke(updated)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                )
+                            ) {
+                                Text(
+                                    text = "${idx + 1}. ${cand.title.take(30)}${if (cand.durationLabel.isNotBlank()) " (${cand.durationLabel})" else ""}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── Lower Half: AI Tutor (with Math Panel & Live Timestamp Context) & Quick Notes ──
                 Column(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Tab Switcher: AI'ya Sor | Hızlı Not Al
+                    // Tab Switcher: AI'ya Anlık Sor | Hızlı Not Al
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -592,131 +847,240 @@ fun CampVideoStudyStudioDialog(
                     }
 
                     if (activeTab == 0) {
-                        // Quick AI Prompt Chips
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            listOf(
-                                "Bu konuyu özetle",
-                                "Temel formüller ve püf noktalar",
-                                "ÖSYM bu konudan nasıl sorar?",
-                                "Örnek soru ve çözümü"
-                            ).forEach { chipPrompt ->
-                                Surface(
-                                    onClick = {
-                                        aiQuestion = chipPrompt
-                                        triggerAiTutorQuestion(chipPrompt)
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
-                                ) {
-                                    Text(
-                                        text = chipPrompt,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colorScheme.onSurface,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        // Question input row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = aiQuestion,
-                                onValueChange = { aiQuestion = it },
-                                placeholder = { Text("Videoda takıldığın yeri sor...") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Button(
-                                onClick = { triggerAiTutorQuestion(aiQuestion) },
-                                enabled = aiQuestion.isNotBlank() && !isAiLoading,
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp)
+                        if (!studioAiEnabled) {
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
                             ) {
-                                if (isAiLoading) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(18.dp),
-                                        color = colorScheme.onPrimary,
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.Send,
-                                        contentDescription = "Sor",
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        // AI Response Box
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.35f))
-                        ) {
-                            if (aiAnswer.isBlank() && !isAiLoading) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "${activeEpisode.topicTitle} videosunu izlerken anlamadığın adımı veya kavramı aşağıdan anında sorabilirsin.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            } else {
                                 Column(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .padding(12.dp)
-                                        .verticalScroll(rememberScrollState()),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        .padding(20.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     Text(
-                                        text = if (isAiLoading && aiAnswer.isBlank()) "Yanıt hazırlanıyor..." else aiAnswer,
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        text = "Video Stüdyosu AI Asistanı Kapalı",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
-                                    if (aiAnswer.isNotBlank() && !isAiLoading) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.End
-                                        ) {
-                                            TextButton(
-                                                onClick = {
-                                                    saveTextToNotes(
-                                                        noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Gün (${activeEpisode.topicTitle})",
-                                                        bodyText = aiAnswer,
-                                                        onDone = { aiSavedToNotes = true }
-                                                    )
-                                                },
-                                                enabled = !aiSavedToNotes
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = "Ayarlar > Yapay Zeka & API bölümünden Video Stüdyosu AI özelliğini dilediğin zaman açabilirsin.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    OutlinedButton(
+                                        onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text("Stüdyo AI'yı Şimdi Aç")
+                                    }
+                                }
+                            }
+                        } else {
+                            // Live Video Timestamp Quick-Ask Chip + Contextual Prompt Chips
+                            val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    onClick = {
+                                        val stampPrefix = if (livePlaybackSeconds > 0) {
+                                            "$liveTimeLabel dakikasındaki formülü/adımı neden öyle yaptık? "
+                                        } else {
+                                            "4.5 dakikadaki formül neden öyle? "
+                                        }
+                                        aiQuestion = stampPrefix
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = colorScheme.primary.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.AccessTime,
+                                            contentDescription = null,
+                                            tint = colorScheme.primary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = if (livePlaybackSeconds > 0) "Şu Anı Sor ($liveTimeLabel)" else "Dakikadaki Adımı Sor",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.primary
+                                        )
+                                    }
+                                }
+
+                                listOf(
+                                    "Bu videodaki formülleri adım adım çıkar",
+                                    "Konunun kritik püf noktalarını özetle",
+                                    "ÖSYM bu konudan nasıl sorar?",
+                                    "Örnek soru ve adım adım çözümü"
+                                ).forEach { chipPrompt ->
+                                    Surface(
+                                        onClick = {
+                                            aiQuestion = chipPrompt
+                                            triggerAiTutorQuestion(chipPrompt)
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                    ) {
+                                        Text(
+                                            text = chipPrompt,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Collapsible Mathematics & Formula Symbol Panel (∑)
+                            MathSymbolKeyboardPanel(
+                                visible = showMathPanel,
+                                onInsertSymbol = { sym ->
+                                    aiQuestion = MathSymbolCatalog.insertSymbol(aiQuestion, sym)
+                                }
+                            )
+
+                            // Question input row with ∑ Math Symbol Toggle
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                MathSymbolToggleButton(
+                                    expanded = showMathPanel,
+                                    onClick = { showMathPanel = !showMathPanel }
+                                )
+                                OutlinedTextField(
+                                    value = aiQuestion,
+                                    onValueChange = { aiQuestion = it },
+                                    placeholder = {
+                                        Text(
+                                            text = "Örn: 4.5 dakikadaki formül neden öyle?",
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Button(
+                                    onClick = { triggerAiTutorQuestion(aiQuestion) },
+                                    enabled = aiQuestion.isNotBlank() && !isAiLoading,
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                                ) {
+                                    if (isAiLoading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(18.dp),
+                                            color = colorScheme.onPrimary,
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.Send,
+                                            contentDescription = "Sor",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Structured Math & Step-by-Step AI Response Box
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.35f))
+                            ) {
+                                if (aiAnswer.isBlank() && !isAiLoading) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "İzlediğin video ve aktif saniye (${liveTimeLabel}) AI'ya otomatik bağlanır. Anlamadığın formülü veya dakikayı doğrudan sorabilirsin.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                } else {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(12.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        if (isAiLoading && aiAnswer.isBlank()) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Icon(
-                                                    imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp)
+                                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                                Text(
+                                                    text = "Video bağlamı ve formüller analiz ediliyor...",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = colorScheme.onSurfaceVariant
                                                 )
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(if (aiSavedToNotes) "Notlara Kaydedildi" else "Notlara Kaydet")
+                                            }
+                                        } else {
+                                            SelectionContainer {
+                                                RichSolutionContent(
+                                                    text = aiAnswer,
+                                                    textColor = colorScheme.onSurface,
+                                                    fontSize = 14.sp,
+                                                    lineHeight = 22.sp
+                                                )
+                                            }
+                                        }
+                                        if (aiAnswer.isNotBlank() && !isAiLoading) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.End
+                                            ) {
+                                                TextButton(
+                                                    onClick = {
+                                                        saveTextToNotes(
+                                                            noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Gün (${activeEpisode.topicTitle})",
+                                                            bodyText = aiAnswer,
+                                                            onDone = { aiSavedToNotes = true }
+                                                        )
+                                                    },
+                                                    enabled = !aiSavedToNotes
+                                                ) {
+                                                    Icon(
+                                                        imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                    Text(if (aiSavedToNotes) "Notlara Kaydedildi" else "Notlara Kaydet")
+                                                }
                                             }
                                         }
                                     }
@@ -724,7 +1088,7 @@ fun CampVideoStudyStudioDialog(
                             }
                         }
                     } else {
-                        // Tab 2: Quick Note Taking while watching
+                        // Tab 2: Quick Note Taking while watching (with timestamp stamp button)
                         OutlinedTextField(
                             value = quickNoteText,
                             onValueChange = {
@@ -744,11 +1108,23 @@ fun CampVideoStudyStudioDialog(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (noteSavedSuccess) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        val stamp = "[${BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)}] "
+                                        quickNoteText = if (quickNoteText.isBlank()) stamp else "$quickNoteText\n$stamp"
+                                    },
+                                    shape = RoundedCornerShape(9.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                                 ) {
+                                    Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Zaman Ekle", fontSize = 11.sp)
+                                }
+                                if (noteSavedSuccess) {
                                     Icon(
                                         imageVector = Icons.Default.CheckCircle,
                                         contentDescription = null,
@@ -756,14 +1132,12 @@ fun CampVideoStudyStudioDialog(
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Text(
-                                        text = "Notlar sekmesine kaydedildi",
+                                        text = "Kaydedildi",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = colorScheme.primary,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
-                            } else {
-                                Spacer(modifier = Modifier.width(4.dp))
                             }
 
                             Button(
@@ -787,17 +1161,82 @@ fun CampVideoStudyStudioDialog(
     }
 }
 
+private const val STUDIO_TELEMETRY_JS = """
+(function() {
+  if (window.__sharkTelemetryInstalled) return;
+  window.__sharkTelemetryInstalled = true;
+  setInterval(function() {
+    try {
+      var v = document.querySelector('video');
+      var sec = (v && !isNaN(v.currentTime)) ? Math.floor(v.currentTime) : -1;
+      var titleEl = document.querySelector('.ytp-title-link, h2.slim-video-information-title, .slim-video-metadata-header');
+      var title = (titleEl && titleEl.innerText) ? titleEl.innerText : (document.title || '');
+      if (window.SharkStudioBridge) {
+        window.SharkStudioBridge.onTelemetry(sec, title, window.location.href || '');
+      }
+      var errEl = document.querySelector('.ytp-error-content-wrap-reason, .ytp-error');
+      if (errEl && errEl.innerText && errEl.innerText.length > 4 && window.SharkStudioBridge) {
+        window.SharkStudioBridge.onEmbedError();
+      }
+    } catch (e) {}
+  }, 1800);
+})();
+"""
+
+private const val STUDIO_AD_BLOCKER_JS = """
+(function() {
+  if (!document.getElementById('shark-adblock-style')) {
+    var st = document.createElement('style');
+    st.id = 'shark-adblock-style';
+    st.textContent = '.ytp-ad-module,.ytp-ad-overlay-container,.ytp-ad-text-overlay,.ytp-ad-player-overlay,ytm-promoted-sparkles-web-renderer,ytm-companion-ad-renderer,ad-slot-renderer,.ad-container,.video-ads{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  if (window.__sharkAdSkipperInstalled) return;
+  window.__sharkAdSkipperInstalled = true;
+  setInterval(function() {
+    try {
+      var player = document.querySelector('.html5-video-player');
+      var video = document.querySelector('video');
+      var isAd = (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) || !!document.querySelector('.ytp-ad-player-overlay-layout,.ytp-ad-preview-container');
+      if (isAd && video) {
+        video.muted = true;
+        if (isFinite(video.duration) && video.duration > 0.5) {
+          video.currentTime = video.duration - 0.1;
+        }
+        video.playbackRate = 16.0;
+      } else if (video && video.playbackRate > 4.0) {
+        video.playbackRate = 1.0;
+        video.muted = false;
+      }
+      var skipBtns = document.querySelectorAll('.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button,button[class*="skip-ad"]');
+      for (var i = 0; i < skipBtns.length; i++) {
+        skipBtns[i].click();
+      }
+    } catch (e) {}
+  }, 600);
+})();
+"""
+
 /**
- * Lightweight, low-end device friendly YouTube WebView that blocks ad/tracker third-party domains,
- * uses youtube-nocookie embeds when a video/playlist ID is present, and destroys itself cleanly on dispose.
+ * Lightweight, low-end device friendly YouTube WebView:
+ * - Opera-style toggleable network + DOM/player ad-blocker (`adBlockerEnabled`)
+ * - Live playback telemetry JS bridge (`SharkStudioBridge`) reporting current second, title, and URL to AI
+ * - Cleanly stops, unloads, and destroys itself on dispose to protect low-RAM devices.
  */
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
 private fun DistractionFreeYouTubeWebView(
     url: String,
+    adBlockerEnabled: Boolean,
+    onPlaybackTelemetry: (seconds: Int, title: String, currentUrl: String) -> Unit,
+    onEmbedRestricted: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val currentAdBlock by rememberUpdatedState(adBlockerEnabled)
+    val currentOnTelemetry by rememberUpdatedState(onPlaybackTelemetry)
+    val currentOnEmbedRestricted by rememberUpdatedState(onEmbedRestricted)
+
     val webView = remember(context) {
         WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
@@ -813,43 +1252,59 @@ private fun DistractionFreeYouTubeWebView(
                 useWideViewPort = true
                 cacheMode = WebSettings.LOAD_DEFAULT
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                setSupportZoom(false)
+                builtInZoomControls = false
+                displayZoomControls = false
+                setGeolocationEnabled(false)
             }
+            addJavascriptInterface(
+                object {
+                    @JavascriptInterface
+                    fun onTelemetry(seconds: Int, title: String, currentUrl: String) {
+                        post { currentOnTelemetry(seconds, title, currentUrl) }
+                    }
+
+                    @JavascriptInterface
+                    fun onEmbedError() {
+                        post { currentOnEmbedRestricted() }
+                    }
+                },
+                "SharkStudioBridge"
+            )
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
-                private val blockedAdHosts = listOf(
-                    "doubleclick.net",
-                    "googlesyndication.com",
-                    "googleadservices.com",
-                    "adservice.google"
-                )
-
                 override fun shouldInterceptRequest(
                     view: WebView?,
                     request: WebResourceRequest?
                 ): WebResourceResponse? {
-                    val host = request?.url?.host?.lowercase().orEmpty()
-                    if (blockedAdHosts.any { host.contains(it) }) {
-                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                    if (currentAdBlock) {
+                        val reqUrl = request?.url?.toString().orEmpty()
+                        if (BookCampManager.isAdOrTrackerUrl(reqUrl)) {
+                            return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+                        }
                     }
                     return super.shouldInterceptRequest(view, request)
+                }
+
+                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
+                    super.onPageFinished(view, loadedUrl)
+                    view?.evaluateJavascript(STUDIO_TELEMETRY_JS, null)
+                    if (currentAdBlock) {
+                        view?.evaluateJavascript(STUDIO_AD_BLOCKER_JS, null)
+                    }
                 }
 
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?
                 ): Boolean {
-                    val target = request?.url?.toString().orEmpty()
                     val host = request?.url?.host?.lowercase().orEmpty()
                     val allowed = host.contains("youtube.com") ||
                         host.contains("youtube-nocookie.com") ||
                         host.contains("youtu.be") ||
                         host.contains("googlevideo.com") ||
                         host.contains("ytimg.com")
-                    return if (allowed) {
-                        false
-                    } else {
-                        true
-                    }
+                    return !allowed
                 }
             }
         }
@@ -858,8 +1313,10 @@ private fun DistractionFreeYouTubeWebView(
     DisposableEffect(webView) {
         onDispose {
             runCatching {
+                webView.removeJavascriptInterface("SharkStudioBridge")
                 webView.stopLoading()
                 webView.loadUrl("about:blank")
+                webView.clearHistory()
                 webView.destroy()
             }
         }
@@ -868,8 +1325,10 @@ private fun DistractionFreeYouTubeWebView(
     AndroidView(
         factory = { webView },
         update = { view ->
-            if (view.url != url) {
-                view.loadUrl(url)
+            if (view.tag != url) {
+                view.tag = url
+                val headers = mapOf("Referer" to "https://www.youtube-nocookie.com/")
+                view.loadUrl(url, headers)
             }
         },
         modifier = modifier

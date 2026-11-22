@@ -914,7 +914,10 @@ fun PdfReaderScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     var showPageScrubber by remember { mutableStateOf(true) }
 
-    // AI Assistant state
+    // AI Assistant state (respects Notes AI & Drawing AI settings toggles)
+    val aiPrefs = remember(context) { UserAiPreferences.initialize(context) }
+    val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
+    val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
@@ -1588,17 +1591,19 @@ fun PdfReaderScreen(
                     }
                 }
 
-                // AI Note Assistant button
-                IconButton(
-                    onClick = { showAiSheet = true },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "PDF AI Asistanı",
-                        tint = primaryColor,
-                        modifier = Modifier.size(18.dp)
-                    )
+                // AI Note Assistant button (controlled by Notes AI toggle in Settings)
+                if (notesAiEnabled) {
+                    IconButton(
+                        onClick = { showAiSheet = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "PDF AI Asistanı",
+                            tint = primaryColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
                 // More Menu
@@ -1830,10 +1835,14 @@ fun PdfReaderScreen(
                         } else {
                             null
                         },
-                        onLassoAskAi = { cropBmp ->
-                            lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
-                            lassoAiSourceLabel = "PDF • Sayfa ${pageIdx + 1}"
-                            lassoAiCropBitmap = cropBmp
+                        onLassoAskAi = if (drawingAiEnabled) {
+                            { cropBmp ->
+                                lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+                                lassoAiSourceLabel = "PDF • Sayfa ${pageIdx + 1}"
+                                lassoAiCropBitmap = cropBmp
+                            }
+                        } else {
+                            null
                         }
                     )
                 }
@@ -2074,7 +2083,7 @@ fun PdfReaderScreen(
     }
 
     // AI Note Assistant ModalBottomSheet
-    if (showAiSheet) {
+    if (showAiSheet && notesAiEnabled) {
         ModalBottomSheet(
             onDismissRequest = {
                 cancelPdfAiAnalysis()

@@ -134,9 +134,13 @@ import com.example.sharkmentor.ui.aichat.AiPersona
 import com.example.sharkmentor.ui.aichat.PersonalizedGreetingHeader
 import com.example.sharkmentor.ui.aichat.getFlashCardsForPersona
 import com.example.sharkmentor.ui.aichat.isPersonaAvailable
+import com.example.sharkmentor.ui.components.MathSymbolCatalog
+import com.example.sharkmentor.ui.components.MathSymbolKeyboardPanel
+import com.example.sharkmentor.ui.components.MathSymbolToggleButton
 import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.PulsingDotsIndicator
 import com.example.sharkmentor.ui.components.RichChatText
+import com.example.sharkmentor.ui.components.RichSolutionContent
 import com.example.sharkmentor.ui.viewmodel.SharkAiHandoffManager
 import com.example.sharkmentor.ui.viewmodel.SharkAiViewModel
 import com.google.firebase.auth.FirebaseAuth
@@ -189,6 +193,7 @@ fun SharkAiScreen(
     var showPersonaSheet by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showChatHistorySheet by rememberSaveable { mutableStateOf(false) }
+    var showMathSymbolPanel by rememberSaveable { mutableStateOf(false) }
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     fun createTempPictureUri(ctx: Context): Uri {
@@ -843,9 +848,11 @@ fun SharkAiScreen(
                                                         }
                                                     }
                                                 } else {
-                                                    RichChatText(
+                                                    RichSolutionContent(
                                                         text = msg.text,
-                                                        textColor = MaterialTheme.colorScheme.onSurface
+                                                        textColor = MaterialTheme.colorScheme.onSurface,
+                                                        fontSize = 15.sp,
+                                                        lineHeight = 23.sp
                                                     )
                                                 }
 
@@ -1140,7 +1147,18 @@ fun SharkAiScreen(
             }
 
             val isImeOpen = WindowInsets.isImeVisible
-            // Modern Multimodal Input Bar with Direct SAF Clip & AI Actions Menu
+
+            MathSymbolKeyboardPanel(
+                visible = showMathSymbolPanel,
+                onInsertSymbol = { sym ->
+                    viewModel.onInputTextChanged(MathSymbolCatalog.insertSymbol(inputText, sym))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+
+            // Modern Multimodal Input Bar with Direct SAF Clip, Math Symbol Panel & AI Actions Menu
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1165,7 +1183,7 @@ fun SharkAiScreen(
                         onClick = {
                             showAttachmentSheet = true
                         },
-                        modifier = Modifier.size(38.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.AttachFile,
@@ -1177,7 +1195,7 @@ fun SharkAiScreen(
                     // AI Modes & Assistants Selector Button
                     IconButton(
                         onClick = { showPersonaSheet = true },
-                        modifier = Modifier.size(38.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
@@ -1185,6 +1203,13 @@ fun SharkAiScreen(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+
+                    // Mathematics & Formula Symbol Panel Toggle (∑)
+                    MathSymbolToggleButton(
+                        expanded = showMathSymbolPanel,
+                        onClick = { showMathSymbolPanel = !showMathSymbolPanel },
+                        modifier = Modifier.padding(end = 2.dp)
+                    )
 
                     BasicTextField(
                         value = inputText,

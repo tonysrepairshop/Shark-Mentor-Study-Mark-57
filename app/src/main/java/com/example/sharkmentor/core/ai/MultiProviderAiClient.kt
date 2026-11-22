@@ -474,6 +474,88 @@ object MultiProviderAiClient {
         accumulated.toString()
     }
 
+    /**
+     * Unified single-turn text completion router used by Video Study Studio & Coaching AI:
+     * - If the user has selected an external provider with an API key (Claude, OpenAI GPT, DeepSeek, Kimi, Grok)
+     *   or configured one in AUTO mode without custom Gemini keys, uses that provider/key first.
+     * - Otherwise (or on fallback), routes through [GeminiAiFactory.generateContent] which uses the user's
+     *   custom Gemini API key(s) & chosen model if present, or falls back seamlessly to the app's built-in
+     *   fixed API key / proxy pipeline.
+     */
+    suspend fun executeUnifiedTextPrompt(
+        context: Context,
+        systemPrompt: String,
+        userPrompt: String,
+        temperature: Float = 0.25f,
+        maxTokens: Int = 4096,
+        onPartialText: ((String) -> Unit)? = null
+    ): String = withContext(Dispatchers.IO) {
+        val prefs = UserAiPreferences.initialize(context)
+        val selectedProvider = prefs.getSelectedProvider()
+        val hasCustomGemini = prefs.hasCustomUserGeminiKeys(context)
+
+        val resolvedExternalProvider: AiProviderChoice? = when (selectedProvider) {
+            AiProviderChoice.CLAUDE -> AiProviderChoice.CLAUDE.takeIf { prefs.getUserClaudeKey().isNotBlank() }
+            AiProviderChoice.OPENAI -> AiProviderChoice.OPENAI.takeIf { prefs.getUserOpenAiKey().isNotBlank() }
+            AiProviderChoice.GROK -> AiProviderChoice.GROK.takeIf { prefs.getUserGrokKey().isNotBlank() }
+            AiProviderChoice.DEEPSEEK -> AiProviderChoice.DEEPSEEK.takeIf { prefs.getUserDeepSeekKey().isNotBlank() }
+            AiProviderChoice.KIMI -> AiProviderChoice.KIMI.takeIf { prefs.getUserKimiKey().isNotBlank() }
+            AiProviderChoice.AUTO -> if (!hasCustomGemini) {
+                when {
+                    prefs.getUserClaudeKey().isNotBlank() -> AiProviderChoice.CLAUDE
+                    prefs.getUserOpenAiKey().isNotBlank() -> AiProviderChoice.OPENAI
+                    prefs.getUserGrokKey().isNotBlank() -> AiProviderChoice.GROK
+                    prefs.getUserDeepSeekKey().isNotBlank() -> AiProviderChoice.DEEPSEEK
+                    prefs.getUserKimiKey().isNotBlank() -> AiProviderChoice.KIMI
+                    else -> null
+                }
+            } else null
+            AiProviderChoice.GEMINI -> null
+        }
+
+        if (resolvedExternalProvider != null) {
+            val extResult = runCatching {
+                streamChatCompletion(
+                    provider = resolvedExternalProvider,
+                    systemPrompt = systemPrompt,
+                    userPrompt = userPrompt,
+                    temperature = temperature,
+                    maxTokens = maxTokens,
+                    context = context,
+                    onAccumulatedChunk = { partial -> onPartialText?.invoke(partial) }
+                )
+            }
+            val text = extResult.getOrNull()?.trim().orEmpty()
+            if (text.isNotBlank()) return@withContext text
+            val err = extResult.exceptionOrNull()
+            if (err is CancellationException) throw err
+            Log.w(TAG, "External provider $resolvedExternalProvider failed; falling back to Gemini pipeline: ${err?.message}")
+        }
+
+        // Gemini path: uses user custom Gemini key(s) + chosen model if set, otherwise built-in fixed key / proxy
+        val genConfig = GeminiGenerationConfig(
+            temperature = temperature,
+            maxOutputTokens = maxTokens,
+            topP = 0.85f
+        )
+        if (onPartialText != null) {
+            GeminiAiFactory.streamContents(
+                contents = listOf(GeminiContent.userText(userPrompt)),
+                systemPrompt = systemPrompt,
+                taskType = AiTaskType.LIGHT_INTERACTION,
+                generationConfig = genConfig,
+                onPartialText = onPartialText
+            ).text
+        } else {
+            GeminiAiFactory.generateContent(
+                contents = listOf(GeminiContent.userText(userPrompt)),
+                systemPrompt = systemPrompt,
+                taskType = AiTaskType.LIGHT_INTERACTION,
+                generationConfig = genConfig
+            ).text
+        }
+    }
+
     // ── Discovery implementations ────────────────────────────────────────────
 
     private fun fetchOpenAiStyleModels(

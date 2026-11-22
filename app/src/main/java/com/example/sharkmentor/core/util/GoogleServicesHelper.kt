@@ -10,6 +10,8 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreSettings
+import com.google.firebase.firestore.PersistentCacheSettings
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.storage.FirebaseStorage
 
@@ -19,9 +21,16 @@ import com.google.firebase.storage.FirebaseStorage
  */
 object GoogleServicesHelper {
     private const val TAG = "GoogleServicesHelper"
+    private const val FIRESTORE_CACHE_SIZE_BYTES = 50L * 1024L * 1024L // 50 MB bounded cache for low-end devices
 
     @Volatile
     private var isGmsBrokerAvailable = true
+
+    @Volatile
+    private var isGmsVerifiedAvailable = false
+
+    @Volatile
+    private var isFirestoreCacheConfigured = false
 
     /**
      * Checks if GMS package exists on the system.
@@ -57,10 +66,14 @@ object GoogleServicesHelper {
 
     /**
      * Checks if Google Play Services is installed, enabled, and up-to-date.
+     * Result is cached after first verified success to eliminate repeated PackageManager IPC calls.
      */
     fun isGooglePlayServicesAvailable(context: Context? = null): Boolean {
         if (!isGmsBrokerAvailable) {
             return false
+        }
+        if (isGmsVerifiedAvailable) {
+            return true
         }
         val targetContext = resolveContext(context) ?: return false
 
@@ -74,6 +87,7 @@ object GoogleServicesHelper {
             val availability = GoogleApiAvailability.getInstance()
             val resultCode = availability.isGooglePlayServicesAvailable(targetContext)
             if (resultCode == ConnectionResult.SUCCESS) {
+                isGmsVerifiedAvailable = true
                 true
             } else {
                 Log.w(TAG, "Google Play Services is not available. Result code: $resultCode")
@@ -120,7 +134,20 @@ object GoogleServicesHelper {
             return null
         }
         return try {
-            FirebaseFirestore.getInstance()
+            val instance = FirebaseFirestore.getInstance()
+            if (!isFirestoreCacheConfigured) {
+                isFirestoreCacheConfigured = true
+                runCatching {
+                    instance.firestoreSettings = FirebaseFirestoreSettings.Builder()
+                        .setLocalCacheSettings(
+                            PersistentCacheSettings.newBuilder()
+                                .setSizeBytes(FIRESTORE_CACHE_SIZE_BYTES)
+                                .build()
+                        )
+                        .build()
+                }
+            }
+            instance
         } catch (e: SecurityException) {
             Log.w(TAG, "GMS SecurityException getting FirebaseFirestore: ${e.message}")
             isGmsBrokerAvailable = false
@@ -214,5 +241,6 @@ object GoogleServicesHelper {
      */
     fun resetGmsStatus() {
         isGmsBrokerAvailable = true
+        isGmsVerifiedAvailable = false
     }
 }

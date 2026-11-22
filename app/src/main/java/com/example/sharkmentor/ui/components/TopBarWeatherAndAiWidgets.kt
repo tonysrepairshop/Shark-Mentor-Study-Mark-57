@@ -61,10 +61,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.sharkmentor.core.audio.ZenSound
 import com.example.sharkmentor.data.topbar.TopBarAnimationType
 import com.example.sharkmentor.data.topbar.TopBarFontOption
 import com.example.sharkmentor.data.topbar.TopBarSettings
 import com.example.sharkmentor.data.topbar.TopBarTextSource
+import com.example.sharkmentor.data.topbar.capitalizeTurkishSentence
 import com.example.sharkmentor.data.weather.HourlyForecastItem
 import com.example.sharkmentor.data.weather.WeatherSettings
 import com.example.sharkmentor.data.weather.WeatherUiState
@@ -313,48 +315,196 @@ object PendingLeagueNavigationBus {
     val openDmInboxDirectly = MutableStateFlow(false)
 }
 
+sealed interface TopBarSuggestionAction {
+    data class OpenAiPrompt(val prompt: String) : TopBarSuggestionAction
+    data class StartZenSound(val sound: ZenSound, val feedbackMessage: String) : TopBarSuggestionAction
+    data class OpenRoute(val route: String) : TopBarSuggestionAction
+    data class WellnessReminder(val feedbackMessage: String) : TopBarSuggestionAction
+}
+
+data class TopBarSuggestionEntry(
+    val text: String,
+    val action: TopBarSuggestionAction
+)
+
+fun isRainyWeatherCode(code: Int): Boolean =
+    code in setOf(51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99)
+
+fun isSnowyOrColdWeather(code: Int, tempCelsius: Double?): Boolean =
+    code in setOf(71, 73, 75, 77, 85, 86) || (tempCelsius != null && tempCelsius <= 9.0)
+
+/**
+ * Pure builder combining AI prompt suggestions with actionable in-app contextual suggestions
+ * (weather-matched Zen ambient sounds, Error Bank / Zen Room shortcuts, and long-study hydration/posture cues).
+ */
+fun buildSmartTopBarSuggestions(
+    weatherState: WeatherUiState?,
+    isAnyFocusRunning: Boolean,
+    elapsedFocusMinutes: Int,
+    settings: TopBarSettings
+): List<TopBarSuggestionEntry> {
+    val result = mutableListOf<TopBarSuggestionEntry>()
+
+    // 1. Long-study wellness reminders (Hydration & Posture) prioritized during active long sessions
+    if (isAnyFocusRunning) {
+        if (settings.hydrationReminderEnabled && elapsedFocusMinutes >= settings.hydrationIntervalMinutes) {
+            result.add(
+                TopBarSuggestionEntry(
+                    text = capitalizeTurkishSentence("${elapsedFocusMinutes} dk oldu, bir bardak su içmeyi unutma"),
+                    action = TopBarSuggestionAction.WellnessReminder("Su molası kaydedildi, zihnin tazelendi.")
+                )
+            )
+        }
+        if (settings.postureReminderEnabled && elapsedFocusMinutes >= settings.postureIntervalMinutes) {
+            result.add(
+                TopBarSuggestionEntry(
+                    text = capitalizeTurkishSentence("Duruşunu kontrol et, sırtını dikleştirip omuzlarını gevşet"),
+                    action = TopBarSuggestionAction.WellnessReminder("Dik duruş kontrol edildi, verimli çalışmalar.")
+                )
+            )
+        }
+    }
+
+    // 2. Contextual in-app suggestions (Weather -> Ambient Sound, Quick In-App Actions)
+    if (settings.inAppSuggestionsEnabled) {
+        if (weatherState != null) {
+            val code = weatherState.currentWeatherCode
+            val temp = weatherState.currentTempCelsius
+            when {
+                isRainyWeatherCode(code) -> {
+                    result.add(
+                        TopBarSuggestionEntry(
+                            text = capitalizeTurkishSentence("Hava yağmurlu, odak için yağmur sesi açalım mı?"),
+                            action = TopBarSuggestionAction.StartZenSound(ZenSound.RAIN, "Yağmur sesi başlatıldı")
+                        )
+                    )
+                    result.add(
+                        TopBarSuggestionEntry(
+                            text = capitalizeTurkishSentence("Yağmurlu güne özel Londra yağmuru sesi aç"),
+                            action = TopBarSuggestionAction.StartZenSound(ZenSound.LONDON_RAIN, "Londra yağmuru sesi başlatıldı")
+                        )
+                    )
+                }
+                isSnowyOrColdWeather(code, temp) -> {
+                    result.add(
+                        TopBarSuggestionEntry(
+                            text = capitalizeTurkishSentence("Serin havada kamp ateşi sesiyle odaklanalım mı?"),
+                            action = TopBarSuggestionAction.StartZenSound(ZenSound.FIRE, "Kamp ateşi sesi başlatıldı")
+                        )
+                    )
+                }
+                else -> {
+                    result.add(
+                        TopBarSuggestionEntry(
+                            text = capitalizeTurkishSentence("Derin odak için kafe uğultusu açalım mı?"),
+                            action = TopBarSuggestionAction.StartZenSound(ZenSound.CAFE, "Kafe uğultusu başlatıldı")
+                        )
+                    )
+                    result.add(
+                        TopBarSuggestionEntry(
+                            text = capitalizeTurkishSentence("Sakin odak için orman ambiyansı başlat"),
+                            action = TopBarSuggestionAction.StartZenSound(ZenSound.FOREST, "Orman sesi başlatıldı")
+                        )
+                    )
+                }
+            }
+        }
+        result.add(
+            TopBarSuggestionEntry(
+                text = capitalizeTurkishSentence("Hata Bankası tekrarlarını gözden geçir"),
+                action = TopBarSuggestionAction.OpenRoute("error_bank")
+            )
+        )
+        result.add(
+            TopBarSuggestionEntry(
+                text = capitalizeTurkishSentence("Zen Odası ambiyans seslerini aç"),
+                action = TopBarSuggestionAction.OpenRoute("zen_room")
+            )
+        )
+    }
+
+    // 3. AI prompt suggestions (all capitalized cleanly in Turkish)
+    val aiPrompts = listOf(
+        "Bugün ne planlayalım?",
+        "Deneme analizini yapalım mı?",
+        "Zayıf konuları çıkaralım",
+        "25 dk odak seansı kuralım",
+        "Haftalık programını güncelleyelim",
+        "Bugünkü hedeflerini belirle",
+        "Yanlış sorularını özetleyelim",
+        "Tekrar listeni gözden geçirelim",
+        "Hangi dersten başlayalım?",
+        "Net artış stratejini kuralım",
+        "Sınav öncesi hızlı tekrar?",
+        "Günlük çalışma ritmini ölçelim",
+        "Öncelikli konuları sıralayalım",
+        "Shark AI ile yol haritanı çiz"
+    )
+    aiPrompts.forEach { p ->
+        val clean = capitalizeTurkishSentence(p)
+        result.add(TopBarSuggestionEntry(clean, TopBarSuggestionAction.OpenAiPrompt(clean)))
+    }
+
+    return result
+}
+
 @Composable
 fun TopBarAiShortcutBox(
     onClick: (String) -> Unit,
     modifier: Modifier = Modifier,
     topBarSettings: TopBarSettings = TopBarSettings(),
-    showBubble: Boolean = true
+    showBubble: Boolean = true,
+    weatherState: WeatherUiState? = null,
+    isAnyFocusRunning: Boolean = false,
+    elapsedFocusMinutes: Int = 0,
+    onStartZenSound: ((ZenSound, String) -> Unit)? = null,
+    onNavigateRoute: ((String) -> Unit)? = null,
+    onWellnessAck: ((String) -> Unit)? = null
 ) {
-    val prompts = remember {
-        listOf(
-            "Bugün ne planlayalım?",
-            "Deneme analizini yapalım mı?",
-            "Zayıf konuları çıkaralım",
-            "25 dk odak seansı kuralım",
-            "Haftalık programını güncelleyelim",
-            "Bugünkü hedeflerini belirle",
-            "Yanlış sorularını özetleyelim",
-            "Tekrar listeni gözden geçirelim",
-            "Kısa bir mola sonrası planı?",
-            "Hangi dersten başlayalım?",
-            "Net artış stratejini kuralım",
-            "Sınav öncesi hızlı tekrar?",
-            "Günlük çalışma ritmini ölçelim",
-            "Öncelikli konuları sıralayalım",
-            "Akşam değerlendirmesi yapalım",
-            "Shark AI ile yol haritanı çiz"
+    val smartSuggestions = remember(
+        weatherState?.currentWeatherCode,
+        weatherState?.currentTempCelsius,
+        isAnyFocusRunning,
+        elapsedFocusMinutes / 5, // coarse bucket to prevent per-second recomposition
+        topBarSettings.inAppSuggestionsEnabled,
+        topBarSettings.hydrationReminderEnabled,
+        topBarSettings.hydrationIntervalMinutes,
+        topBarSettings.postureReminderEnabled,
+        topBarSettings.postureIntervalMinutes
+    ) {
+        buildSmartTopBarSuggestions(
+            weatherState = weatherState,
+            isAnyFocusRunning = isAnyFocusRunning,
+            elapsedFocusMinutes = elapsedFocusMinutes,
+            settings = topBarSettings
         )
     }
 
-    val activeTexts = remember(
+    val activeEntries: List<TopBarSuggestionEntry> = remember(
         topBarSettings.textSource,
         topBarSettings.customTexts,
         topBarSettings.aiQuotes,
-        prompts
+        smartSuggestions
     ) {
         when (topBarSettings.textSource) {
-            TopBarTextSource.AI_SUGGESTIONS -> prompts
+            TopBarTextSource.AI_SUGGESTIONS -> smartSuggestions
             TopBarTextSource.CUSTOM_TEXTS ->
-                topBarSettings.customTexts.map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { prompts }
+                topBarSettings.customTexts
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+                    .map { TopBarSuggestionEntry(it, TopBarSuggestionAction.OpenAiPrompt(it)) }
+                    .ifEmpty { smartSuggestions }
             TopBarTextSource.AI_QUOTES ->
-                topBarSettings.aiQuotes.map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { prompts }
+                topBarSettings.aiQuotes
+                    .map { capitalizeTurkishSentence(it) }
+                    .filter { it.isNotEmpty() }
+                    .map { TopBarSuggestionEntry(it, TopBarSuggestionAction.OpenAiPrompt(it)) }
+                    .ifEmpty { smartSuggestions }
         }
     }
+
+    val activeTexts = remember(activeEntries) { activeEntries.map { it.text } }
+    val intervalMs = topBarSettings.refreshInterval.durationMs.coerceAtLeast(3_000L)
 
     val fontFamily = when (topBarSettings.fontOption) {
         TopBarFontOption.DEFAULT -> null
@@ -371,13 +521,19 @@ fun TopBarAiShortcutBox(
     var showCursor by remember { mutableStateOf(true) }
     val flipRotation = remember { Animatable(0f) }
 
-    LaunchedEffect(topBarSettings.animationType, activeTexts) {
+    LaunchedEffect(topBarSettings.animationType, activeTexts, intervalMs) {
         if (activeTexts.isEmpty()) return@LaunchedEffect
         currentIndex = currentIndex.coerceIn(0, activeTexts.lastIndex)
         when (topBarSettings.animationType) {
             TopBarAnimationType.NONE -> {
-                visibleText = activeTexts[currentIndex]
                 showCursor = false
+                while (true) {
+                    visibleText = activeTexts[currentIndex.coerceIn(0, activeTexts.lastIndex)]
+                    delay(intervalMs)
+                    if (activeTexts.size > 1) {
+                        currentIndex = (currentIndex + 1) % activeTexts.size
+                    }
+                }
             }
             TopBarAnimationType.TYPEWRITER -> {
                 while (true) {
@@ -385,36 +541,43 @@ fun TopBarAiShortcutBox(
                     showCursor = true
                     for (i in 1..fullText.length) {
                         visibleText = fullText.substring(0, i)
-                        delay(46L)
+                        delay(42L)
                     }
-                    repeat(8) {
+                    // Hold text visible for the user-configured refresh interval
+                    val holdMs = (intervalMs - (fullText.length * 64L)).coerceAtLeast(1_500L)
+                    val blinkCycles = (holdMs / 450L).toInt().coerceAtLeast(2)
+                    repeat(blinkCycles) {
                         showCursor = !showCursor
                         delay(450L)
                     }
                     showCursor = true
                     for (i in fullText.length - 1 downTo 0) {
                         visibleText = fullText.substring(0, i)
-                        delay(22L)
+                        delay(20L)
                     }
-                    delay(280L)
-                    currentIndex = (currentIndex + 1) % activeTexts.size
+                    delay(220L)
+                    if (activeTexts.size > 1) {
+                        currentIndex = (currentIndex + 1) % activeTexts.size
+                    }
                 }
             }
             TopBarAnimationType.FLIP_BOX -> {
                 flipRotation.snapTo(0f)
                 while (true) {
-                    delay(4800L)
-                    flipRotation.animateTo(90f, animationSpec = tween(220))
-                    currentIndex = (currentIndex + 1) % activeTexts.size
-                    flipRotation.snapTo(-90f)
-                    flipRotation.animateTo(0f, animationSpec = tween(220))
+                    delay(intervalMs)
+                    if (activeTexts.size > 1) {
+                        flipRotation.animateTo(90f, animationSpec = tween(220))
+                        currentIndex = (currentIndex + 1) % activeTexts.size
+                        flipRotation.snapTo(-90f)
+                        flipRotation.animateTo(0f, animationSpec = tween(220))
+                    }
                 }
             }
             TopBarAnimationType.FADE,
             TopBarAnimationType.SLIDE_VERTICAL,
             TopBarAnimationType.SCALE_FADE -> {
                 while (true) {
-                    delay(4200L)
+                    delay(intervalMs)
                     if (activeTexts.size > 1) {
                         currentIndex = (currentIndex + 1) % activeTexts.size
                     }
@@ -423,8 +586,9 @@ fun TopBarAiShortcutBox(
         }
     }
 
-    val safeIndex = currentIndex.coerceIn(0, activeTexts.lastIndex)
-    val currentText = activeTexts[safeIndex]
+    val safeIndex = currentIndex.coerceIn(0, activeEntries.lastIndex)
+    val currentEntry = activeEntries[safeIndex]
+    val currentText = currentEntry.text
     val cursor = if (showCursor) "|" else ""
     val textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = fontFamily)
     fun formatForSource(raw: String): String =
@@ -447,7 +611,19 @@ fun TopBarAiShortcutBox(
             }
             .clickable {
                 if (topBarSettings.textSource == TopBarTextSource.AI_SUGGESTIONS) {
-                    onClick(currentText)
+                    when (val act = currentEntry.action) {
+                        is TopBarSuggestionAction.OpenAiPrompt -> onClick(act.prompt)
+                        is TopBarSuggestionAction.StartZenSound -> {
+                            onStartZenSound?.invoke(act.sound, act.feedbackMessage)
+                                ?: onClick(currentText)
+                        }
+                        is TopBarSuggestionAction.OpenRoute -> {
+                            onNavigateRoute?.invoke(act.route) ?: onClick(currentText)
+                        }
+                        is TopBarSuggestionAction.WellnessReminder -> {
+                            onWellnessAck?.invoke(act.feedbackMessage)
+                        }
+                    }
                 } else if (activeTexts.isNotEmpty()) {
                     currentIndex = (safeIndex + 1) % activeTexts.size
                 }

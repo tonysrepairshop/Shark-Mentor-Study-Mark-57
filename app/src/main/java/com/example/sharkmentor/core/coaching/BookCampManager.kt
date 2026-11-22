@@ -44,6 +44,14 @@ data class PrerequisiteGateResult(
 )
 
 @Immutable
+data class ResolvedYouTubeVideo(
+    val videoId: String,
+    val title: String,
+    val channelName: String = "",
+    val durationLabel: String = ""
+)
+
+@Immutable
 data class CampDayEpisode(
     val dayNumber: Int,
     val topicTitle: String,
@@ -53,15 +61,17 @@ data class CampDayEpisode(
     val searchQuery: String = "",
     val isCompleted: Boolean = false
 ) {
-    fun buildExternalYouTubeUrl(): String {
+    fun buildExternalYouTubeUrl(startSeconds: Int = 0): String {
+        val timeSuffix = if (startSeconds > 0) "&t=${startSeconds}s" else ""
         if (customUrl.isNotBlank() && (customUrl.startsWith("http://") || customUrl.startsWith("https://"))) {
             if (videoId.isNotBlank() || playlistId.isNotBlank()) return customUrl
         }
         if (videoId.isNotBlank() && playlistId.isNotBlank()) {
-            return "https://www.youtube.com/watch?v=$videoId&list=$playlistId"
+            return "https://www.youtube.com/watch?v=$videoId&list=$playlistId$timeSuffix"
         }
         if (videoId.isNotBlank()) {
-            return "https://www.youtube.com/watch?v=$videoId"
+            return if (startSeconds > 0) "https://www.youtube.com/watch?v=$videoId&t=${startSeconds}s"
+            else "https://www.youtube.com/watch?v=$videoId"
         }
         if (playlistId.isNotBlank()) {
             return "https://www.youtube.com/playlist?list=$playlistId&index=$dayNumber"
@@ -70,19 +80,29 @@ data class CampDayEpisode(
         return "https://www.youtube.com/results?search_query=$q"
     }
 
-    fun buildInAppEmbedUrl(): String {
+    fun buildInAppEmbedUrl(adBlockerEnabled: Boolean = true, autoplay: Boolean = true): String {
+        val host = if (adBlockerEnabled) "https://www.youtube-nocookie.com" else "https://www.youtube.com"
+        val autoFlag = if (autoplay) "1" else "0"
         if (videoId.isNotBlank() && playlistId.isNotBlank()) {
-            return "https://www.youtube-nocookie.com/embed/$videoId?list=$playlistId&rel=0&modestbranding=1&playsinline=1"
+            return "$host/embed/$videoId?list=$playlistId&autoplay=$autoFlag&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3&enablejsapi=1"
         }
         if (videoId.isNotBlank()) {
-            return "https://www.youtube-nocookie.com/embed/$videoId?rel=0&modestbranding=1&playsinline=1"
+            return "$host/embed/$videoId?autoplay=$autoFlag&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3&enablejsapi=1"
         }
         if (playlistId.isNotBlank()) {
             val zeroIdx = (dayNumber - 1).coerceAtLeast(0)
-            return "https://www.youtube-nocookie.com/embed/videoseries?list=$playlistId&index=$zeroIdx&rel=0&modestbranding=1&playsinline=1"
+            return "$host/embed/videoseries?list=$playlistId&index=$zeroIdx&autoplay=$autoFlag&rel=0&modestbranding=1&playsinline=1&iv_load_policy=3&enablejsapi=1"
         }
         val q = Uri.encode(searchQuery.ifBlank { topicTitle })
         return "https://m.youtube.com/results?search_query=$q"
+    }
+
+    fun buildMobileWatchUrl(startSeconds: Int = 0): String {
+        if (videoId.isNotBlank()) {
+            val timeParam = if (startSeconds > 0) "&t=${startSeconds}s" else ""
+            return "https://m.youtube.com/watch?v=$videoId$timeParam"
+        }
+        return buildExternalYouTubeUrl(startSeconds)
     }
 }
 
@@ -1009,6 +1029,16 @@ object BookCampManager {
         }
     }
 
+    private fun safeLoadGoalsOffMainThread(context: Context): List<TopicGoalEntity> {
+        val isMainThread = runCatching {
+            android.os.Looper.getMainLooper()?.thread == Thread.currentThread()
+        }.getOrDefault(false)
+        if (isMainThread) return emptyList()
+        return runCatching {
+            SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
+        }.getOrDefault(emptyList())
+    }
+
     /**
      * Resolves either the user-saved [ResourceCampBinding] or a brand-accurate camp match for [resource]
      * with canonical curriculum ordering and topic mastery weighting.
@@ -1019,11 +1049,7 @@ object BookCampManager {
         studentTopicGoals: List<TopicGoalEntity> = emptyList()
     ): ResourceCampBinding {
         ensureLoaded(context)
-        val effectiveGoals = studentTopicGoals.ifEmpty {
-            runCatching {
-                SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
-            }.getOrDefault(emptyList())
-        }
+        val effectiveGoals = studentTopicGoals.ifEmpty { safeLoadGoalsOffMainThread(context) }
 
         _bindingsByResourceId.value[resource.id]?.let { saved ->
             val syncedCurrentDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
@@ -1109,11 +1135,7 @@ object BookCampManager {
         val cleanSubj = subject.trim().ifBlank { "Matematik" }
         val rawTopic = topic.trim().ifBlank { taskTitle.trim() }.ifBlank { cleanSubj }
 
-        val effectiveGoals = studentTopicGoals.ifEmpty {
-            runCatching {
-                SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
-            }.getOrDefault(emptyList())
-        }
+        val effectiveGoals = studentTopicGoals.ifEmpty { safeLoadGoalsOffMainThread(context) }
 
         // Enforce prerequisite foundation gate on the task topic
         val gateResult = enforcePrerequisiteFoundationGate(cleanSubj, rawTopic, effectiveGoals)
@@ -1469,5 +1491,385 @@ object BookCampManager {
             arr.put(obj)
         }
         prefs(context).edit().putString(KEY_BINDINGS_JSON, arr.toString()).apply()
+    }
+
+    // ── Mark 60: Direct YouTube Video Auto-Resolution, Transcript Window & Ad-Blocker Filter ──
+
+    private const val VIDEO_CACHE_PREFS = "shark_mark60_video_cache_prefs"
+    private const val YT_DESKTOP_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
+    private data class TranscriptLine(val startSec: Int, val text: String)
+
+    // Small bounded LRU cache (max 10 videos) to keep RAM usage minimal on low-end devices
+    private val transcriptCache = object : LinkedHashMap<String, List<TranscriptLine>>(12, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<TranscriptLine>>?): Boolean = size > 10
+    }
+
+    private val AD_BLOCK_HOST_PATTERNS = listOf(
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "adservice.google",
+        "googleads.g.doubleclick.net",
+        "pagead2.googlesyndication.com",
+        "tpc.googlesyndication.com",
+        "fundingchoicesmessages.google.com",
+        "s0.2mdn.net",
+        "ad.doubleclick.net",
+        "static.doubleclick.net",
+        "ads.youtube.com",
+        "google-analytics.com",
+        "googletagmanager.com"
+    )
+
+    private val AD_BLOCK_PATH_PATTERNS = listOf(
+        "/pagead/",
+        "/api/stats/ads",
+        "/get_midroll_info",
+        "/ptracking",
+        "/youtubei/v1/log_event",
+        "adformat=",
+        "&ad_type=",
+        "?ad_type=",
+        "&oad=",
+        "/pcs/activeview",
+        "/generate_204"
+    )
+
+    /**
+     * Opera-style YouTube ad & tracker network classifier.
+     * Blocks ad-serving hosts and YouTube ad/telemetry endpoints while NEVER blocking legitimate
+     * video stream playback (`googlevideo.com/videoplayback`), thumbnails (`ytimg.com`), or embeds.
+     */
+    fun isAdOrTrackerUrl(rawUrl: String): Boolean {
+        val lower = rawUrl.trim().lowercase(Locale.ROOT)
+        if (lower.isBlank()) return false
+        val host = runCatching { java.net.URI(lower).host.orEmpty() }.getOrDefault("")
+        if (AD_BLOCK_HOST_PATTERNS.any { host.contains(it) }) return true
+        // Never block main video playback media streams on googlevideo.com unless marked as an ad request
+        if (host.contains("googlevideo.com")) {
+            return lower.contains("&ctier=l") || lower.contains("oad=") || lower.contains("adformat=")
+        }
+        return AD_BLOCK_PATH_PATTERNS.any { lower.contains(it) }
+    }
+
+    /**
+     * Extracts a mentioned playback timestamp (in seconds) from a student's question.
+     * Supports formats like `"4.5 dakika"`, `"4,5 dk"`, `"4:30"`, `"1:04:15"`, `"4 dk 20 sn"`, `"12. dakikadaki"`.
+     */
+    fun extractMentionedTimestampSeconds(question: String): Int? {
+        val text = question.trim().lowercase(TR_LOCALE)
+        if (text.isBlank()) return null
+
+        // 1. hh:mm:ss or mm:ss (e.g. "1:04:20" or "4:30")
+        val hmsMatch = Regex("""\b(\d{1,2}):(\d{2})(?::(\d{2}))?\b""").find(text)
+        if (hmsMatch != null) {
+            val a = hmsMatch.groupValues[1].toIntOrNull() ?: 0
+            val b = hmsMatch.groupValues[2].toIntOrNull() ?: 0
+            val c = hmsMatch.groupValues[3].toIntOrNull()
+            return if (c != null) (a * 3600) + (b * 60) + c else (a * 60) + b
+        }
+
+        // 2. "X dk Y sn" / "X dakika Y saniye"
+        val minSecMatch = Regex("""\b(\d{1,3})\s*(?:dk|dakika)\.?\s*(\d{1,2})\s*(?:sn|saniye)\b""").find(text)
+        if (minSecMatch != null) {
+            val mins = minSecMatch.groupValues[1].toIntOrNull() ?: 0
+            val secs = minSecMatch.groupValues[2].toIntOrNull() ?: 0
+            return (mins * 60) + secs
+        }
+
+        // 3. Decimal or integer minutes: "4.5 dakikadaki", "4,5 dk", "12. dakikada"
+        val decMinMatch = Regex("""\b(\d{1,3}(?:[.,]\d{1,2})?)\s*\.?\s*(?:dakika\w*|dk\w*)\b""").find(text)
+        if (decMinMatch != null) {
+            val rawNum = decMinMatch.groupValues[1].replace(',', '.')
+            val minsFloat = rawNum.toDoubleOrNull()
+            if (minsFloat != null && minsFloat >= 0.0) {
+                return kotlin.math.round(minsFloat * 60.0).toInt()
+            }
+        }
+
+        // 4. Standalone seconds: "95 saniye" / "45. sn"
+        val secOnlyMatch = Regex("""\b(\d{1,4})\s*\.?\s*(?:saniye\w*|sn)\b""").find(text)
+        if (secOnlyMatch != null) {
+            return secOnlyMatch.groupValues[1].toIntOrNull()
+        }
+
+        return null
+    }
+
+    fun formatSecondsAsTimestamp(totalSeconds: Int): String {
+        val safe = totalSeconds.coerceAtLeast(0)
+        val h = safe / 3600
+        val m = (safe % 3600) / 60
+        val s = safe % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+    }
+
+    /**
+     * Resolves direct playable YouTube videos (real 11-char `videoId`s) for a camp episode on `Dispatchers.IO`,
+     * avoiding YouTube search pages inside the studio player. Results are cached locally per query/playlist.
+     */
+    suspend fun resolveDirectVideosForEpisode(
+        context: Context,
+        campTitle: String,
+        subject: String,
+        episode: CampDayEpisode
+    ): List<ResolvedYouTubeVideo> = withContext(Dispatchers.IO) {
+        if (episode.videoId.length == 11) {
+            return@withContext listOf(
+                ResolvedYouTubeVideo(
+                    videoId = episode.videoId,
+                    title = episode.topicTitle.ifBlank { campTitle },
+                    channelName = campTitle
+                )
+            )
+        }
+
+        val cleanQuery = episode.searchQuery.trim()
+            .ifBlank { "$campTitle $subject ${episode.topicTitle.substringBefore(" (").trim()} konu anlatımı" }
+        val cacheKey = if (episode.playlistId.isNotBlank()) {
+            "pl_${episode.playlistId}_d${episode.dayNumber}"
+        } else {
+            "q_${cleanQuery.lowercase(TR_LOCALE).take(120)}"
+        }
+
+        // 1. Instant local cache check
+        val cachePrefs = context.applicationContext.getSharedPreferences(VIDEO_CACHE_PREFS, Context.MODE_PRIVATE)
+        val cachedJson = cachePrefs.getString(cacheKey, null)
+        if (!cachedJson.isNullOrBlank()) {
+            val cached = parseCachedResolvedVideos(cachedJson)
+            if (cached.isNotEmpty()) return@withContext cached
+        }
+
+        // 2. Live resolution from YouTube Playlist or Search ytInitialData
+        val resolved = mutableListOf<ResolvedYouTubeVideo>()
+        if (episode.playlistId.isNotBlank()) {
+            val plUrl = "https://www.youtube.com/playlist?list=${episode.playlistId}&hl=tr"
+            val html = fetchHtmlQuietly(plUrl)
+            if (!html.isNullOrBlank()) {
+                val plVideos = extractPlaylistVideosFromHtml(html)
+                if (plVideos.isNotEmpty()) {
+                    val idx = (episode.dayNumber - 1).coerceIn(0, plVideos.lastIndex)
+                    resolved.add(plVideos[idx])
+                    plVideos.forEach { v -> if (resolved.size < 5 && resolved.none { it.videoId == v.videoId }) resolved.add(v) }
+                }
+            }
+        }
+
+        if (resolved.isEmpty()) {
+            val encoded = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
+            val searchUrl = "https://www.youtube.com/results?search_query=$encoded&hl=tr&gl=TR"
+            val html = fetchHtmlQuietly(searchUrl)
+            if (!html.isNullOrBlank()) {
+                val rawCandidates = extractSearchVideosFromHtml(html)
+                val queryTokens = cleanQuery.lowercase(TR_LOCALE)
+                    .split(Regex("""[\s•\-()/:]+"""))
+                    .filter { it.length >= 3 && it !in setOf("konu", "anlatımı", "kampı", "ders", "video", "gün") }
+
+                val scored = rawCandidates.sortedByDescending { cand ->
+                    val hay = "${cand.title} ${cand.channelName}".lowercase(TR_LOCALE)
+                    var score = queryTokens.count { hay.contains(it) } * 10
+                    if (hay.contains("shorts") || cand.durationLabel.startsWith("0:")) score -= 25
+                    if (hay.contains(episode.topicTitle.substringBefore(" (").trim().lowercase(TR_LOCALE))) score += 20
+                    score
+                }
+                resolved.addAll(scored.take(5))
+            }
+        }
+
+        if (resolved.isNotEmpty()) {
+            runCatching {
+                val arr = JSONArray()
+                resolved.forEach { v ->
+                    arr.put(
+                        JSONObject().apply {
+                            put("id", v.videoId)
+                            put("t", v.title)
+                            put("c", v.channelName)
+                            put("d", v.durationLabel)
+                        }
+                    )
+                }
+                cachePrefs.edit().putString(cacheKey, arr.toString()).apply()
+            }
+        }
+
+        resolved
+    }
+
+    /**
+     * Fetches the spoken caption/transcript lines around [centerSeconds] (±[windowRadiusSeconds])
+     * for [videoId] so Studio AI can directly answer questions like "4.5 dakikadaki formül neden öyle?".
+     */
+    suspend fun fetchYouTubeTranscriptWindow(
+        videoId: String,
+        centerSeconds: Int,
+        windowRadiusSeconds: Int = 75
+    ): String = withContext(Dispatchers.IO) {
+        if (videoId.length != 11) return@withContext ""
+        val lines = synchronized(transcriptCache) { transcriptCache[videoId] } ?: run {
+            val fetched = fetchCaptionLinesForVideo(videoId)
+            if (fetched.isNotEmpty()) {
+                synchronized(transcriptCache) { transcriptCache[videoId] = fetched }
+            }
+            fetched
+        }
+        if (lines.isEmpty()) return@withContext ""
+
+        val minSec = (centerSeconds - windowRadiusSeconds).coerceAtLeast(0)
+        val maxSec = centerSeconds + windowRadiusSeconds
+        val window = lines.filter { it.startSec in minSec..maxSec }
+            .ifEmpty { lines.take(18) }
+
+        window.joinToString("\n") { line ->
+            "[${formatSecondsAsTimestamp(line.startSec)}] ${line.text}"
+        }.take(2400)
+    }
+
+    private fun fetchCaptionLinesForVideo(videoId: String): List<TranscriptLine> {
+        val watchHtml = fetchHtmlQuietly("https://www.youtube.com/watch?v=$videoId&hl=tr") ?: return emptyList()
+        val tracksMatch = Regex(""""captionTracks":(\[[\s\S]*?\])""").find(watchHtml) ?: return emptyList()
+        val tracksArr = runCatching { JSONArray(tracksMatch.groupValues[1]) }.getOrNull() ?: return emptyList()
+        if (tracksArr.length() == 0) return emptyList()
+
+        var chosenBaseUrl = ""
+        for (i in 0 until tracksArr.length()) {
+            val obj = tracksArr.optJSONObject(i) ?: continue
+            val lang = obj.optString("languageCode", "")
+            val url = obj.optString("baseUrl", "").replace("\\u0026", "&")
+            if (url.isBlank()) continue
+            if (lang.startsWith("tr", ignoreCase = true)) {
+                chosenBaseUrl = url
+                break
+            }
+            if (chosenBaseUrl.isBlank()) chosenBaseUrl = url
+        }
+        if (chosenBaseUrl.isBlank()) return emptyList()
+
+        val xml = fetchHtmlQuietly(chosenBaseUrl) ?: return emptyList()
+        val textTagRegex = Regex("""<text\s+start="([\d.]+)"[^>]*>([\s\S]*?)</text>""")
+        val out = mutableListOf<TranscriptLine>()
+        for (m in textTagRegex.findAll(xml)) {
+            val sec = m.groupValues[1].toDoubleOrNull()?.toInt() ?: continue
+            val cleanText = decodeHtmlEntities(m.groupValues[2])
+                .replace(Regex("""<[^>]+>"""), " ")
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+            if (cleanText.isNotBlank()) {
+                out.add(TranscriptLine(sec, cleanText))
+            }
+        }
+        return out
+    }
+
+    private fun decodeHtmlEntities(raw: String): String =
+        raw.replace("&amp;", "&")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&nbsp;", " ")
+
+    private fun fetchHtmlQuietly(urlString: String): String? {
+        return runCatching {
+            val conn = (java.net.URL(urlString).openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 9_000
+                readTimeout = 10_000
+                setRequestProperty("User-Agent", YT_DESKTOP_UA)
+                setRequestProperty("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8")
+                setRequestProperty("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+917")
+            }
+            try {
+                if (conn.responseCode in 200..299) {
+                    conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                        val buf = CharArray(8192)
+                        val sb = StringBuilder()
+                        var total = 0
+                        while (total < 1_400_000) {
+                            val read = reader.read(buf)
+                            if (read <= 0) break
+                            sb.append(buf, 0, read)
+                            total += read
+                        }
+                        sb.toString()
+                    }
+                } else null
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
+
+    private fun extractSearchVideosFromHtml(html: String): List<ResolvedYouTubeVideo> {
+        val out = mutableListOf<ResolvedYouTubeVideo>()
+        val seen = HashSet<String>()
+        val rendererRegex = Regex(""""videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"[\s\S]{0,2200}?(?="videoRenderer":|\}\]\}\})""")
+        val titleRegex = Regex(""""title":\{"runs":\[\{"text":"([^"\\]{2,140})"""")
+        val ownerRegex = Regex(""""(?:ownerText|longBylineText)":\{"runs":\[\{"text":"([^"\\]{2,80})"""")
+        val lenRegex = Regex(""""lengthText":\{[^\}]{0,180}"simpleText":"([0-9:]{3,10})"""")
+
+        for (match in rendererRegex.findAll(html)) {
+            val vid = match.groupValues[1]
+            if (!seen.add(vid)) continue
+            val chunk = match.value
+            val title = titleRegex.find(chunk)?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) } ?: "Ders Videosu"
+            val channel = ownerRegex.find(chunk)?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) }.orEmpty()
+            val duration = lenRegex.find(chunk)?.groupValues?.getOrNull(1).orEmpty()
+            out.add(ResolvedYouTubeVideo(videoId = vid, title = title, channelName = channel, durationLabel = duration))
+            if (out.size >= 12) break
+        }
+
+        // Ultra-safe regex fallback if YouTube slightly changed JSON field order
+        if (out.isEmpty()) {
+            val fallbackRegex = Regex(""""videoId":"([a-zA-Z0-9_-]{11})"""")
+            for (m in fallbackRegex.findAll(html)) {
+                val vid = m.groupValues[1]
+                if (seen.add(vid)) {
+                    out.add(ResolvedYouTubeVideo(videoId = vid, title = "Ders Videosu"))
+                    if (out.size >= 5) break
+                }
+            }
+        }
+        return out
+    }
+
+    private fun extractPlaylistVideosFromHtml(html: String): List<ResolvedYouTubeVideo> {
+        val out = mutableListOf<ResolvedYouTubeVideo>()
+        val seen = HashSet<String>()
+        val plRegex = Regex(""""playlistVideoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"[\s\S]{0,1600}?(?="playlistVideoRenderer":|\}\]\}\})""")
+        val titleRegex = Regex(""""title":\{"runs":\[\{"text":"([^"\\]{2,140})"""")
+        val lenRegex = Regex(""""lengthText":\{[^\}]{0,180}"simpleText":"([0-9:]{3,10})"""")
+
+        for (match in plRegex.findAll(html)) {
+            val vid = match.groupValues[1]
+            if (!seen.add(vid)) continue
+            val chunk = match.value
+            val title = titleRegex.find(chunk)?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) } ?: "Kamp Videosu"
+            val duration = lenRegex.find(chunk)?.groupValues?.getOrNull(1).orEmpty()
+            out.add(ResolvedYouTubeVideo(videoId = vid, title = title, durationLabel = duration))
+            if (out.size >= 60) break
+        }
+        return out
+    }
+
+    private fun unescapeJsonString(raw: String): String =
+        runCatching { JSONObject("""{"v":"$raw"}""").optString("v", raw) }.getOrDefault(raw)
+
+    private fun parseCachedResolvedVideos(rawJson: String): List<ResolvedYouTubeVideo> {
+        return runCatching {
+            val arr = JSONArray(rawJson)
+            List(arr.length()) { idx ->
+                val obj = arr.getJSONObject(idx)
+                ResolvedYouTubeVideo(
+                    videoId = obj.optString("id", ""),
+                    title = obj.optString("t", ""),
+                    channelName = obj.optString("c", ""),
+                    durationLabel = obj.optString("d", "")
+                )
+            }.filter { it.videoId.length == 11 }
+        }.getOrDefault(emptyList())
     }
 }
