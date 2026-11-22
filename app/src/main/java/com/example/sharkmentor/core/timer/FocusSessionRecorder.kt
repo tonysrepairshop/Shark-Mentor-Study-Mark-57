@@ -55,6 +55,9 @@ object FocusSessionRecorder {
     /** Minimum duration (60 seconds) required to persist a session that hasn't hit a 20-min checkpoint. */
     const val MIN_RECORDABLE_DURATION_MS: Long = 60_000L
 
+    /** If a paused session sits idle for >= 20 minutes (or crosses midnight) before resuming, seal it and start a fresh session row. */
+    const val PAUSE_SPLIT_THRESHOLD_MS: Long = 20L * 60L * 1_000L
+
     /** Lightweight SharedPreferences checkpoint flush interval (15 seconds) for crash resilience. */
     private const val PREFS_HEARTBEAT_INTERVAL_MS: Long = 15_000L
 
@@ -66,6 +69,8 @@ object FocusSessionRecorder {
     private const val KEY_MODE_NAME = "mode_name"
     private const val KEY_SUBJECT_NAME = "subject_name"
     private const val KEY_STARTED_AT_MILLIS = "started_at_millis"
+    private const val KEY_LAST_ACTIVE_WALL_MILLIS = "last_active_wall_millis"
+    private const val KEY_SESSION_ELAPSED_OFFSET_MS = "session_elapsed_offset_ms"
     private const val KEY_LAST_KNOWN_ELAPSED_MS = "last_known_elapsed_ms"
     private const val KEY_LAST_LOCAL_SAVE_ELAPSED_MS = "last_local_save_elapsed_ms"
     private const val KEY_LAST_CLOUD_SYNC_ELAPSED_MS = "last_cloud_sync_elapsed_ms"
@@ -91,6 +96,12 @@ object FocusSessionRecorder {
 
     @Volatile
     private var activeRowId: Long = 0L
+
+    @Volatile
+    private var sessionElapsedOffsetMs: Long = 0L
+
+    @Volatile
+    private var lastActiveWallMillis: Long = 0L
 
     @Volatile
     private var lastPrefsHeartbeatElapsedMs: Long = 0L
@@ -140,6 +151,44 @@ object FocusSessionRecorder {
         val shouldLocal20Min = (elapsedMillis - lastLocalSaveMs) >= LOCAL_CHECKPOINT_INTERVAL_MS
         val shouldCloud60Min = (elapsedMillis - lastCloudSyncMs) >= CLOUD_SYNC_INTERVAL_MS
         return Triple(shouldHeartbeat, shouldLocal20Min, shouldCloud60Min)
+    }
+
+    /**
+     * Determines whether resuming a paused session should seal the previous study block and start a
+     * new session row so separate study sessions across the day/night are never merged into one record.
+     */
+    internal fun shouldSplitSessionAfterPause(
+        lastActiveWallMs: Long,
+        resumeWallMs: Long
+    ): Boolean {
+        if (lastActiveWallMs <= 0L || resumeWallMs <= lastActiveWallMs) return false
+        if ((resumeWallMs - lastActiveWallMs) >= PAUSE_SPLIT_THRESHOLD_MS) return true
+        val c1 = java.util.Calendar.getInstance().apply { timeInMillis = lastActiveWallMs }
+        val c2 = java.util.Calendar.getInstance().apply { timeInMillis = resumeWallMs }
+        return c1.get(java.util.Calendar.YEAR) != c2.get(java.util.Calendar.YEAR) ||
+            c1.get(java.util.Calendar.DAY_OF_YEAR) != c2.get(java.util.Calendar.DAY_OF_YEAR)
+    }
+
+    /**
+     * Resolves the real wall-clock completion timestamp for a session so an offline session studied earlier
+     * is never timestamped at 03:00 AM when the service dies or Wi-Fi reconnects hours later.
+     */
+    internal fun resolveActualCompletedAtMillis(
+        startedAtWallMs: Long,
+        lastActiveWallMs: Long,
+        segmentDurationMs: Long,
+        nowWallMs: Long
+    ): Long {
+        if (lastActiveWallMs > 0L && (nowWallMs - lastActiveWallMs) > 60_000L) {
+            return lastActiveWallMs
+        }
+        if (startedAtWallMs > 0L && segmentDurationMs > 0L) {
+            val estimatedEnd = startedAtWallMs + segmentDurationMs
+            if ((nowWallMs - estimatedEnd) > 120_000L) {
+                return if (lastActiveWallMs > 0L) minOf(lastActiveWallMs, estimatedEnd) else estimatedEnd
+            }
+        }
+        return if (lastActiveWallMs > 0L) lastActiveWallMs else nowWallMs
     }
 
     /**
@@ -217,7 +266,8 @@ object FocusSessionRecorder {
 
     /**
      * Recovers and finalizes any orphaned session left in SharedPreferences after an unexpected
-     * process death or crash, ensuring the same Room row is updated without double-counting.
+     * process death or crash, ensuring the same Room row is updated with its actual last active timestamp
+     * (never the later app restart or Wi-Fi connection time).
      */
     fun recoverOrphanedSessionIfNeeded(context: Context, isTimerCurrentlyActive: Boolean) {
         if (isTimerCurrentlyActive || !isFinalized) return
@@ -238,6 +288,8 @@ object FocusSessionRecorder {
 
                 val orphanRowId = sp.getLong(KEY_ACTIVE_ROW_ID, 0L)
                 val orphanElapsedMs = sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L)
+                val orphanStartedAtMs = sp.getLong(KEY_STARTED_AT_MILLIS, 0L)
+                val orphanLastActiveWallMs = sp.getLong(KEY_LAST_ACTIVE_WALL_MILLIS, 0L)
                 val orphanMode = sp.getString(KEY_MODE_NAME, TimerMode.STOPWATCH.displayName)
                     ?: TimerMode.STOPWATCH.displayName
                 val orphanSubject = sp.getString(KEY_SUBJECT_NAME, "Genel") ?: "Genel"
@@ -245,9 +297,16 @@ object FocusSessionRecorder {
                 val orphanScreenOnMs = sp.getLong(KEY_SCREEN_ON_MILLIS, 0L)
                 val orphanSyncedSec = sp.getLong(KEY_LAST_CLOUD_SYNCED_SECONDS, 0L)
 
+                val actualCompletedAt = resolveActualCompletedAtMillis(
+                    startedAtWallMs = orphanStartedAtMs,
+                    lastActiveWallMs = orphanLastActiveWallMs,
+                    segmentDurationMs = orphanElapsedMs,
+                    nowWallMs = System.currentTimeMillis()
+                )
+
                 Log.w(
                     TAG,
-                    "Recovering orphaned focus session uuid=$orphanUuid, rowId=$orphanRowId, elapsedMs=$orphanElapsedMs"
+                    "Recovering orphaned focus session uuid=$orphanUuid, rowId=$orphanRowId, elapsedMs=$orphanElapsedMs, completedAt=$actualCompletedAt"
                 )
 
                 if (orphanElapsedMs >= MIN_RECORDABLE_DURATION_MS || orphanRowId > 0L) {
@@ -259,7 +318,8 @@ object FocusSessionRecorder {
                         durationMillis = orphanElapsedMs,
                         phoneLiftCount = orphanLifts,
                         screenOnMillis = orphanScreenOnMs,
-                        markSynced = false
+                        markSynced = false,
+                        completedAtMillis = actualCompletedAt
                     )
                     evaluateWaterStreakAndRefreshWidgets(appContext)
                     recoveredEntity = savedRow
@@ -286,7 +346,8 @@ object FocusSessionRecorder {
 
     /**
      * Starts a new focus session, generating a unique UUID and initializing in-memory state synchronously
-     * so early ticks are never lost. If a previous session was still open, finalizes it locally first.
+     * so early ticks are never lost. If a previous session was still open, finalizes it locally at its
+     * original last active timestamp first.
      */
     fun startSession(
         context: Context,
@@ -300,6 +361,8 @@ object FocusSessionRecorder {
         // Synchronously activate the new session before async I/O so no early ticks are dropped
         activeSessionId = newUuid
         activeRowId = 0L
+        sessionElapsedOffsetMs = 0L
+        lastActiveWallMillis = nowWall
         lastPrefsHeartbeatElapsedMs = 0L
         lastLocalSaveElapsedMs = 0L
         lastCloudSyncElapsedMs = 0L
@@ -314,7 +377,7 @@ object FocusSessionRecorder {
 
             localMutex.withLock {
                 val sp = prefs(appContext)
-                // If an unfinalized session was left open, finalize it cleanly in Room first
+                // If an unfinalized session was left open, finalize it cleanly in Room at its real timestamp first
                 val prevFinalized = sp.getBoolean(KEY_IS_FINALIZED, true)
                 val prevUuid = sp.getString(KEY_ACTIVE_SESSION_UUID, null)
                 val prevElapsed = sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L)
@@ -327,6 +390,14 @@ object FocusSessionRecorder {
                     val prevLifts = sp.getInt(KEY_PHONE_LIFT_COUNT, 0)
                     val prevScreenOn = sp.getLong(KEY_SCREEN_ON_MILLIS, 0L)
                     val prevSyncedSec = sp.getLong(KEY_LAST_CLOUD_SYNCED_SECONDS, 0L)
+                    val prevStartedAt = sp.getLong(KEY_STARTED_AT_MILLIS, 0L)
+                    val prevLastActive = sp.getLong(KEY_LAST_ACTIVE_WALL_MILLIS, 0L)
+                    val prevCompletedAt = resolveActualCompletedAtMillis(
+                        startedAtWallMs = prevStartedAt,
+                        lastActiveWallMs = prevLastActive,
+                        segmentDurationMs = prevElapsed,
+                        nowWallMs = nowWall
+                    )
 
                     val savedPrev = upsertSingleSessionRowInternal(
                         context = appContext,
@@ -336,7 +407,8 @@ object FocusSessionRecorder {
                         durationMillis = prevElapsed,
                         phoneLiftCount = prevLifts,
                         screenOnMillis = prevScreenOn,
-                        markSynced = false
+                        markSynced = false,
+                        completedAtMillis = prevCompletedAt
                     )
                     evaluateWaterStreakAndRefreshWidgets(appContext)
                     prevEntityToSync = savedPrev
@@ -353,6 +425,8 @@ object FocusSessionRecorder {
                         .putString(KEY_MODE_NAME, modeName)
                         .putString(KEY_SUBJECT_NAME, subjectName)
                         .putLong(KEY_STARTED_AT_MILLIS, nowWall)
+                        .putLong(KEY_LAST_ACTIVE_WALL_MILLIS, nowWall)
+                        .putLong(KEY_SESSION_ELAPSED_OFFSET_MS, 0L)
                         .putLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L)
                         .putLong(KEY_LAST_LOCAL_SAVE_ELAPSED_MS, 0L)
                         .putLong(KEY_LAST_CLOUD_SYNC_ELAPSED_MS, 0L)
@@ -381,6 +455,121 @@ object FocusSessionRecorder {
     }
 
     /**
+     * Called when a paused timer is resumed. If the session sat paused for >= [PAUSE_SPLIT_THRESHOLD_MS]
+     * (20 minutes) or across a midnight boundary, seals the earlier study block as a finished session
+     * at its original pause timestamp and opens a fresh session row so multiple offline study blocks
+     * are never merged into one combined record.
+     */
+    fun onResumeSession(
+        context: Context,
+        currentTotalElapsedMillis: Long,
+        modeName: String,
+        subjectName: String,
+        phoneLiftCount: Int,
+        screenOnMillis: Long
+    ) {
+        if (isFinalized) return
+        val appContext = context.applicationContext
+        val nowWall = System.currentTimeMillis()
+        recorderScope.launch {
+            var sealedEntityToSync: FocusSessionEntity? = null
+            var sealedUuidToSync = ""
+            var sealedSubjectToSync = subjectName
+            var sealedPrevSyncedSec = 0L
+
+            localMutex.withLock {
+                if (isFinalized) return@withLock
+                val sp = prefs(appContext)
+                val prevLastActive = lastActiveWallMillis.takeIf { it > 0L }
+                    ?: sp.getLong(KEY_LAST_ACTIVE_WALL_MILLIS, 0L)
+                if (!shouldSplitSessionAfterPause(prevLastActive, nowWall)) {
+                    lastActiveWallMillis = nowWall
+                    sp.edit().putLong(KEY_LAST_ACTIVE_WALL_MILLIS, nowWall).apply()
+                    return@withLock
+                }
+
+                // Seal the previous study block at its real pause timestamp
+                val prevUuid = activeSessionId
+                    ?: sp.getString(KEY_ACTIVE_SESSION_UUID, null)
+                val prevRowId = activeRowId.takeIf { it > 0L } ?: sp.getLong(KEY_ACTIVE_ROW_ID, 0L)
+                val prevOffset = maxOf(sessionElapsedOffsetMs, sp.getLong(KEY_SESSION_ELAPSED_OFFSET_MS, 0L))
+                val prevSegmentElapsed = maxOf(
+                    (currentTotalElapsedMillis - prevOffset).coerceAtLeast(0L),
+                    sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L)
+                )
+                val prevSyncedSec = maxOf(
+                    lastCloudSyncedSeconds,
+                    sp.getLong(KEY_LAST_CLOUD_SYNCED_SECONDS, 0L)
+                )
+
+                if (!prevUuid.isNullOrBlank() && (prevSegmentElapsed >= MIN_RECORDABLE_DURATION_MS || prevRowId > 0L)) {
+                    val savedPrev = upsertSingleSessionRowInternal(
+                        context = appContext,
+                        sessionUuid = prevUuid,
+                        existingRowId = prevRowId,
+                        modeName = modeName,
+                        durationMillis = prevSegmentElapsed,
+                        phoneLiftCount = phoneLiftCount,
+                        screenOnMillis = screenOnMillis,
+                        markSynced = false,
+                        completedAtMillis = prevLastActive.takeIf { it > 0L } ?: nowWall
+                    )
+                    evaluateWaterStreakAndRefreshWidgets(appContext)
+                    sealedEntityToSync = savedPrev
+                    sealedUuidToSync = prevUuid
+                    sealedSubjectToSync = sp.getString(KEY_SUBJECT_NAME, subjectName) ?: subjectName
+                    sealedPrevSyncedSec = prevSyncedSec
+                }
+
+                // Start a fresh session UUID & row for the new resumed study block
+                val newUuid = UUID.randomUUID().toString()
+                val newOffset = currentTotalElapsedMillis.coerceAtLeast(0L)
+                activeSessionId = newUuid
+                activeRowId = 0L
+                sessionElapsedOffsetMs = newOffset
+                lastActiveWallMillis = nowWall
+                lastPrefsHeartbeatElapsedMs = 0L
+                lastLocalSaveElapsedMs = 0L
+                lastCloudSyncElapsedMs = 0L
+                lastCloudSyncedSeconds = 0L
+
+                sp.edit()
+                    .putString(KEY_ACTIVE_SESSION_UUID, newUuid)
+                    .putLong(KEY_ACTIVE_ROW_ID, 0L)
+                    .putString(KEY_MODE_NAME, modeName)
+                    .putString(KEY_SUBJECT_NAME, subjectName)
+                    .putLong(KEY_STARTED_AT_MILLIS, nowWall)
+                    .putLong(KEY_LAST_ACTIVE_WALL_MILLIS, nowWall)
+                    .putLong(KEY_SESSION_ELAPSED_OFFSET_MS, newOffset)
+                    .putLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L)
+                    .putLong(KEY_LAST_LOCAL_SAVE_ELAPSED_MS, 0L)
+                    .putLong(KEY_LAST_CLOUD_SYNC_ELAPSED_MS, 0L)
+                    .putLong(KEY_LAST_CLOUD_SYNCED_SECONDS, 0L)
+                    .putInt(KEY_PHONE_LIFT_COUNT, phoneLiftCount)
+                    .putLong(KEY_SCREEN_ON_MILLIS, screenOnMillis)
+                    .putBoolean(KEY_IS_FINALIZED, false)
+                    .apply()
+
+                Log.i(
+                    TAG,
+                    "Split paused session after long idle gap: sealed prevUuid=$prevUuid (${prevSegmentElapsed / 60000}m at $prevLastActive), started newUuid=$newUuid"
+                )
+            }
+
+            sealedEntityToSync?.let { entity ->
+                dispatchCloudSyncAsync(
+                    appContext = appContext,
+                    sessionEntity = entity,
+                    sessionUuid = sealedUuidToSync,
+                    subjectName = sealedSubjectToSync,
+                    fallbackPreviouslySyncedSeconds = sealedPrevSyncedSec,
+                    isFinal = true
+                )
+            }
+        }
+    }
+
+    /**
      * Called on each timer tick while focusing.
      * - Flushes lightweight crash-recovery checkpoint every 15 seconds.
      * - Upserts the single Room row every **20 minutes** (`1_200_000 ms`) with `isSynced = false` (never blocked by network).
@@ -397,8 +586,12 @@ object FocusSessionRecorder {
     ) {
         if (elapsedMillis <= 0L || isFinalized) return
 
+        val segmentElapsedMs = (elapsedMillis - sessionElapsedOffsetMs).coerceAtLeast(1_000L)
+        val nowWall = System.currentTimeMillis()
+        lastActiveWallMillis = nowWall
+
         val (shouldFlushHeartbeat, shouldSaveLocal20Min, shouldSyncCloud60Min) = computeCheckpointTriggers(
-            elapsedMillis = elapsedMillis,
+            elapsedMillis = segmentElapsedMs,
             lastHeartbeatMs = lastPrefsHeartbeatElapsedMs,
             lastLocalSaveMs = lastLocalSaveElapsedMs,
             lastCloudSyncMs = lastCloudSyncElapsedMs
@@ -411,17 +604,17 @@ object FocusSessionRecorder {
         val appContext = context.applicationContext
         val capturedSessionUuid = activeSessionId
         if (shouldFlushHeartbeat) {
-            lastPrefsHeartbeatElapsedMs = elapsedMillis
+            lastPrefsHeartbeatElapsedMs = segmentElapsedMs
         }
         val nextLocalBucketMs = if (shouldSaveLocal20Min) {
-            ((elapsedMillis / LOCAL_CHECKPOINT_INTERVAL_MS) * LOCAL_CHECKPOINT_INTERVAL_MS).also {
+            ((segmentElapsedMs / LOCAL_CHECKPOINT_INTERVAL_MS) * LOCAL_CHECKPOINT_INTERVAL_MS).also {
                 lastLocalSaveElapsedMs = it
             }
         } else {
             lastLocalSaveElapsedMs
         }
         val nextCloudBucketMs = if (shouldSyncCloud60Min) {
-            ((elapsedMillis / CLOUD_SYNC_INTERVAL_MS) * CLOUD_SYNC_INTERVAL_MS).also {
+            ((segmentElapsedMs / CLOUD_SYNC_INTERVAL_MS) * CLOUD_SYNC_INTERVAL_MS).also {
                 lastCloudSyncElapsedMs = it
             }
         } else {
@@ -448,7 +641,8 @@ object FocusSessionRecorder {
                     .putString(KEY_ACTIVE_SESSION_UUID, uuid)
                     .putString(KEY_MODE_NAME, modeName)
                     .putString(KEY_SUBJECT_NAME, subjectName)
-                    .putLong(KEY_LAST_KNOWN_ELAPSED_MS, elapsedMillis)
+                    .putLong(KEY_LAST_ACTIVE_WALL_MILLIS, nowWall)
+                    .putLong(KEY_LAST_KNOWN_ELAPSED_MS, segmentElapsedMs)
                     .putInt(KEY_PHONE_LIFT_COUNT, phoneLiftCount)
                     .putLong(KEY_SCREEN_ON_MILLIS, screenOnMillis)
                     .putBoolean(KEY_IS_FINALIZED, false)
@@ -461,10 +655,11 @@ object FocusSessionRecorder {
                         sessionUuid = uuid,
                         existingRowId = activeRowId.takeIf { it > 0L } ?: sp.getLong(KEY_ACTIVE_ROW_ID, 0L),
                         modeName = modeName,
-                        durationMillis = elapsedMillis,
+                        durationMillis = segmentElapsedMs,
                         phoneLiftCount = phoneLiftCount,
                         screenOnMillis = screenOnMillis,
-                        markSynced = false
+                        markSynced = false,
+                        completedAtMillis = nowWall
                     )
                     activeRowId = savedEntity.id
                     sp.edit()
@@ -505,8 +700,8 @@ object FocusSessionRecorder {
     }
 
     /**
-     * Called when the user pauses the timer so the exact paused elapsed time is persisted in both
-     * SharedPreferences and Room without finalizing the session.
+     * Called when the user pauses the timer so the exact paused elapsed time and wall-clock pause
+     * timestamp are persisted in both SharedPreferences and Room without finalizing the session.
      */
     fun onPauseCheckpoint(
         context: Context,
@@ -514,14 +709,19 @@ object FocusSessionRecorder {
         modeName: String,
         subjectName: String,
         phoneLiftCount: Int,
-        screenOnMillis: Long
+        screenOnMillis: Long,
+        overrideCompletedAtMillis: Long = 0L
     ) {
         val appContext = context.applicationContext
+        val pauseWallMs = if (overrideCompletedAtMillis > 0L) overrideCompletedAtMillis else System.currentTimeMillis()
+        lastActiveWallMillis = pauseWallMs
         recorderScope.launch {
             localMutex.withLock {
                 if (isFinalized) return@withLock
                 val sp = prefs(appContext)
-                val effectiveElapsed = maxOf(elapsedMillis, sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L))
+                val offset = maxOf(sessionElapsedOffsetMs, sp.getLong(KEY_SESSION_ELAPSED_OFFSET_MS, 0L))
+                val segmentElapsed = (elapsedMillis - offset).coerceAtLeast(0L)
+                val effectiveElapsed = maxOf(segmentElapsed, sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L))
                 val uuid = activeSessionId
                     ?: sp.getString(KEY_ACTIVE_SESSION_UUID, null)
                     ?: if (effectiveElapsed >= MIN_RECORDABLE_DURATION_MS) {
@@ -532,6 +732,7 @@ object FocusSessionRecorder {
                     .apply {
                         if (uuid != null) putString(KEY_ACTIVE_SESSION_UUID, uuid)
                     }
+                    .putLong(KEY_LAST_ACTIVE_WALL_MILLIS, pauseWallMs)
                     .putLong(KEY_LAST_KNOWN_ELAPSED_MS, effectiveElapsed)
                     .putString(KEY_MODE_NAME, modeName)
                     .putString(KEY_SUBJECT_NAME, subjectName)
@@ -551,7 +752,8 @@ object FocusSessionRecorder {
                             durationMillis = effectiveElapsed,
                             phoneLiftCount = phoneLiftCount,
                             screenOnMillis = screenOnMillis,
-                            markSynced = false
+                            markSynced = false,
+                            completedAtMillis = pauseWallMs
                         )
                         activeRowId = saved.id
                         sp.edit().putLong(KEY_ACTIVE_ROW_ID, saved.id).apply()
@@ -565,8 +767,8 @@ object FocusSessionRecorder {
     /**
      * Finalizes the active session upon Stop, Reset, Pomodoro/Block completion, or Service destroy.
      * Updates the exact same Room row (`activeRowId` / `cloudId = activeSessionId`) quickly inside
-     * [localMutex], invokes [onComplete] as soon as Room persistence succeeds, and dispatches cloud sync
-     * asynchronously so offline state can NEVER prevent saving the full study duration.
+     * [localMutex] with its actual study timestamp, invokes [onComplete] as soon as Room persistence
+     * succeeds, and dispatches cloud sync asynchronously.
      */
     fun finalizeSession(
         context: Context,
@@ -578,6 +780,7 @@ object FocusSessionRecorder {
         onComplete: (() -> Unit)? = null
     ) {
         val appContext = context.applicationContext
+        val nowWall = System.currentTimeMillis()
         recorderScope.launch {
             var finalEntityToSync: FocusSessionEntity? = null
             var finalUuidToSync = ""
@@ -595,7 +798,18 @@ object FocusSessionRecorder {
                         ?: sp.getString(KEY_ACTIVE_SESSION_UUID, null)
                         ?: UUID.randomUUID().toString()
                     val existingRowId = activeRowId.takeIf { it > 0L } ?: sp.getLong(KEY_ACTIVE_ROW_ID, 0L)
-                    val effectiveElapsedMs = maxOf(elapsedMillis, sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L))
+                    val offset = maxOf(sessionElapsedOffsetMs, sp.getLong(KEY_SESSION_ELAPSED_OFFSET_MS, 0L))
+                    val segmentElapsed = (elapsedMillis - offset).coerceAtLeast(0L)
+                    val effectiveElapsedMs = maxOf(segmentElapsed, sp.getLong(KEY_LAST_KNOWN_ELAPSED_MS, 0L))
+                    val startedAtWall = sp.getLong(KEY_STARTED_AT_MILLIS, 0L)
+                    val savedLastActiveWall = lastActiveWallMillis.takeIf { it > 0L }
+                        ?: sp.getLong(KEY_LAST_ACTIVE_WALL_MILLIS, 0L)
+                    val actualCompletedAt = resolveActualCompletedAtMillis(
+                        startedAtWallMs = startedAtWall,
+                        lastActiveWallMs = savedLastActiveWall,
+                        segmentDurationMs = effectiveElapsedMs,
+                        nowWallMs = nowWall
+                    )
                     val prevSyncedSec = maxOf(
                         lastCloudSyncedSeconds,
                         sp.getLong(KEY_LAST_CLOUD_SYNCED_SECONDS, 0L),
@@ -606,6 +820,8 @@ object FocusSessionRecorder {
                     isFinalized = true
                     activeSessionId = null
                     activeRowId = 0L
+                    sessionElapsedOffsetMs = 0L
+                    lastActiveWallMillis = 0L
                     lastPrefsHeartbeatElapsedMs = 0L
                     lastLocalSaveElapsedMs = 0L
                     lastCloudSyncElapsedMs = 0L
@@ -628,12 +844,13 @@ object FocusSessionRecorder {
                         durationMillis = effectiveElapsedMs,
                         phoneLiftCount = phoneLiftCount,
                         screenOnMillis = screenOnMillis,
-                        markSynced = false
+                        markSynced = false,
+                        completedAtMillis = actualCompletedAt
                     )
 
                     Log.i(
                         TAG,
-                        "Finalized session in Room (single-row upsert): rowId=${finalEntity.id}, uuid=$uuid, totalSec=${finalEntity.durationSeconds}"
+                        "Finalized session in Room (single-row upsert): rowId=${finalEntity.id}, uuid=$uuid, totalSec=${finalEntity.durationSeconds}, completedAt=$actualCompletedAt"
                     )
                     evaluateWaterStreakAndRefreshWidgets(appContext)
 
@@ -757,12 +974,14 @@ object FocusSessionRecorder {
         durationMillis: Long,
         phoneLiftCount: Int,
         screenOnMillis: Long,
-        markSynced: Boolean
+        markSynced: Boolean,
+        completedAtMillis: Long = System.currentTimeMillis()
     ): FocusSessionEntity {
         val durationSeconds = (durationMillis / 1_000L).coerceAtLeast(1L)
         val screenOnMinutes = (screenOnMillis / 60_000L).toInt()
         val afkScore = (10.0f - (phoneLiftCount * 2.0f)).coerceAtLeast(0.0f)
         val now = System.currentTimeMillis()
+        val effectiveCompletedAt = if (completedAtMillis > 0L) completedAtMillis else now
         val institutionId = UserPreferences.getInstance(context).institutionId
 
         val db = SharkMentorDatabase.getDatabase(context)
@@ -777,7 +996,7 @@ object FocusSessionRecorder {
             id = currentEntity?.id ?: existingRowId.coerceAtLeast(0L),
             modeName = modeName,
             durationSeconds = maxOf(durationSeconds, currentEntity?.durationSeconds ?: 0L),
-            completedAt = now,
+            completedAt = effectiveCompletedAt,
             afkScore = afkScore,
             phoneLiftCount = phoneLiftCount,
             screenOnMinutes = screenOnMinutes,
@@ -797,6 +1016,8 @@ object FocusSessionRecorder {
      * Syncs a session document to canonical Firestore path `students/{uid}/sessions/{sessionUuid}`
      * and updates the student summary delta (2 writes total instead of 4 redundant writes) so
      * 60-minute checkpoints and finalization stay quota-safe and never double-count.
+     * IMPORTANT: `completedAt` and `timestamp` both use `sessionEntity.completedAt` so offline
+     * sessions synced hours later when Wi-Fi connects keep their real study time instead of the Wi-Fi sync time.
      */
     private suspend fun syncSessionToFirestoreInternal(
         context: Context,
@@ -843,7 +1064,7 @@ object FocusSessionRecorder {
                 "isFinalized" to isFinal,
                 "isDeleted" to false,
                 "timestamp" to sessionEntity.completedAt,
-                "completedAt" to FieldValue.serverTimestamp(),
+                "completedAt" to sessionEntity.completedAt,
                 "lastModifiedMillis" to sessionEntity.lastModifiedMillis,
                 "syncedAt" to System.currentTimeMillis()
             )
@@ -883,6 +1104,8 @@ object FocusSessionRecorder {
             .putBoolean(KEY_IS_FINALIZED, true)
             .remove(KEY_ACTIVE_SESSION_UUID)
             .remove(KEY_ACTIVE_ROW_ID)
+            .remove(KEY_LAST_ACTIVE_WALL_MILLIS)
+            .remove(KEY_SESSION_ELAPSED_OFFSET_MS)
             .remove(KEY_LAST_KNOWN_ELAPSED_MS)
             .remove(KEY_LAST_LOCAL_SAVE_ELAPSED_MS)
             .remove(KEY_LAST_CLOUD_SYNC_ELAPSED_MS)

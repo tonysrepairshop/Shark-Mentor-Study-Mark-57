@@ -110,4 +110,65 @@ class CoachingAndCampTest {
         assertTrue(ep.buildInAppEmbedUrl().startsWith("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"))
         assertTrue(ep.buildExternalYouTubeUrl().contains("youtube.com/watch?v=dQw4w9WgXcQ"))
     }
+
+    @Test
+    fun testFerrumKimyaNeverMatchesGorkemSahin() {
+        val ferrumTpl = BookCampManager.findMatchingBrandTemplate("Ferrum Kimya Video Ders", "Kimya")
+        assertNotNull(ferrumTpl)
+        assertTrue(ferrumTpl!!.instructor.contains("Ferrum"))
+        assertFalse(ferrumTpl.instructor.contains("Görkem"))
+
+        val gorkemTpl = BookCampManager.findMatchingBrandTemplate("Benim Hocam Görkem Şahin Kimya", "Kimya")
+        assertNotNull(gorkemTpl)
+        assertEquals("Görkem Şahin", gorkemTpl!!.instructor)
+
+        // Unknown chemistry publisher should NOT falsely match Görkem Şahin
+        val unknownTpl = BookCampManager.findMatchingBrandTemplate("Karekök Kimya Soru Bankası", "Kimya")
+        assertEquals(null, unknownTpl)
+    }
+
+    @Test
+    fun testCanonicalCurriculumTopicOrderingPlacesFonksiyonlarBeforeTurev() {
+        val scrambled = listOf("İntegral", "Türev", "Limit ve Süreklilik", "Polinomlar", "Fonksiyonlar")
+        val sorted = BookCampManager.sortTopicsByCurriculumOrder("AYT Matematik", scrambled)
+        assertEquals(
+            listOf("Fonksiyonlar", "Polinomlar", "Limit ve Süreklilik", "Türev", "İntegral"),
+            sorted
+        )
+    }
+
+    @Test
+    fun testPrerequisiteFoundationGateBlocksTurevWhenFonksiyonlarMasteryIsLow() {
+        val weakFonksiyonGoal = com.example.sharkmentor.data.local.entity.TopicGoalEntity(
+            id = 1L,
+            subject = "AYT Matematik",
+            topic = "Fonksiyonlar",
+            currentLevel = 1,
+            targetLevel = 5
+        )
+        val gateResult = BookCampManager.enforcePrerequisiteFoundationGate(
+            subject = "AYT Matematik",
+            requestedTopic = "Türev",
+            studentTopicGoals = listOf(weakFonksiyonGoal)
+        )
+        assertTrue(gateResult.isGatedByPrerequisite)
+        assertEquals("Fonksiyonlar", gateResult.missingPrerequisite)
+        assertTrue(gateResult.effectiveTopic.contains("Fonksiyonlar"))
+
+        // Once Fonksiyonlar mastery is 4/5, Türev is no longer blocked
+        val strongFonksiyonGoal = weakFonksiyonGoal.copy(currentLevel = 4)
+        val unlockedResult = BookCampManager.enforcePrerequisiteFoundationGate(
+            subject = "AYT Matematik",
+            requestedTopic = "Türev",
+            studentTopicGoals = listOf(strongFonksiyonGoal)
+        )
+        assertFalse(unlockedResult.isGatedByPrerequisite)
+        assertEquals("Türev", unlockedResult.effectiveTopic)
+    }
+
+    @Test
+    fun testAppStudyModeTitlesMatchKronometreAndKoclukYolu() {
+        assertEquals("Kronometre", AppStudyMode.FREE_TRACKING.title)
+        assertEquals("Koçluk Yolu", AppStudyMode.REAL_COACHING.title)
+    }
 }

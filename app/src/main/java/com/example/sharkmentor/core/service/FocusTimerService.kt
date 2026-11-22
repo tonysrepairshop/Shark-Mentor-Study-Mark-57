@@ -415,6 +415,16 @@ class FocusTimerService : Service() {
         val current = _timerStateFlow.value
         if (current.timerPhase != TimerPhase.PAUSED) return
 
+        if (current.currentMode != TimerMode.BREAK) {
+            FocusSessionRecorder.onResumeSession(
+                context = applicationContext,
+                currentTotalElapsedMillis = current.pausedAccumulatedMillis,
+                modeName = current.currentMode.displayName,
+                subjectName = activeSubjectName,
+                phoneLiftCount = current.phoneLiftCount,
+                screenOnMillis = currentScreenOnMillis()
+            )
+        }
         updatePresenceInFirestore(true, activeSubjectName)
         val now     = SystemClock.elapsedRealtime()
         val resumed = current.copy(
@@ -648,23 +658,35 @@ class FocusTimerService : Service() {
         }
 
         if (current.isPresenceCheckActive) {
-            val newGrace = (current.presenceCheckRemainingMillis - TICK_MS).coerceAtLeast(0L)
+            val realTickDeltaMs = (newElapsed - current.timeElapsedMillis).coerceAtLeast(TICK_MS)
+            val newGrace = (current.presenceCheckRemainingMillis - realTickDeltaMs).coerceAtLeast(0L)
             if (newGrace == 0L) {
                 tickerJob?.cancel()
                 watchdogJob?.cancel()
                 afkSensor.stop()
                 releaseWakeLock()
+                updatePresenceInFirestore(false)
+                SessionManager.setTimerRunning(false)
+
+                val triggerBucket = (current.timeElapsedMillis / ACTIVE_PRESENCE_INTERVAL_MS).coerceAtLeast(1L)
+                val maxUnconfirmedElapsed = (triggerBucket * ACTIVE_PRESENCE_INTERVAL_MS) + PRESENCE_GRACE_MS
+                val cappedElapsed = minOf(newElapsed, maxUnconfirmedElapsed)
+                val expiredAgoMs = (newElapsed - cappedElapsed).coerceAtLeast(0L)
+                val actualPauseWallMs = (System.currentTimeMillis() - expiredAgoMs).coerceAtLeast(1L)
+
                 FocusSessionRecorder.onPauseCheckpoint(
                     context = applicationContext,
-                    elapsedMillis = newElapsed,
+                    elapsedMillis = cappedElapsed,
                     modeName = current.currentMode.displayName,
                     subjectName = activeSubjectName,
                     phoneLiftCount = current.phoneLiftCount,
-                    screenOnMillis = currentScreenOnMillis()
+                    screenOnMillis = currentScreenOnMillis(),
+                    overrideCompletedAtMillis = actualPauseWallMs
                 )
                 val autoPaused = updatedElapsed.copy(
                     timerPhase                   = TimerPhase.PAUSED,
-                    pausedAccumulatedMillis      = newElapsed,
+                    timeElapsedMillis            = cappedElapsed,
+                    pausedAccumulatedMillis      = cappedElapsed,
                     startTimestampElapsed        = 0L,
                     isPresenceCheckActive        = false,
                     presenceCheckRemainingMillis = 0L,

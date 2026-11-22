@@ -27,13 +27,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Dual-mode architecture for Mark 57:
- * - [FREE_TRACKING]: Classic study tracker & timer view.
- * - [REAL_COACHING]: Duolingo-style guided daily path & strict AI coaching cockpit.
+ * Dual-mode architecture controlled by the "Kapsamlı Destek" setting:
+ * - [FREE_TRACKING]: Kronometre & Odak Sayıcıları view.
+ * - [REAL_COACHING]: Koçluk Yolu (Duolingo-style guided daily path & coaching cockpit).
  */
 enum class AppStudyMode(val title: String) {
-    FREE_TRACKING("Serbest Takip"),
-    REAL_COACHING("Gerçek Koçluk")
+    FREE_TRACKING("Kronometre"),
+    REAL_COACHING("Koçluk Yolu")
 }
 
 @Immutable
@@ -185,6 +185,7 @@ object CoachingEngine {
     private const val TAG = "CoachingEngine"
     private const val PREFS_NAME = "shark_mark57_coaching_prefs"
 
+    private const val KEY_COMPREHENSIVE_SUPPORT_ENABLED = "comprehensive_support_enabled"
     private const val KEY_STUDY_MODE = "study_mode"
     private const val KEY_WEEKDAY_GOAL_MINS = "weekday_goal_mins"
     private const val KEY_WEEKEND_GOAL_MINS = "weekend_goal_mins"
@@ -204,6 +205,9 @@ object CoachingEngine {
 
     @Volatile
     private var isInitialized = false
+
+    private val _comprehensiveSupportEnabled = MutableStateFlow(false)
+    val comprehensiveSupportEnabled: StateFlow<Boolean> = _comprehensiveSupportEnabled.asStateFlow()
 
     private val _studyMode = MutableStateFlow(AppStudyMode.FREE_TRACKING)
     val studyMode: StateFlow<AppStudyMode> = _studyMode.asStateFlow()
@@ -235,6 +239,9 @@ object CoachingEngine {
     private val _weeklyVarianceAdvice = MutableStateFlow<WeeklyVarianceAdvice?>(null)
     val weeklyVarianceAdvice: StateFlow<WeeklyVarianceAdvice?> = _weeklyVarianceAdvice.asStateFlow()
 
+    private val _weakMasterySummary = MutableStateFlow("")
+    val weakMasterySummary: StateFlow<String> = _weakMasterySummary.asStateFlow()
+
     private val _livePresence = MutableStateFlow(LiveFocusPresence())
     val livePresence: StateFlow<LiveFocusPresence> = _livePresence.asStateFlow()
 
@@ -248,10 +255,14 @@ object CoachingEngine {
             val appCtx = context.applicationContext
             val sp = prefs(appCtx)
 
+            val supportEnabled = sp.getBoolean(KEY_COMPREHENSIVE_SUPPORT_ENABLED, false)
+            _comprehensiveSupportEnabled.value = supportEnabled
+
             val savedMode = sp.getString(KEY_STUDY_MODE, AppStudyMode.FREE_TRACKING.name)
-            _studyMode.value = runCatching {
+            val parsedMode = runCatching {
                 AppStudyMode.valueOf(savedMode ?: AppStudyMode.FREE_TRACKING.name)
             }.getOrDefault(AppStudyMode.FREE_TRACKING)
+            _studyMode.value = if (supportEnabled) parsedMode else AppStudyMode.FREE_TRACKING
 
             _weekdayGoalMinutes.value = sp.getInt(KEY_WEEKDAY_GOAL_MINS, 240).coerceIn(30, 720)
             _weekendGoalMinutes.value = sp.getInt(KEY_WEEKEND_GOAL_MINS, 300).coerceIn(30, 720)
@@ -277,15 +288,27 @@ object CoachingEngine {
         }
     }
 
+    fun setComprehensiveSupportEnabled(context: Context, enabled: Boolean) {
+        ensureInitialized(context)
+        _comprehensiveSupportEnabled.value = enabled
+        val editor = prefs(context).edit().putBoolean(KEY_COMPREHENSIVE_SUPPORT_ENABLED, enabled)
+        if (!enabled && _studyMode.value != AppStudyMode.FREE_TRACKING) {
+            _studyMode.value = AppStudyMode.FREE_TRACKING
+            editor.putString(KEY_STUDY_MODE, AppStudyMode.FREE_TRACKING.name)
+        }
+        editor.apply()
+    }
+
     fun setStudyMode(context: Context, mode: AppStudyMode) {
         ensureInitialized(context)
-        _studyMode.value = mode
-        prefs(context).edit().putString(KEY_STUDY_MODE, mode.name).apply()
+        val effectiveMode = if (_comprehensiveSupportEnabled.value) mode else AppStudyMode.FREE_TRACKING
+        _studyMode.value = effectiveMode
+        prefs(context).edit().putString(KEY_STUDY_MODE, effectiveMode.name).apply()
         val uid = GoogleServicesHelper.getCurrentUser(context = context)?.uid
         if (!uid.isNullOrBlank() && FocusSessionRecorder.isNetworkConnected(context)) {
             GoogleServicesHelper.getFirebaseFirestore(context)
                 ?.collection("students")?.document(uid)
-                ?.set(mapOf("coachingMode" to mode.name), SetOptions.merge())
+                ?.set(mapOf("coachingMode" to effectiveMode.name), SetOptions.merge())
         }
     }
 
@@ -622,6 +645,16 @@ object CoachingEngine {
                 _recentLedger.value = entries
                 saveLedgerCache(appCtx, entries)
                 _weeklyVarianceAdvice.value = computeWeeklyVarianceAdvice(entries, updatedTargetCtx)
+
+                // Load weak mastery topics (currentLevel <= 2) from GoalsDao for AI prompt & coaching path weighting
+                val allTopics = runCatching { db.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
+                val weakTopics = allTopics
+                    .filter { it.currentLevel in 0..2 }
+                    .sortedBy { it.currentLevel }
+                    .take(12)
+                _weakMasterySummary.value = if (weakTopics.isNotEmpty()) {
+                    weakTopics.joinToString(", ") { "${it.subject}: ${it.topic} (${it.currentLevel}/5)" }
+                } else ""
             }.onFailure { e ->
                 Log.w(TAG, "refreshTargetAndLedgerAsync failed: ${e.message}")
             }
@@ -709,7 +742,11 @@ object CoachingEngine {
         _weeklyVarianceAdvice.value?.let { advice ->
             sb.appendLine("• Adaptif Koçluk Notu: ${advice.conciseMessage}")
         }
-        sb.appendLine("• KURAL: Tüm önerilerini, planlamalarını ve soru çözümlerini öğrencinin bu hedef sıralaması/bölümü ve günlük çalışma sapmalarına göre net, doğrudan ve gereksiz dolgu cümleleri kurmadan şekillendir.")
+        if (_weakMasterySummary.value.isNotBlank()) {
+            sb.appendLine("• Konu Hakimiyeti Eksik / Zayıf Konular (Öncelikli Pekiştirilecek): ${_weakMasterySummary.value}")
+        }
+        sb.appendLine("• KURAL 1: Tüm önerilerini, planlamalarını ve soru çözümlerini öğrencinin bu hedef sıralaması/bölümü ve günlük çalışma sapmalarına göre net, doğrudan ve gereksiz dolgu cümleleri kurmadan şekillendir.")
+        sb.appendLine("• KURAL 2 (MÜFREDAT BÜTÜNLÜĞÜ & ÖN KOŞUL ZEMİNİ): Konuları ders içi pedagojik sıraya göre sırala (Örn: Fonksiyonlar -> Polinomlar -> Limit -> Türev -> İntegral; asla Fonksiyonlar veya Limit zemini oturmadan ilk günlere Türev/İntegral yazma). Hakimiyet seviyesi düşük (1-2/5) olan konuların peşini bırakma, ek ağırlık ver ve ön koşul konunun zemini sağlamlaşmadan bağlantılı ileri konuya geçirtme.")
         return sb.toString()
     }
 

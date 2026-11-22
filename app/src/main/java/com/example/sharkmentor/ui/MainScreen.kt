@@ -243,7 +243,7 @@ fun MainScreen(
         CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
             ModalNavigationDrawer(
                 drawerState = drawerState,
-                gesturesEnabled = drawerState.isOpen || !isNotesContext,
+                gesturesEnabled = drawerState.isOpen,
                 drawerContent = {
                     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
                         ModalDrawerSheet(

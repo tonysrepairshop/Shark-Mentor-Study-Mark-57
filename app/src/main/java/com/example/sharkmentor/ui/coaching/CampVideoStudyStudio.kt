@@ -904,12 +904,19 @@ fun ResourceCampConfigDialog(
     var isDistributing by remember { mutableStateOf(false) }
     var statusNotice by remember { mutableStateOf<String?>(null) }
 
-    val matchingCatalog = remember(resource.subject) {
-        val subjLower = resource.subject.lowercase()
-        val matched = BookCampManager.BuiltInCampCatalog.filter {
-            it.subject.lowercase().contains(subjLower) || subjLower.contains(it.subject.lowercase().substringAfter(" "))
+    val matchingCatalog = remember(resource.title, resource.subject) {
+        val tr = java.util.Locale("tr")
+        val titleLower = resource.title.lowercase(tr)
+        val subjLower = resource.subject.lowercase(tr)
+        val matched = BookCampManager.BuiltInCampCatalog.filter { tpl ->
+            val tplSubj = tpl.subject.lowercase(tr)
+            tplSubj.contains(subjLower) ||
+                subjLower.contains(tplSubj.substringAfter(" ")) ||
+                tpl.matchKeywords.any { kw -> titleLower.contains(kw.lowercase(tr)) }
+        }.sortedByDescending { tpl ->
+            tpl.matchKeywords.any { kw -> titleLower.contains(kw.lowercase(tr)) }
         }
-        matched.ifEmpty { BookCampManager.BuiltInCampCatalog.take(8) }
+        matched.ifEmpty { BookCampManager.BuiltInCampCatalog.take(6) }
     }
 
     AlertDialog(

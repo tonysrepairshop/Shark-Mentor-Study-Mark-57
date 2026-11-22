@@ -110,9 +110,8 @@ import com.example.sharkmentor.core.util.TimeUtils
 import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
 import com.example.sharkmentor.ui.coaching.DailyGoalConfigDialog
-import com.example.sharkmentor.ui.coaching.DailyGoalProgressCard
 import com.example.sharkmentor.ui.coaching.DuolingoCoachingPathView
-import com.example.sharkmentor.ui.coaching.FocusTopicSelectorCard
+import com.example.sharkmentor.ui.coaching.FocusTopicLaunchDialog
 import com.example.sharkmentor.ui.coaching.StudyModeHeaderSwitcher
 import com.example.sharkmentor.ui.theme.SharkMentorTheme
 import com.example.sharkmentor.ui.viewmodel.AnalyticsViewModel
@@ -166,6 +165,7 @@ fun HomeScreen(
     val analyticsState by analyticsViewModel.uiState.collectAsStateWithLifecycle()
     val dailyScore = analyticsState.dailyScore
 
+    val comprehensiveSupportEnabled by CoachingEngine.comprehensiveSupportEnabled.collectAsStateWithLifecycle()
     val studyMode by CoachingEngine.studyMode.collectAsStateWithLifecycle()
     val targetContext by CoachingEngine.targetContext.collectAsStateWithLifecycle()
     val weekdayGoalMins by CoachingEngine.weekdayGoalMinutes.collectAsStateWithLifecycle()
@@ -232,20 +232,50 @@ fun HomeScreen(
 
     val isMandatoryBreak = timerState.timerPhase == TimerPhase.MANDATORY_BREAK
 
-    // ── Break confirmation dialog state ───────────────────────────────────────
+    // ── Pre-launch Focus Topic Selection popup & Break confirmation state ─────
     var showBreakConfirmDialog by remember { mutableStateOf(false) }
     var pendingMode by remember { mutableStateOf<TimerMode?>(null) }
+    var pendingFocusLaunchMode by remember { mutableStateOf<TimerMode?>(null) }
 
     val formattedActiveSubject = remember(selectedFocusTitle, focusSubNote) {
         CoachingEngine.buildFormattedFocusSubject(selectedFocusTitle, focusSubNote)
     }
 
+    pendingFocusLaunchMode?.let { modeToStart ->
+        FocusTopicLaunchDialog(
+            mode = modeToStart,
+            availableTitles = availableFocusTitles,
+            customTitles = customFocusTitles,
+            selectedTitle = selectedFocusTitle,
+            subNote = focusSubNote,
+            onSelectTitle = { CoachingEngine.selectFocusTitle(context, it) },
+            onSubNoteChange = { CoachingEngine.setFocusSubNote(context, it) },
+            onAddCustomTitle = { CoachingEngine.addCustomFocusTitle(context, it) },
+            onRemoveCustomTitle = { CoachingEngine.removeCustomFocusTitle(context, it) },
+            onConfirmStart = {
+                val activeSubj = CoachingEngine.buildFormattedFocusSubject(selectedFocusTitle, focusSubNote)
+                viewModel.startTimer(modeToStart, activeSubj)
+                pendingFocusLaunchMode = null
+            },
+            onDismiss = {
+                pendingFocusLaunchMode = null
+            }
+        )
+    }
+
     if (showBreakConfirmDialog && pendingMode != null) {
         BreakConfirmDialog(
             onConfirm = {
-                pendingMode?.let { viewModel.startTimer(it, formattedActiveSubject) }
+                val chosenMode = pendingMode
                 showBreakConfirmDialog = false
                 pendingMode = null
+                if (chosenMode != null) {
+                    if (chosenMode == TimerMode.BREAK) {
+                        viewModel.startTimer(chosenMode, formattedActiveSubject)
+                    } else {
+                        pendingFocusLaunchMode = chosenMode
+                    }
+                }
             },
             onDismiss = {
                 showBreakConfirmDialog = false
@@ -260,7 +290,7 @@ fun HomeScreen(
             .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.TopCenter
     ) {
-        if (studyMode == AppStudyMode.REAL_COACHING) {
+        if (comprehensiveSupportEnabled && studyMode == AppStudyMode.REAL_COACHING) {
             DuolingoCoachingPathView(
                 timerState = timerState,
                 goalStatus = dailyGoalStatus,
@@ -287,21 +317,12 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                StudyModeHeaderSwitcher(
-                    currentMode = AppStudyMode.FREE_TRACKING,
-                    onModeChange = { CoachingEngine.setStudyMode(context, it) }
-                )
-
-                DailyFocusScoreCard(
-                    dailyScore = dailyScore,
-                    onRefreshScore = { analyticsViewModel.refreshDailyScore() }
-                )
-
-                DailyGoalProgressCard(
-                    goalStatus = dailyGoalStatus,
-                    useAiGoal = useAiGoal,
-                    onEditGoalClick = { showDailyGoalDialog = true }
-                )
+                if (comprehensiveSupportEnabled) {
+                    StudyModeHeaderSwitcher(
+                        currentMode = AppStudyMode.FREE_TRACKING,
+                        onModeChange = { CoachingEngine.setStudyMode(context, it) }
+                    )
+                }
 
                 val isBreakActive by SessionManager.isBreakActive.collectAsStateWithLifecycle()
 
@@ -353,6 +374,7 @@ fun HomeScreen(
                     MolaActiveBanner(remainingMillis = timerState.displayMillis, modifier = Modifier.fillMaxWidth())
                 }
 
+                // 1. Odak Sayıcıları (Top of HomeScreen)
                 ModeIndicatorDots(count = TimerMode.entries.size, currentPage = pagerState.currentPage)
 
                 HorizontalPager(
@@ -382,23 +404,16 @@ fun HomeScreen(
 
                 val selectedMode = TimerMode.entries[pagerState.currentPage]
 
-                if (selectedMode != TimerMode.BREAK) {
-                    FocusTopicSelectorCard(
-                        availableTitles = availableFocusTitles,
-                        customTitles = customFocusTitles,
-                        selectedTitle = selectedFocusTitle,
-                        subNote = focusSubNote,
-                        onSelectTitle = { CoachingEngine.selectFocusTitle(context, it) },
-                        onSubNoteChange = { CoachingEngine.setFocusSubNote(context, it) },
-                        onAddCustomTitle = { CoachingEngine.addCustomFocusTitle(context, it) },
-                        onRemoveCustomTitle = { CoachingEngine.removeCustomFocusTitle(context, it) }
-                    )
-                }
-
                 TimerControls(
                     mode = selectedMode,
                     timerState = timerState,
-                    onStart = { viewModel.startTimer(selectedMode, formattedActiveSubject) },
+                    onStart = {
+                        if (selectedMode == TimerMode.BREAK) {
+                            viewModel.startTimer(selectedMode, formattedActiveSubject)
+                        } else {
+                            pendingFocusLaunchMode = selectedMode
+                        }
+                    },
                     onPause = viewModel::pauseTimer,
                     onResume = viewModel::resumeTimer,
                     onReset = viewModel::resetTimer,
@@ -421,6 +436,12 @@ fun HomeScreen(
                         Text(stringResource(R.string.btn_skip_session), fontSize = 12.sp)
                     }
                 }
+
+                // 2. Günlük Odak Skoru (Below Focus Counters)
+                DailyFocusScoreCard(
+                    dailyScore = dailyScore,
+                    onRefreshScore = { analyticsViewModel.refreshDailyScore() }
+                )
             }
         }
     }

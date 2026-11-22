@@ -40,7 +40,7 @@ fun AboutAppSection() {
                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
                 ) {
                     Text(
-                        text = "v1.0 • Mark 57",
+                        text = "v1.0 • Mark 59",
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

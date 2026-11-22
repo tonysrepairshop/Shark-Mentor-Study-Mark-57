@@ -4,13 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import androidx.compose.runtime.Immutable
-import com.example.sharkmentor.core.ai.ApiKeyRotator
-import com.example.sharkmentor.core.ai.GeminiRestClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.PlanEntity
 import com.example.sharkmentor.data.local.entity.PlanFolderEntity
 import com.example.sharkmentor.data.local.entity.ResourceEntity
+import com.example.sharkmentor.data.local.entity.TopicGoalEntity
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -28,10 +27,20 @@ data class CampCatalogTemplate(
     val instructor: String,
     val subject: String,
     val totalDays: Int,
+    /** Brand/Educator-specific keywords ONLY (never generic subject names like "kimya" or "fizik"). */
     val matchKeywords: List<String>,
     val defaultPlaylistId: String = "",
     val defaultVideoId: String = "",
     val dayTopics: List<String> = emptyList()
+)
+
+@Immutable
+data class PrerequisiteGateResult(
+    val effectiveTopic: String,
+    val originalTopic: String,
+    val isGatedByPrerequisite: Boolean,
+    val missingPrerequisite: String? = null,
+    val masteryLevel: Int? = null
 )
 
 @Immutable
@@ -57,7 +66,7 @@ data class CampDayEpisode(
         if (playlistId.isNotBlank()) {
             return "https://www.youtube.com/playlist?list=$playlistId&index=$dayNumber"
         }
-        val q = Uri.encode(searchQuery.ifBlank { "$dayNumber. Gün $topicTitle" })
+        val q = Uri.encode(searchQuery.ifBlank { topicTitle })
         return "https://www.youtube.com/results?search_query=$q"
     }
 
@@ -72,7 +81,7 @@ data class CampDayEpisode(
             val zeroIdx = (dayNumber - 1).coerceAtLeast(0)
             return "https://www.youtube-nocookie.com/embed/videoseries?list=$playlistId&index=$zeroIdx&rel=0&modestbranding=1&playsinline=1"
         }
-        val q = Uri.encode(searchQuery.ifBlank { "$dayNumber. Gün $topicTitle" })
+        val q = Uri.encode(searchQuery.ifBlank { topicTitle })
         return "https://m.youtube.com/results?search_query=$q"
     }
 }
@@ -102,21 +111,26 @@ data class ResourceCampBinding(
                 videoId = videoId,
                 playlistId = playlistId,
                 customUrl = youtubeUrl,
-                searchQuery = "$campTitle $instructor $safeDay. gün"
+                searchQuery = "$instructor $subject $safeDay. gün"
             )
     }
 }
 
 /**
- * Triple-Hybrid Book Camp Discovery, Daily Slicing & Schedule Integration Engine:
- * 1. Verified Camp Catalog for popular Turkish exam books & YouTube teacher camps.
- * 2. User YouTube Playlist/Video URL parser + AI day-by-day episode slicer.
- * 3. Instant task/resource camp matching + 1-tap weekly plan distribution.
+ * Triple-Hybrid Book Camp Discovery, Pedagogical Curriculum Ordering & Mastery Gatekeeping Engine:
+ * 1. Strict Brand/Educator Camp Matching: matches book titles to their actual educator/publisher
+ *    (e.g., "Ferrum Kimya" -> Ferrum, NEVER cross-assigning another teacher like Görkem Şahin).
+ * 2. Canonical Pedagogical Curriculum Ordering: preserves lesson topic integrity
+ *    (e.g., `Fonksiyonlar -> Polinomlar -> Limit -> Türev -> İntegral`), never scheduling `Türev` before `Fonksiyonlar`.
+ * 3. Topic Mastery (`Konu Hakimiyeti`) Weighting & Prerequisite Foundation Gatekeeping:
+ *    - Low-mastery topics (`currentLevel <= 2`) receive extra days/weight and persistent reinforcement.
+ *    - Dependent advanced topics are gated if a connected prerequisite topic has low mastery (`currentLevel <= 2`).
  */
 object BookCampManager {
 
     private const val PREFS_NAME = "shark_mark57_book_camps_prefs"
     private const val KEY_BINDINGS_JSON = "resource_camp_bindings_json"
+    private val TR_LOCALE = Locale("tr")
 
     @Volatile
     private var isLoaded = false
@@ -124,76 +138,283 @@ object BookCampManager {
     private val _bindingsByResourceId = MutableStateFlow<Map<Long, ResourceCampBinding>>(emptyMap())
     val bindingsByResourceId: StateFlow<Map<Long, ResourceCampBinding>> = _bindingsByResourceId.asStateFlow()
 
-    private val tytMathTopics = listOf(
-        "Temel Kavramlar", "Sayı Basamakları", "Bölme ve Bölünebilme", "EBOB - EKOK",
-        "Rasyonel Sayılar", "Birinci Dereceden Denklemler", "Basit Eşitsizlikler", "Mutlak Değer",
-        "Üslü Sayılar", "Köklü Sayılar", "Çarpanlara Ayırma", "Oran - Orantı",
-        "Sayı ve Kesir Problemleri", "Yaş Problemleri", "Yüzde ve Kar-Zarar Problemleri",
-        "Karışım ve Hareket Problemleri", "İşçi ve Rutin Olmayan Problemler", "Kümeler",
-        "Fonksiyonlar", "Polinomlar", "İkinci Dereceden Denklemler", "Permütasyon - Kombinasyon",
-        "Binom ve Olasılık", "Veri ve İstatistik"
+    // ── Canonical Ordered Curricula (Strict Pedagogical Order) ───────────────
+
+    val tytMathTopics = listOf(
+        "Temel Kavramlar",
+        "Sayı Basamakları",
+        "Bölme ve Bölünebilme",
+        "EBOB - EKOK",
+        "Rasyonel Sayılar",
+        "Birinci Dereceden Denklemler",
+        "Basit Eşitsizlikler",
+        "Mutlak Değer",
+        "Üslü Sayılar",
+        "Köklü Sayılar",
+        "Çarpanlara Ayırma",
+        "Oran - Orantı",
+        "Sayı ve Kesir Problemleri",
+        "Yaş Problemleri",
+        "Yüzde ve Kar-Zarar Problemleri",
+        "Karışım ve Hareket Problemleri",
+        "İşçi ve Rutin Olmayan Problemler",
+        "Kümeler ve Kartezyen Çarpım",
+        "Fonksiyonlar",
+        "Polinomlar",
+        "İkinci Dereceden Denklemler",
+        "Permütasyon - Kombinasyon",
+        "Binom ve Olasılık",
+        "Veri ve İstatistik"
     )
 
-    private val aytMathTopics = listOf(
-        "Fonksiyon Uygulamaları", "Polinomlar ve Çarpanlara Ayırma", "İkinci Dereceden Denklemler & Karmaşık Sayılar",
-        "Parabol", "Eşitsizlikler ve Eşitsizlik Sistemleri", "Trigonometri - 1 (Birim Çember & Özdeşlikler)",
-        "Trigonometri - 2 (Toplam-Fark & Yarım Açı)", "Trigonometrik Denklemler", "Logaritma Fonksiyonu",
-        "Logaritmalı Denklemler ve Eşitsizlikler", "Diziler (Aritmetik ve Geometrik)", "Limit ve Süreklilik",
-        "Türev Tanımı ve Alma Kuralları", "Türevin Geometrik Yorumu", "Maksimum - Minimum Problemleri",
-        "Belirsiz İntegral", "Belirli İntegral ve Alan Hesabı", "Çemberin Analitik İncelenmesi"
+    val aytMathTopics = listOf(
+        "Fonksiyonlar ve Fonksiyon Uygulamaları",
+        "Polinomlar ve Çarpanlara Ayırma",
+        "İkinci Dereceden Denklemler ve Karmaşık Sayılar",
+        "Parabol",
+        "İkinci Dereceden Eşitsizlikler",
+        "Trigonometri - 1 (Birim Çember ve Özdeşlikler)",
+        "Trigonometri - 2 (Toplam-Fark ve Yarım Açı)",
+        "Trigonometrik Denklemler",
+        "Logaritma Fonksiyonu",
+        "Logaritmalı Denklemler ve Eşitsizlikler",
+        "Diziler (Aritmetik ve Geometrik)",
+        "Limit ve Süreklilik",
+        "Türev Tanımı ve Alma Kuralları",
+        "Türevin Geometrik Yorumu",
+        "Maksimum - Minimum Problemleri",
+        "Belirsiz İntegral",
+        "Belirli İntegral ve Alan Hesabı",
+        "Çemberin Analitik İncelenmesi"
     )
 
-    private val geometryTopics = listOf(
-        "Doğruda ve Üçgende Açılar", "Dik ve Özel Üçgenler", "İkizkenar ve Eşkenar Üçgen",
-        "Üçgende Açıortay ve Kenarortay", "Üçgende Eşlik ve Benzerlik", "Üçgende Alan",
-        "Çokgenler ve Genel Dörtgenler", "Yamuk ve Paralelkenar", "Eşkenar Dörtgen, Dikdörtgen ve Kare",
-        "Çemberde Açı ve Uzunluk", "Dairede Alan", "Noktanın ve Doğrunun Analitiği",
-        "Katı Cisimler (Prizma, Piramit, Küre)", "Dönüşüm Geometrisi"
+    val geometryTopics = listOf(
+        "Doğruda ve Üçgende Açılar",
+        "Dik ve Özel Üçgenler",
+        "İkizkenar ve Eşkenar Üçgen",
+        "Üçgende Açıortay ve Kenarortay",
+        "Üçgende Eşlik ve Benzerlik",
+        "Üçgende Alan",
+        "Çokgenler ve Genel Dörtgenler",
+        "Yamuk ve Paralelkenar",
+        "Eşkenar Dörtgen, Dikdörtgen ve Kare",
+        "Çemberde Açı ve Uzunluk",
+        "Dairede Alan",
+        "Noktanın ve Doğrunun Analitiği",
+        "Dönüşüm Geometrisi",
+        "Katı Cisimler (Prizma, Piramit, Küre)"
     )
 
-    private val physicsTopics = listOf(
-        "Fizik Bilimine Giriş & Madde ve Özellikleri", "Hareket ve Kuvvet", "İş, Güç ve Enerji",
-        "Isı, Sıcaklık ve Genleşme", "Elektrostatik ve Elektrik Akımı", "Manyetizma ve Basınç",
-        "Kaldırma Kuvveti ve Dalgalar", "Optik (Aydınlanma, Ayna, Mercek)", "Vektörler ve Bağıl Hareket",
-        "Newton'un Hareket Yasaları", "Bir ve İki Boyutta Sabit İvmeli Hareket", "İtme ve Çizgisel Momentum",
-        "Tork, Denge ve Kütle Merkezi", "Çembersel Hareket ve Kepler", "Basit Harmonik Hareket",
-        "Elektrik Alan, Potansiyel ve Sığa", "Manyetik Alan ve İndüksiyon", "Alternatif Akım ve Modern Fizik"
+    val physicsTopics = listOf(
+        "Fizik Bilimine Giriş ve Madde Özellikleri",
+        "Vektörler",
+        "Kuvvet ve Hareket (Doğrusal ve Bağıl Hareket)",
+        "Newton'un Hareket Yasaları",
+        "Bir ve İki Boyutta Sabit İvmeli Hareket (Atışlar)",
+        "İş, Güç ve Enerji",
+        "İtme ve Çizgisel Momentum",
+        "Tork, Denge ve Kütle Merkezi",
+        "Basit Makineler",
+        "Basınç ve Kaldırma Kuvveti",
+        "Isı, Sıcaklık ve Genleşme",
+        "Elektrostatik ve Elektrik Akımı",
+        "Elektrik Alan, Potansiyel ve Sığa",
+        "Manyetizma ve Elektromanyetik İndüksiyon",
+        "Alternatif Akım ve Transformatörler",
+        "Çembersel Hareket ve Kepler",
+        "Basit Harmonik Hareket",
+        "Dalgalar ve Dalga Mekaniği",
+        "Optik (Aydınlanma, Ayna, Mercek)",
+        "Modern Fizik ve Atom Fiziği"
     )
 
-    private val chemistryTopics = listOf(
-        "Kimya Bilimi ve Atomun Yapısı", "Periyodik Sistem", "Kimyasal Türler Arası Etkileşimler",
-        "Maddenin Halleri ve Doğa", "Kimyanın Temel Kanunları ve Mol", "Kimyasal Hesaplamalar",
-        "Karışımlar ve Ayırma Teknikleri", "Asitler, Bazlar ve Tuzlar", "Modern Atom Teorisi",
-        "Gazlar", "Sıvı Çözeltiler ve Çözünürlük", "Kimyasal Tepkimelerde Enerji",
-        "Kimyasal Tepkimelerde Hız", "Kimyasal Tepkimelerde Denge", "Asit-Baz ve Çözünürlük Dengesi",
-        "Kimya ve Elektrik (Elektrokimya)", "Karbon Kimyasına Giriş ve Organik Kimya"
+    val chemistryTopics = listOf(
+        "Kimya Bilimi",
+        "Atom ve Periyodik Sistem",
+        "Kimyasal Türler Arası Etkileşimler",
+        "Maddenin Halleri",
+        "Kimyanın Temel Kanunları ve Mol Kavramı",
+        "Kimyasal Tepkimeler ve Hesaplamalar",
+        "Karışımlar ve Ayırma Teknikleri",
+        "Asitler, Bazlar ve Tuzlar",
+        "Modern Atom Teorisi",
+        "Gazlar",
+        "Sıvı Çözeltiler ve Çözünürlük",
+        "Kimyasal Tepkimelerde Enerji",
+        "Kimyasal Tepkimelerde Hız",
+        "Kimyasal Tepkimelerde Denge",
+        "Asit-Baz ve Çözünürlük Dengesi (Kçç)",
+        "Kimya ve Elektrik (Elektrokimya)",
+        "Karbon Kimyasına Giriş ve Organik Kimya"
     )
 
-    private val biologyTopics = listOf(
-        "Canlıların Ortak Özellikleri ve Temel Bileşenler", "Hücre ve Organeller",
-        "Hücre Zarından Madde Geçişleri", "Canlıların Sınıflandırılması", "Hücre Bölünmeleri (Mitoz & Mayoz)",
-        "Eşeyli ve Eşeysiz Üreme", "Kalıtım ve Genetik", "Ekosistem Ekolojisi",
-        "Sinir Sistemi ve Endokrin Sistem", "Duyu Organları ve Destek-Hareket",
-        "Sindirim ve Dolaşım Sistemi", "Solunum ve Üriner Sistem", "Komünite ve Popülasyon Ekolojisi",
-        "Genden Proteine (Nükleik Asitler & Protein Sentezi)", "Canlılarda Enerji Dönüşümleri (Fotosentez & Solunum)",
+    val biologyTopics = listOf(
+        "Canlıların Ortak Özellikleri ve Temel Bileşenler",
+        "Hücre ve Organeller",
+        "Hücre Zarından Madde Geçişleri",
+        "Canlıların Sınıflandırılması",
+        "Hücre Bölünmeleri (Mitoz ve Mayoz)",
+        "Eşeyli ve Eşeysiz Üreme",
+        "Kalıtım ve Genetik",
+        "Ekosistem ve Komünite-Popülasyon Ekolojisi",
+        "Sinir Sistemi ve Endokrin Sistem",
+        "Duyu Organları ve Destek-Hareket Sistemi",
+        "Sindirim ve Dolaşım Sistemi",
+        "Solunum ve Üriner (Boşaltım) Sistemi",
+        "Genden Proteine (Nükleik Asitler ve Protein Sentezi)",
+        "Canlılarda Enerji Dönüşümleri (Fotosentez ve Solunum)",
         "Bitki Biyolojisi"
     )
 
-    private val turkishTopics = listOf(
-        "Sözcükte Anlam", "Cümlede Anlam", "Paragrafta Yapı ve Konu-Ana Düşünce",
-        "Paragrafta Yardımcı Düşünce", "Ses Bilgisi", "Yazım Kuralları", "Noktalama İşaretleri",
-        "Sözcükte Yapı ve Ekler", "İsim, Sıfat, Zamir ve Zarf", "Fiiller, Fiilimsiler ve Ek Fiil",
-        "Cümlenin Ögeleri", "Fiilde Çatı ve Cümle Türleri", "Anlatım Bozuklukları"
+    val turkishTopics = listOf(
+        "Sözcükte Anlam",
+        "Cümlede Anlam",
+        "Paragrafta Yapı, Konu ve Ana Düşünce",
+        "Paragrafta Yardımcı Düşünce",
+        "Ses Bilgisi",
+        "Sözcükte Yapı ve Ekler",
+        "Yazım Kuralları",
+        "Noktalama İşaretleri",
+        "İsim, Sıfat, Zamir ve Zarf",
+        "Fiiller, Fiilimsiler ve Ek Fiil",
+        "Cümlenin Ögeleri",
+        "Fiilde Çatı ve Cümle Türleri",
+        "Anlatım Bozuklukları"
     )
 
+    /**
+     * Explicit prerequisite dependency graph: Key = dependent topic keyword, Value = ordered list of
+     * foundational prerequisite topic names that MUST NOT have low mastery (`currentLevel <= 2`) before
+     * advancing to the dependent topic.
+     */
+    private val topicPrerequisites: List<Pair<List<String>, List<String>>> = listOf(
+        // Matematik
+        listOf("türev", "turev") to listOf("Fonksiyonlar", "Limit ve Süreklilik"),
+        listOf("integral") to listOf("Fonksiyonlar", "Limit ve Süreklilik", "Türev"),
+        listOf("limit") to listOf("Fonksiyonlar", "Polinomlar"),
+        listOf("parabol") to listOf("Fonksiyonlar", "İkinci Dereceden Denklemler"),
+        listOf("ikinci dereceden eşitsizlik", "eşitsizlik sistem") to listOf("Fonksiyonlar", "İkinci Dereceden Denklemler"),
+        listOf("trigonometri") to listOf("Fonksiyonlar"),
+        listOf("logaritma") to listOf("Fonksiyonlar", "Üslü Sayılar"),
+        listOf("diziler") to listOf("Fonksiyonlar"),
+        listOf("polinom") to listOf("Fonksiyonlar", "Çarpanlara Ayırma"),
+        listOf("köklü", "koklu") to listOf("Üslü Sayılar"),
+        listOf("problem") to listOf("Temel Kavramlar", "Birinci Dereceden Denklemler", "Oran - Orantı"),
+        // Geometri
+        listOf("üçgende benzerlik", "üçgende alan") to listOf("Doğruda ve Üçgende Açılar", "Dik ve Özel Üçgenler"),
+        listOf("dörtgen", "yamuk", "paralelkenar", "kare") to listOf("Dik ve Özel Üçgenler", "Üçgende Eşlik ve Benzerlik"),
+        listOf("dairede alan", "katı cisim") to listOf("Çemberde Açı ve Uzunluk"),
+        // Kimya
+        listOf("kimyasal türler", "etkileşim") to listOf("Atom ve Periyodik Sistem"),
+        listOf("kimyasal hesaplama") to listOf("Kimyanın Temel Kanunları ve Mol Kavramı"),
+        listOf("gazlar", "sıvı çözelti") to listOf("Maddenin Halleri", "Kimyanın Temel Kanunları ve Mol Kavramı"),
+        listOf("tepkimelerde hız", "tepkimelerde denge") to listOf("Kimyasal Tepkimeler ve Hesaplamalar", "Kimyasal Tepkimelerde Enerji"),
+        listOf("asit-baz ve çözünürlük dengesi", "kçç", "asit baz dengesi") to listOf("Asitler, Bazlar ve Tuzlar", "Kimyasal Tepkimelerde Denge"),
+        listOf("elektrokimya", "kimya ve elektrik") to listOf("Modern Atom Teorisi", "Kimyasal Tepkimelerde Denge"),
+        listOf("organik kimya", "karbon kimyası") to listOf("Atom ve Periyodik Sistem", "Kimyasal Türler Arası Etkileşimler"),
+        // Fizik
+        listOf("newton") to listOf("Vektörler", "Kuvvet ve Hareket"),
+        listOf("atışlar", "sabit ivmeli") to listOf("Kuvvet ve Hareket", "Newton'un Hareket Yasaları"),
+        listOf("iş, güç ve enerji", "iş güç enerji") to listOf("Kuvvet ve Hareket", "Newton'un Hareket Yasaları"),
+        listOf("itme ve çizgisel momentum", "momentum") to listOf("Newton'un Hareket Yasaları", "İş, Güç ve Enerji"),
+        listOf("çembersel hareket", "harmonik hareket") to listOf("Newton'un Hareket Yasaları"),
+        listOf("elektrik alan", "sığa", "kondansatör") to listOf("Elektrostatik ve Elektrik Akımı"),
+        listOf("manyetik alan", "indüksiyon", "alternatif akım") to listOf("Elektrostatik ve Elektrik Akımı", "Elektrik Alan, Potansiyel ve Sığa"),
+        // Biyoloji
+        listOf("madde geçiş") to listOf("Hücre ve Organeller"),
+        listOf("hücre bölünme", "mitoz", "mayoz") to listOf("Hücre ve Organeller"),
+        listOf("kalıtım", "genetik") to listOf("Hücre Bölünmeleri (Mitoz ve Mayoz)"),
+        listOf("genden proteine", "protein sentezi") to listOf("Hücre ve Organeller", "Kalıtım ve Genetik"),
+        listOf("fotosentez", "hücresel solunum", "enerji dönüşüm") to listOf("Canlıların Ortak Özellikleri ve Temel Bileşenler", "Hücre ve Organeller"),
+        // Türkçe
+        listOf("cümlenin ögeleri", "fiilde çatı", "cümle türleri") to listOf("Sözcükte Yapı ve Ekler", "Fiiller, Fiilimsiler ve Ek Fiil")
+    )
+
+    // ── Verified Camp Catalog (Brand-Accurate Match Keywords Only!) ──────────
+
     val BuiltInCampCatalog: List<CampCatalogTemplate> = listOf(
+        // KIMYA
+        CampCatalogTemplate(
+            id = "ferrum_tyt_ayt_kimya",
+            title = "Ferrum Kimya Video Ders Kampı",
+            instructor = "Ferrum (Yakup Demir)",
+            subject = "Kimya",
+            totalDays = 36,
+            matchKeywords = listOf("ferrum", "yakup demir"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "gorkem_sahin_kimya",
+            title = "Görkem Şahin Kimya Video Ders Kampı",
+            instructor = "Görkem Şahin",
+            subject = "Kimya",
+            totalDays = 36,
+            matchKeywords = listOf("görkem şahin", "gorkem sahin", "görkem hoca", "benim hocam kimya"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "kimya_adasi_kamp",
+            title = "Kimya Adası Video Ders Kampı",
+            instructor = "Kimya Adası",
+            subject = "Kimya",
+            totalDays = 36,
+            matchKeywords = listOf("kimya adası", "kimya adasi", "murat hoca kimya"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "paraksilen_kimya_kamp",
+            title = "Paraksilen Kimya Video Ders Kampı",
+            instructor = "Paraksilen Kimya",
+            subject = "Kimya",
+            totalDays = 34,
+            matchKeywords = listOf("paraksilen"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 34)
+        ),
+        CampCatalogTemplate(
+            id = "orbital_kimya_kamp",
+            title = "Orbital Yayınları Kimya Konu & Soru Kampı",
+            instructor = "Orbital Yayınları",
+            subject = "Kimya",
+            totalDays = 36,
+            matchKeywords = listOf("orbital"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "aydin_kimya_kamp",
+            title = "Aydın Yayınları Kimya Kampı",
+            instructor = "Aydın Yayınları",
+            subject = "Kimya",
+            totalDays = 36,
+            matchKeywords = listOf("aydın kimya", "aydin kimya", "aydın yayınları kimya"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "palme_kimya_kamp",
+            title = "Palme Kimya Konu & Soru Kampı",
+            instructor = "Palme Yayınları",
+            subject = "Kimya",
+            totalDays = 34,
+            matchKeywords = listOf("palme kimya"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 34)
+        ),
+        CampCatalogTemplate(
+            id = "miray_kimya_kamp",
+            title = "Miray Yayınları Kimya Kampı",
+            instructor = "Miray Yayınları",
+            subject = "Kimya",
+            totalDays = 34,
+            matchKeywords = listOf("miray kimya", "miray yayınları"),
+            dayTopics = expandTopicsToDays(chemistryTopics, 34)
+        ),
+
+        // MATEMATIK & GEOMETRI
         CampCatalogTemplate(
             id = "3d_tyt_mat_vdd",
             title = "3D TYT Matematik VDD Kampı",
             instructor = "Eyüp B.",
             subject = "TYT Matematik",
             totalDays = 45,
-            matchKeywords = listOf("3d", "vdd", "eyüp", "eyup", "tyt matematik"),
+            matchKeywords = listOf("3d tyt", "3d vdd", "eyüp b", "eyup b", "3d matematik"),
             dayTopics = expandTopicsToDays(tytMathTopics, 45)
         ),
         CampCatalogTemplate(
@@ -202,7 +423,7 @@ object BookCampManager {
             instructor = "Eyüp B.",
             subject = "AYT Matematik",
             totalDays = 50,
-            matchKeywords = listOf("3d ayt", "ayt vdd", "eyüp b ayt", "ayt matematik"),
+            matchKeywords = listOf("3d ayt", "ayt vdd", "eyüp b ayt"),
             dayTopics = expandTopicsToDays(aytMathTopics, 50)
         ),
         CampCatalogTemplate(
@@ -211,7 +432,7 @@ object BookCampManager {
             instructor = "Mert Hoca",
             subject = "TYT Matematik",
             totalDays = 70,
-            matchKeywords = listOf("mert hoca", "70 günde", "70 gunde", "tyt mat"),
+            matchKeywords = listOf("mert hoca", "70 günde tyt", "70 gunde tyt"),
             dayTopics = expandTopicsToDays(tytMathTopics, 70)
         ),
         CampCatalogTemplate(
@@ -220,7 +441,7 @@ object BookCampManager {
             instructor = "Mert Hoca",
             subject = "AYT Matematik",
             totalDays = 60,
-            matchKeywords = listOf("mert hoca ayt", "60 günde", "60 gunde", "ayt mat"),
+            matchKeywords = listOf("mert hoca ayt", "60 günde ayt", "60 gunde ayt"),
             dayTopics = expandTopicsToDays(aytMathTopics, 60)
         ),
         CampCatalogTemplate(
@@ -229,8 +450,17 @@ object BookCampManager {
             instructor = "Rehber Matematik",
             subject = "TYT Matematik",
             totalDays = 49,
-            matchKeywords = listOf("rehber", "49 günde", "49 gunde"),
+            matchKeywords = listOf("rehber matematik", "49 günde tyt", "49 gunde tyt"),
             dayTopics = expandTopicsToDays(tytMathTopics, 49)
+        ),
+        CampCatalogTemplate(
+            id = "biyikli_mat_kamp",
+            title = "Bıyıklı Matematik Video Ders Kampı",
+            instructor = "Bıyıklı Matematik",
+            subject = "Matematik",
+            totalDays = 50,
+            matchKeywords = listOf("bıyıklı matematik", "biyikli matematik", "bıyıklı"),
+            dayTopics = expandTopicsToDays(tytMathTopics, 50)
         ),
         CampCatalogTemplate(
             id = "orijinal_mat_kamp",
@@ -247,7 +477,7 @@ object BookCampManager {
             instructor = "Apotemi Yayınları",
             subject = "AYT Matematik",
             totalDays = 30,
-            matchKeywords = listOf("apotemi", "fasikül", "fasikul", "türev", "integral", "trigonometri", "fonksiyon"),
+            matchKeywords = listOf("apotemi"),
             dayTopics = expandTopicsToDays(aytMathTopics, 30)
         ),
         CampCatalogTemplate(
@@ -256,8 +486,35 @@ object BookCampManager {
             instructor = "Barış Çelenk",
             subject = "Matematik",
             totalDays = 36,
-            matchKeywords = listOf("barış", "baris", "çelenk"),
+            matchKeywords = listOf("barış yayınları", "baris yayinlari", "barış çelenk"),
             dayTopics = expandTopicsToDays(aytMathTopics, 36)
+        ),
+        CampCatalogTemplate(
+            id = "acil_mat_kamp",
+            title = "Acil Matematik Konu & Soru Kampı",
+            instructor = "Acil Yayınları",
+            subject = "Matematik",
+            totalDays = 40,
+            matchKeywords = listOf("acil matematik", "acil yayınları", "matematiğin ilacı"),
+            dayTopics = expandTopicsToDays(tytMathTopics, 40)
+        ),
+        CampCatalogTemplate(
+            id = "345_mat_kamp",
+            title = "345 (ÜçDörtBeş) Matematik Kampı",
+            instructor = "ÜçDörtBeş Yayınları",
+            subject = "Matematik",
+            totalDays = 42,
+            matchKeywords = listOf("345 matematik", "üçdörtbeş matematik", "ucdortbes matematik"),
+            dayTopics = expandTopicsToDays(tytMathTopics, 42)
+        ),
+        CampCatalogTemplate(
+            id = "bilgi_sarmal_mat",
+            title = "Bilgi Sarmal Matematik Kampı",
+            instructor = "Bilgi Sarmal Yayınları",
+            subject = "Matematik",
+            totalDays = 40,
+            matchKeywords = listOf("bilgi sarmal matematik", "bilgi sarmal"),
+            dayTopics = expandTopicsToDays(tytMathTopics, 40)
         ),
         CampCatalogTemplate(
             id = "kenan_kara_50_geo",
@@ -265,62 +522,176 @@ object BookCampManager {
             instructor = "Kenan Kara",
             subject = "Geometri",
             totalDays = 50,
-            matchKeywords = listOf("kenan kara", "geometri", "acill geometri", "345 geometri", "birey"),
+            matchKeywords = listOf("kenan kara"),
             dayTopics = expandTopicsToDays(geometryTopics, 50)
         ),
         CampCatalogTemplate(
+            id = "merkeze_teget_geo",
+            title = "Merkeze Teğet Geometri Kampı",
+            instructor = "Merkeze Teğet",
+            subject = "Geometri",
+            totalDays = 40,
+            matchKeywords = listOf("merkeze teğet", "merkeze teget"),
+            dayTopics = expandTopicsToDays(geometryTopics, 40)
+        ),
+
+        // FIZIK
+        CampCatalogTemplate(
             id = "ozcan_aykin_fizik",
-            title = "TYT-AYT Fizik Video Ders Kampı",
+            title = "Özcan Aykın Fizik Video Ders Kampı",
             instructor = "Özcan Aykın",
             subject = "Fizik",
             totalDays = 40,
-            matchKeywords = listOf("özcan", "ozcan", "aykın", "fizik", "345 fizik", "ertan sinan"),
+            matchKeywords = listOf("özcan aykın", "ozcan aykin"),
             dayTopics = expandTopicsToDays(physicsTopics, 40)
         ),
         CampCatalogTemplate(
             id = "vip_fizik_50",
-            title = "50 Günde Fizik Kampı",
+            title = "50 Günde VIP Fizik Kampı",
             instructor = "VIP Fizik",
             subject = "Fizik",
             totalDays = 50,
-            matchKeywords = listOf("vip fizik", "50 günde fizik"),
+            matchKeywords = listOf("vip fizik"),
             dayTopics = expandTopicsToDays(physicsTopics, 50)
         ),
         CampCatalogTemplate(
-            id = "gorkem_sahin_kimya",
-            title = "TYT-AYT Kimya Video Ders Kampı",
-            instructor = "Görkem Şahin",
-            subject = "Kimya",
-            totalDays = 36,
-            matchKeywords = listOf("görkem", "gorkem", "şahin", "kimya", "orbital", "aydın kimya", "palme kimya"),
-            dayTopics = expandTopicsToDays(chemistryTopics, 36)
+            id = "altug_gunes_fizik",
+            title = "Altuğ Güneş Fizik Video Ders Kampı",
+            instructor = "Altuğ Güneş",
+            subject = "Fizik",
+            totalDays = 38,
+            matchKeywords = listOf("altuğ güneş", "altug gunes"),
+            dayTopics = expandTopicsToDays(physicsTopics, 38)
         ),
         CampCatalogTemplate(
+            id = "ertan_sinan_fizik",
+            title = "Ertan Sinan Şahin Fizik Kampı",
+            instructor = "Ertan Sinan Şahin",
+            subject = "Fizik",
+            totalDays = 40,
+            matchKeywords = listOf("ertan sinan"),
+            dayTopics = expandTopicsToDays(physicsTopics, 40)
+        ),
+        CampCatalogTemplate(
+            id = "fizikfinito_kamp",
+            title = "Fizikfinito Video Ders Kampı",
+            instructor = "Fizikfinito",
+            subject = "Fizik",
+            totalDays = 36,
+            matchKeywords = listOf("fizikfinito"),
+            dayTopics = expandTopicsToDays(physicsTopics, 36)
+        ),
+
+        // BIYOLOJI
+        CampCatalogTemplate(
             id = "dr_biyoloji_kamp",
-            title = "TYT-AYT Biyoloji Kampı",
+            title = "Dr. Biyoloji Video Ders Kampı",
             instructor = "Dr. Biyoloji",
             subject = "Biyoloji",
             totalDays = 30,
-            matchKeywords = listOf("dr biyoloji", "dr. biyoloji", "biyoloji", "biyotik", "palme biyoloji", "selin hoca"),
+            matchKeywords = listOf("dr biyoloji", "dr. biyoloji"),
             dayTopics = expandTopicsToDays(biologyTopics, 30)
         ),
         CampCatalogTemplate(
+            id = "biosem_biyoloji",
+            title = "Biosem Biyoloji Video Ders Kampı",
+            instructor = "Biosem (Semih Hoca)",
+            subject = "Biyoloji",
+            totalDays = 32,
+            matchKeywords = listOf("biosem"),
+            dayTopics = expandTopicsToDays(biologyTopics, 32)
+        ),
+        CampCatalogTemplate(
+            id = "selin_hoca_biyoloji",
+            title = "Selin Hoca Biyoloji Kampı",
+            instructor = "Selin Hoca",
+            subject = "Biyoloji",
+            totalDays = 30,
+            matchKeywords = listOf("selin hoca"),
+            dayTopics = expandTopicsToDays(biologyTopics, 30)
+        ),
+        CampCatalogTemplate(
+            id = "betul_biyoloji",
+            title = "Betül Biyoloji Kampı",
+            instructor = "Betül Biyoloji",
+            subject = "Biyoloji",
+            totalDays = 30,
+            matchKeywords = listOf("betül biyoloji", "betul biyoloji"),
+            dayTopics = expandTopicsToDays(biologyTopics, 30)
+        ),
+        CampCatalogTemplate(
+            id = "biyotik_biyoloji",
+            title = "Biyotik Yayınları Biyoloji Kampı",
+            instructor = "Biyotik Yayınları",
+            subject = "Biyoloji",
+            totalDays = 30,
+            matchKeywords = listOf("biyotik"),
+            dayTopics = expandTopicsToDays(biologyTopics, 30)
+        ),
+
+        // TURKCE & SOSYAL & TUS
+        CampCatalogTemplate(
             id = "rustu_hoca_49_turkce",
-            title = "49 Günde TYT Türkçe & Paragraf Kampı",
+            title = "Rüştü Hoca Türkçe & Paragraf Kampı",
             instructor = "Rüştü Hoca",
             subject = "Türkçe",
             totalDays = 49,
-            matchKeywords = listOf("rüştü", "rustu", "türkçe", "turkce", "paragraf", "hız ve renk", "limit türkçe", "sıfır risk"),
+            matchKeywords = listOf("rüştü hoca", "rustu hoca", "sıfır risk"),
             dayTopics = expandTopicsToDays(turkishTopics, 49)
         ),
         CampCatalogTemplate(
-            id = "benim_hocam_tarih_kpss",
-            title = "Tarih & Genel Kültür Video Ders Kampı",
+            id = "kadir_gumus_turkce",
+            title = "Kadir Gümüş Türkçe & Edebiyat Kampı",
+            instructor = "Kadir Gümüş",
+            subject = "Türkçe",
+            totalDays = 40,
+            matchKeywords = listOf("kadir gümüş", "kadir gumus"),
+            dayTopics = expandTopicsToDays(turkishTopics, 40)
+        ),
+        CampCatalogTemplate(
+            id = "aker_kartal_turkce",
+            title = "Aker Kartal Türkçe Kampı",
+            instructor = "Aker Kartal",
+            subject = "Türkçe",
+            totalDays = 35,
+            matchKeywords = listOf("aker kartal"),
+            dayTopics = expandTopicsToDays(turkishTopics, 35)
+        ),
+        CampCatalogTemplate(
+            id = "turkcenin_matematigi",
+            title = "Türkçenin Matematiği Video Ders Kampı",
+            instructor = "Türkçenin Matematiği",
+            subject = "Türkçe",
+            totalDays = 35,
+            matchKeywords = listOf("türkçenin matematiği", "turkcenin matematigi"),
+            dayTopics = expandTopicsToDays(turkishTopics, 35)
+        ),
+        CampCatalogTemplate(
+            id = "cografyanin_kodlari",
+            title = "Coğrafyanın Kodları Video Kampı",
+            instructor = "Coğrafyanın Kodları",
+            subject = "Coğrafya",
+            totalDays = 25,
+            matchKeywords = listOf("coğrafyanın kodları", "cografyanin kodlari", "haritalarla coğrafya"),
+            dayTopics = (1..25).map { "Coğrafya Kampı • $it. Gün Konu & Harita" }
+        ),
+        CampCatalogTemplate(
+            id = "ramazan_yetgin_tarih",
+            title = "Ramazan Yetgin Tarih Video Ders Kampı",
             instructor = "Ramazan Yetgin",
             subject = "Tarih",
             totalDays = 35,
-            matchKeywords = listOf("tarih", "kpss", "ramazan yetgin", "benim hocam"),
+            matchKeywords = listOf("ramazan yetgin"),
             dayTopics = (1..35).map { "Tarih Kampı • $it. Gün Konu & Soru" }
+        ),
+        CampCatalogTemplate(
+            id = "soner_ardic_tarih",
+            title = "Soner Ardıç Tarih Video Ders Kampı",
+            instructor = "Soner Ardıç",
+            subject = "Tarih",
+            totalDays = 30,
+            matchKeywords = listOf("soner ardıç", "soner ardic"),
+            dayTopics = (1..30).map { "Tarih Kampı • $it. Gün Konu & Soru" }
         ),
         CampCatalogTemplate(
             id = "tus_hizli_kamp",
@@ -328,18 +699,268 @@ object BookCampManager {
             instructor = "TUS Akademi",
             subject = "TUS",
             totalDays = 30,
-            matchKeywords = listOf("tus", "klinik", "temel bilimler", "anatomi", "patoloji", "dahiliye"),
+            matchKeywords = listOf("tusdata", "tusem", "tustime", "tus dünyası"),
             dayTopics = (1..30).map { "TUS Kampı • $it. Gün Vaka & Spot Tekrar" }
         )
     )
 
+    // ── Canonical Curriculum Ordering & Prerequisite Gatekeeping ─────────────
+
+    fun canonicalCurriculumForSubject(subject: String, contextHint: String = ""): List<String> {
+        val lower = "$subject $contextHint".lowercase(TR_LOCALE)
+        return when {
+            lower.contains("geo") -> geometryTopics
+            lower.contains("fiz") -> physicsTopics
+            lower.contains("kim") -> chemistryTopics
+            lower.contains("biyo") -> biologyTopics
+            lower.contains("türk") || lower.contains("turk") || lower.contains("paragraf") -> turkishTopics
+            lower.contains("ayt") && lower.contains("mat") -> aytMathTopics
+            lower.contains("mat") && (lower.contains("türev") || lower.contains("integral") || lower.contains("limit") || lower.contains("trigonometri") || lower.contains("logaritma")) ->
+                tytMathTopics + aytMathTopics
+            lower.contains("mat") -> tytMathTopics + aytMathTopics
+            else -> emptyList()
+        }
+    }
+
+    /**
+     * Returns the 0-based canonical pedagogical order index for [topicName] within [subject].
+     * Guarantees e.g. `Fonksiyonlar` < `Polinomlar` < `Limit` < `Türev` < `İntegral`.
+     */
+    fun canonicalTopicIndex(subject: String, topicName: String): Int {
+        val cleanTopic = topicName.lowercase(TR_LOCALE)
+            .replace(Regex("""^\d+[\.\)\-\s]+([Gg]ün[\s:\-]*)?"""), "")
+            .trim()
+        val curriculum = canonicalCurriculumForSubject(subject, cleanTopic)
+        if (curriculum.isNotEmpty()) {
+            // 1. Direct or keyword match against canonical list
+            val directIdx = curriculum.indexOfFirst { canon ->
+                val canonLower = canon.lowercase(TR_LOCALE)
+                val coreCanon = canonLower.substringBefore(" (").trim()
+                cleanTopic.contains(coreCanon) || coreCanon.contains(cleanTopic)
+            }
+            if (directIdx >= 0) return directIdx
+        }
+
+        // 2. Universal cross-curriculum keyword anchor fallback (guarantees Fonksiyonlar < Limit < Türev < İntegral)
+        return when {
+            cleanTopic.contains("temel kavram") -> 1
+            cleanTopic.contains("sayı basamak") -> 2
+            cleanTopic.contains("bölme") || cleanTopic.contains("bölünebilme") -> 3
+            cleanTopic.contains("ebob") || cleanTopic.contains("ekok") -> 4
+            cleanTopic.contains("rasyonel") -> 5
+            cleanTopic.contains("birinci dereceden") -> 6
+            cleanTopic.contains("basit eşitsizlik") -> 7
+            cleanTopic.contains("mutlak değer") -> 8
+            cleanTopic.contains("üslü") -> 9
+            cleanTopic.contains("köklü") -> 10
+            cleanTopic.contains("çarpanlara ayırma") -> 11
+            cleanTopic.contains("oran") -> 12
+            cleanTopic.contains("problem") -> 13
+            cleanTopic.contains("küme") -> 14
+            cleanTopic.contains("fonksiyon") -> 15
+            cleanTopic.contains("polinom") -> 16
+            cleanTopic.contains("ikinci dereceden denklem") || cleanTopic.contains("karmaşık") -> 17
+            cleanTopic.contains("parabol") -> 18
+            cleanTopic.contains("eşitsizlik") -> 19
+            cleanTopic.contains("trigonometri") -> 20
+            cleanTopic.contains("logaritma") -> 21
+            cleanTopic.contains("dizi") -> 22
+            cleanTopic.contains("permütasyon") || cleanTopic.contains("kombinasyon") || cleanTopic.contains("olasılık") -> 23
+            cleanTopic.contains("limit") || cleanTopic.contains("süreklilik") -> 24
+            cleanTopic.contains("türev") || cleanTopic.contains("turev") -> 25
+            cleanTopic.contains("integral") -> 26
+            // Kimya anchors
+            cleanTopic.contains("kimya bilimi") -> 1
+            cleanTopic.contains("atom") && !cleanTopic.contains("modern") -> 2
+            cleanTopic.contains("periyodik") -> 3
+            cleanTopic.contains("türler arası") || cleanTopic.contains("etkileşim") -> 4
+            cleanTopic.contains("maddenin halleri") -> 5
+            cleanTopic.contains("temel kanun") || cleanTopic.contains("mol") -> 6
+            cleanTopic.contains("kimyasal tepkime") || cleanTopic.contains("hesaplama") -> 7
+            cleanTopic.contains("karışım") -> 8
+            cleanTopic.contains("asit") && !cleanTopic.contains("denge") -> 9
+            cleanTopic.contains("modern atom") -> 10
+            cleanTopic.contains("gazlar") -> 11
+            cleanTopic.contains("sıvı çözelti") || cleanTopic.contains("çözünürlük") -> 12
+            cleanTopic.contains("enerji") -> 13
+            cleanTopic.contains("hız") -> 14
+            cleanTopic.contains("denge") && !cleanTopic.contains("asit") -> 15
+            cleanTopic.contains("asit-baz") || cleanTopic.contains("kçç") -> 16
+            cleanTopic.contains("elektrokimya") || cleanTopic.contains("kimya ve elektrik") -> 17
+            cleanTopic.contains("organik") || cleanTopic.contains("karbon") -> 18
+            else -> 500
+        }
+    }
+
+    /**
+     * Sorts any list of topics for [subject] in strict pedagogical curriculum order so advanced
+     * dependent topics (e.g. `Türev`) NEVER precede their foundational prerequisites (e.g. `Fonksiyonlar`).
+     */
+    fun sortTopicsByCurriculumOrder(subject: String, rawTopics: List<String>): List<String> {
+        if (rawTopics.size <= 1) return rawTopics
+        return rawTopics
+            .withIndex()
+            .sortedWith(
+                compareBy<IndexedValue<String>> { canonicalTopicIndex(subject, it.value) }
+                    .thenBy { it.index }
+            )
+            .map { it.value }
+    }
+
+    /**
+     * Checks if [requestedTopic] has any prerequisite topic whose mastery in [studentTopicGoals]
+     * is weak (`currentLevel in 0..2`). If a prerequisite foundation is NOT established ("zemin oturmamış"),
+     * blocks advancing to [requestedTopic] and returns the prerequisite topic for reinforcement first.
+     */
+    fun enforcePrerequisiteFoundationGate(
+        subject: String,
+        requestedTopic: String,
+        studentTopicGoals: List<TopicGoalEntity>
+    ): PrerequisiteGateResult {
+        val cleanRequested = requestedTopic.trim()
+        if (cleanRequested.isBlank() || studentTopicGoals.isEmpty()) {
+            return PrerequisiteGateResult(
+                effectiveTopic = cleanRequested,
+                originalTopic = cleanRequested,
+                isGatedByPrerequisite = false
+            )
+        }
+
+        val reqLower = cleanRequested.lowercase(TR_LOCALE)
+        val subjectGoals = studentTopicGoals.filter { goal ->
+            !goal.isDeleted && (
+                goal.subject.contains(subject, ignoreCase = true) ||
+                    subject.contains(goal.subject, ignoreCase = true) ||
+                    (subject.contains("Mat", ignoreCase = true) && goal.subject.contains("Mat", ignoreCase = true))
+                )
+        }.ifEmpty { studentTopicGoals.filter { !it.isDeleted } }
+
+        // 1. Check explicit prerequisite graph rules first
+        for ((dependentKeywords, requiredPrereqs) in topicPrerequisites) {
+            if (dependentKeywords.any { kw -> reqLower.contains(kw) }) {
+                for (prereqName in requiredPrereqs) {
+                    val prereqCore = prereqName.lowercase(TR_LOCALE).substringBefore(" (").trim()
+                    val matchedWeakGoal = subjectGoals.firstOrNull { goal ->
+                        val gTopic = goal.topic.lowercase(TR_LOCALE)
+                        (gTopic.contains(prereqCore) || prereqCore.contains(gTopic)) &&
+                            goal.currentLevel in 0..2
+                    }
+                    if (matchedWeakGoal != null) {
+                        return PrerequisiteGateResult(
+                            effectiveTopic = "${matchedWeakGoal.topic} (Temel Zemin Takviyesi • $cleanRequested Ön Koşulu)",
+                            originalTopic = cleanRequested,
+                            isGatedByPrerequisite = true,
+                            missingPrerequisite = matchedWeakGoal.topic,
+                            masteryLevel = matchedWeakGoal.currentLevel
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Check if the requested topic itself is recorded in Konu Hakimiyeti
+        val ownGoal = subjectGoals.firstOrNull { goal ->
+            val gLower = goal.topic.lowercase(TR_LOCALE)
+            reqLower.contains(gLower) || gLower.contains(reqLower.substringBefore(" (").trim())
+        }
+
+        return PrerequisiteGateResult(
+            effectiveTopic = if (ownGoal != null && ownGoal.currentLevel in 0..2) {
+                "$cleanRequested (Yoğun Pekiştirme • Hakimiyet ${ownGoal.currentLevel}/5)"
+            } else {
+                cleanRequested
+            },
+            originalTopic = cleanRequested,
+            isGatedByPrerequisite = false,
+            missingPrerequisite = null,
+            masteryLevel = ownGoal?.currentLevel
+        )
+    }
+
+    /**
+     * Expands topics into [totalDays] daily episodes while:
+     * 1. Sorting topics in canonical pedagogical sequence (`Fonksiyonlar -> Limit -> Türev -> İntegral`).
+     * 2. Giving 2x–3x extra weight/days to topics with low mastery (`currentLevel <= 2`) in `Konu Hakimiyeti`.
+     * 3. Enforcing prerequisite foundation gatekeeping so dependent topics do not start before weak prerequisites.
+     */
+    fun expandTopicsToDaysWithMastery(
+        subject: String,
+        topics: List<String>,
+        totalDays: Int,
+        studentTopicGoals: List<TopicGoalEntity> = emptyList()
+    ): List<String> {
+        val safeDays = totalDays.coerceAtLeast(1)
+        if (topics.isEmpty()) return (1..safeDays).map { "$it. Gün Konu Anlatımı" }
+
+        // 1. Canonical pedagogical sort
+        val orderedTopics = sortTopicsByCurriculumOrder(subject, topics)
+
+        if (studentTopicGoals.isEmpty()) {
+            return expandTopicsToDays(orderedTopics, safeDays)
+        }
+
+        val subjectGoals = studentTopicGoals.filter { goal ->
+            !goal.isDeleted && (
+                goal.subject.contains(subject, ignoreCase = true) ||
+                    subject.contains(goal.subject, ignoreCase = true) ||
+                    (subject.contains("Mat", ignoreCase = true) && goal.subject.contains("Mat", ignoreCase = true))
+                )
+        }.ifEmpty { studentTopicGoals.filter { !it.isDeleted } }
+
+        // 2. Build weighted sequence where weak topics (level 0..2) get extra reinforcement slots
+        //    and any unestablished prerequisite is inserted before its dependent topic
+        val weightedList = mutableListOf<String>()
+        val reinforcedPrereqs = mutableSetOf<String>()
+
+        for (rawTopic in orderedTopics) {
+            val gate = enforcePrerequisiteFoundationGate(subject, rawTopic, subjectGoals)
+            if (gate.isGatedByPrerequisite && gate.missingPrerequisite != null) {
+                val prereqKey = gate.missingPrerequisite.lowercase(TR_LOCALE)
+                if (reinforcedPrereqs.add(prereqKey)) {
+                    weightedList.add("${gate.missingPrerequisite} (Temel Zemin Pekiştirme)")
+                    weightedList.add("${gate.missingPrerequisite} (Ön Koşul Soru Tarama)")
+                }
+            }
+
+            val topicLower = rawTopic.lowercase(TR_LOCALE).substringBefore(" (").trim()
+            val matchedGoal = subjectGoals.firstOrNull { g ->
+                val gLower = g.topic.lowercase(TR_LOCALE)
+                topicLower.contains(gLower) || gLower.contains(topicLower)
+            }
+            val level = matchedGoal?.currentLevel
+
+            when {
+                level != null && level in 0..2 -> {
+                    // Low mastery: don't let go of the topic — give 3 consecutive reinforcement steps
+                    weightedList.add("$rawTopic (Temel Konu & Zemin)")
+                    weightedList.add("$rawTopic (Pekiştirme Soru Çözümü)")
+                    weightedList.add("$rawTopic (Eksik Kapatma Tarama)")
+                }
+                level == 3 -> {
+                    weightedList.add("$rawTopic (Konu & Soru)")
+                    weightedList.add("$rawTopic (Pekiştirme Testi)")
+                }
+                else -> {
+                    weightedList.add(rawTopic)
+                }
+            }
+        }
+
+        return expandTopicsToDays(weightedList.ifEmpty { orderedTopics }, safeDays)
+    }
+
     private fun expandTopicsToDays(topics: List<String>, totalDays: Int): List<String> {
-        if (topics.isEmpty()) return (1..totalDays).map { "$it. Gün Konu Anlatımı" }
-        return (0 until totalDays).map { idx ->
-            val topicIdx = (idx * topics.size) / totalDays.coerceAtLeast(1)
+        val safeDays = totalDays.coerceAtLeast(1)
+        if (topics.isEmpty()) return (1..safeDays).map { "$it. Gün Konu Anlatımı" }
+        return (0 until safeDays).map { idx ->
+            val topicIdx = (idx * topics.size) / safeDays
             val topic = topics[topicIdx.coerceIn(0, topics.lastIndex)]
             val part = (idx % 2) + 1
-            if (totalDays > topics.size * 1.3) "$topic ($part. Bölüm)" else topic
+            if (safeDays > topics.size * 1.3 && !topic.contains("Bölüm") && !topic.contains("Zemin") && !topic.contains("Pekiştirme")) {
+                "$topic ($part. Bölüm)"
+            } else {
+                topic
+            }
         }
     }
 
@@ -378,10 +999,32 @@ object BookCampManager {
     }
 
     /**
-     * Resolves either the user-saved [ResourceCampBinding] or an automatic catalog match for [resource].
+     * Matches [bookTitle] and [subject] strictly against brand/educator keywords in [BuiltInCampCatalog].
+     * Never falls back to a different educator's brand if the book belongs to another publisher/teacher.
      */
-    fun resolveCampForResource(context: Context, resource: ResourceEntity): ResourceCampBinding {
+    fun findMatchingBrandTemplate(bookTitle: String, subject: String): CampCatalogTemplate? {
+        val hay = "$bookTitle $subject".lowercase(TR_LOCALE)
+        return BuiltInCampCatalog.firstOrNull { tpl ->
+            tpl.matchKeywords.any { kw -> hay.contains(kw.lowercase(TR_LOCALE)) }
+        }
+    }
+
+    /**
+     * Resolves either the user-saved [ResourceCampBinding] or a brand-accurate camp match for [resource]
+     * with canonical curriculum ordering and topic mastery weighting.
+     */
+    fun resolveCampForResource(
+        context: Context,
+        resource: ResourceEntity,
+        studentTopicGoals: List<TopicGoalEntity> = emptyList()
+    ): ResourceCampBinding {
         ensureLoaded(context)
+        val effectiveGoals = studentTopicGoals.ifEmpty {
+            runCatching {
+                SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
+            }.getOrDefault(emptyList())
+        }
+
         _bindingsByResourceId.value[resource.id]?.let { saved ->
             val syncedCurrentDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
                 ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * saved.totalDays)
@@ -394,18 +1037,25 @@ object BookCampManager {
             return saved.copy(currentDay = syncedCurrentDay)
         }
 
-        // Auto-match against BuiltInCampCatalog by title + subject
-        val hay = "${resource.title} ${resource.subject}".lowercase(Locale("tr"))
-        val matchedTemplate = BuiltInCampCatalog.firstOrNull { tpl ->
-            tpl.matchKeywords.any { kw -> hay.contains(kw.lowercase(Locale("tr"))) }
-        } ?: BuiltInCampCatalog.firstOrNull { tpl ->
-            hay.contains(tpl.subject.lowercase(Locale("tr")).substringAfter(" "))
-        }
+        // Strict brand-only match (e.g. "Ferrum Kimya" -> Ferrum; unknown publisher -> keeps book's own title!)
+        val matchedTemplate = findMatchingBrandTemplate(resource.title, resource.subject)
 
         val totalDays = matchedTemplate?.totalDays ?: (resource.totalUnits.takeIf { it in 5..90 } ?: 30)
-        val campTitle = matchedTemplate?.title ?: "${resource.title} Video Kampı"
-        val instructor = matchedTemplate?.instructor ?: resource.subject
-        val topics = matchedTemplate?.dayTopics ?: defaultTopicsForSubject(resource.subject, totalDays)
+        val cleanBookTitle = resource.title.trim().ifBlank { resource.subject }
+        val campTitle = matchedTemplate?.title ?: "$cleanBookTitle Kampı"
+        val instructor = matchedTemplate?.instructor ?: cleanBookTitle
+        val baseTopics = canonicalCurriculumForSubject(resource.subject, resource.title)
+            .ifEmpty { matchedTemplate?.dayTopics.orEmpty() }
+        val orderedWeightedTopics = if (baseTopics.isNotEmpty()) {
+            expandTopicsToDaysWithMastery(
+                subject = resource.subject,
+                topics = baseTopics,
+                totalDays = totalDays,
+                studentTopicGoals = effectiveGoals
+            )
+        } else {
+            defaultTopicsForSubject(resource.subject, totalDays, effectiveGoals)
+        }
 
         val currentDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
             ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * totalDays)
@@ -415,13 +1065,14 @@ object BookCampManager {
         } else 1
 
         val episodes = (1..totalDays).map { day ->
-            val topic = topics.getOrElse(day - 1) { "${resource.subject} • $day. Gün" }
+            val topic = orderedWeightedTopics.getOrElse(day - 1) { "${resource.subject} • $day. Gün" }
+            val cleanTopicForSearch = topic.substringBefore(" (").trim()
             CampDayEpisode(
                 dayNumber = day,
                 topicTitle = topic,
                 videoId = matchedTemplate?.defaultVideoId.orEmpty(),
                 playlistId = matchedTemplate?.defaultPlaylistId.orEmpty(),
-                searchQuery = "${resource.title} $instructor ${resource.subject} $day. gün $topic",
+                searchQuery = "$instructor ${resource.subject} $cleanTopicForSearch konu anlatımı",
                 isCompleted = day < currentDay
             )
         }
@@ -441,7 +1092,8 @@ object BookCampManager {
 
     /**
      * Resolves a [CampDayEpisode] for any weekly plan box ([PlanEntity]) or Duolingo path node,
-     * linking it to the student's matched library book camp or subject camp.
+     * linking it to the student's matched library book camp (without cross-brand contamination)
+     * and enforcing prerequisite foundation gatekeeping.
      */
     fun resolveCampEpisodeForTask(
         context: Context,
@@ -449,52 +1101,63 @@ object BookCampManager {
         topic: String,
         taskTitle: String = "",
         dayHint: Int = 1,
-        libraryResources: List<ResourceEntity> = emptyList()
+        libraryResources: List<ResourceEntity> = emptyList(),
+        preferredResource: ResourceEntity? = null,
+        studentTopicGoals: List<TopicGoalEntity> = emptyList()
     ): Pair<String, CampDayEpisode> {
         ensureLoaded(context)
         val cleanSubj = subject.trim().ifBlank { "Matematik" }
-        val cleanTopic = topic.trim().ifBlank { taskTitle.trim() }.ifBlank { cleanSubj }
+        val rawTopic = topic.trim().ifBlank { taskTitle.trim() }.ifBlank { cleanSubj }
 
-        // Check if task explicitly mentions "X. Gün"
-        val explicitDay = Regex("""(\d{1,2})\.\s*[Gg]ün""").find("$cleanTopic $taskTitle")
+        val effectiveGoals = studentTopicGoals.ifEmpty {
+            runCatching {
+                SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
+            }.getOrDefault(emptyList())
+        }
+
+        // Enforce prerequisite foundation gate on the task topic
+        val gateResult = enforcePrerequisiteFoundationGate(cleanSubj, rawTopic, effectiveGoals)
+        val cleanTopic = gateResult.effectiveTopic
+
+        val explicitDay = Regex("""(\d{1,2})\.\s*[Gg]ün""").find("$rawTopic $taskTitle")
             ?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-        // 1. Check user's bound library resources for this subject
-        val matchingBinding = _bindingsByResourceId.value.values.firstOrNull {
+        // 1. Prefer explicitly selected resource or subject-matching library resource
+        val targetResource = preferredResource ?: libraryResources.firstOrNull {
             it.subject.contains(cleanSubj, ignoreCase = true) || cleanSubj.contains(it.subject, ignoreCase = true)
-        } ?: libraryResources.firstOrNull {
-            it.subject.contains(cleanSubj, ignoreCase = true) || cleanSubj.contains(it.subject, ignoreCase = true)
-        }?.let { resolveCampForResource(context, it) }
+        }
+        val matchingBinding = targetResource?.let { resolveCampForResource(context, it, effectiveGoals) }
+            ?: _bindingsByResourceId.value.values.firstOrNull {
+                it.subject.contains(cleanSubj, ignoreCase = true) || cleanSubj.contains(it.subject, ignoreCase = true)
+            }
 
         if (matchingBinding != null) {
-            val matchedEpisode = if (explicitDay != null) {
+            val coreTopic = cleanTopic.substringBefore(" (").trim()
+            val matchedEpisode = if (explicitDay != null && !gateResult.isGatedByPrerequisite) {
                 matchingBinding.episodes.firstOrNull { it.dayNumber == explicitDay }
             } else {
                 matchingBinding.episodes.firstOrNull {
-                    it.topicTitle.contains(cleanTopic, ignoreCase = true) ||
-                        cleanTopic.contains(it.topicTitle.substringBefore(" ("), ignoreCase = true)
+                    it.topicTitle.contains(coreTopic, ignoreCase = true) ||
+                        coreTopic.contains(it.topicTitle.substringBefore(" ("), ignoreCase = true)
                 }
             } ?: matchingBinding.currentEpisode()
 
-            val refinedQuery = "${matchingBinding.campTitle} ${matchingBinding.instructor} ${matchedEpisode.dayNumber}. gün $cleanTopic"
+            val refinedQuery = "${matchingBinding.instructor} $cleanSubj $coreTopic konu anlatımı"
             return matchingBinding.campTitle to matchedEpisode.copy(
                 topicTitle = cleanTopic.ifBlank { matchedEpisode.topicTitle },
                 searchQuery = refinedQuery
             )
         }
 
-        // 2. Fallback to built-in catalog by subject/topic
-        val hay = "$cleanSubj $cleanTopic $taskTitle".lowercase(Locale("tr"))
-        val template = BuiltInCampCatalog.firstOrNull { tpl ->
-            tpl.matchKeywords.any { kw -> hay.contains(kw.lowercase(Locale("tr"))) } ||
-                hay.contains(tpl.subject.lowercase(Locale("tr")))
-        }
+        // 2. Check if task title explicitly mentions a known brand/teacher
+        val template = findMatchingBrandTemplate("$cleanTopic $taskTitle", cleanSubj)
         val dayNum = explicitDay ?: dayHint.coerceAtLeast(1)
-        val campName = template?.let { "${it.title} (${it.instructor})" } ?: "$cleanSubj Video Kampı"
+        val coreTopic = cleanTopic.substringBefore(" (").trim()
+        val campName = template?.let { "${it.title} (${it.instructor})" } ?: "$cleanSubj Konu Kampı"
         val query = if (template != null) {
-            "${template.title} ${template.instructor} $cleanTopic"
+            "${template.instructor} $cleanSubj $coreTopic konu anlatımı"
         } else {
-            "$cleanSubj $cleanTopic konu anlatımı kamp"
+            "$cleanSubj $coreTopic konu anlatımı soru çözümü"
         }
 
         return campName to CampDayEpisode(
@@ -507,8 +1170,8 @@ object BookCampManager {
     }
 
     /**
-     * Saves or updates a custom or catalog camp binding for [resource], optionally using AI
-     * to slice the camp into daily episodes.
+     * Saves or updates a custom or catalog camp binding for [resource], enforcing canonical
+     * curriculum ordering and topic mastery weighting.
      */
     fun saveResourceCampBinding(
         context: Context,
@@ -524,26 +1187,40 @@ object BookCampManager {
         val safeDays = totalDays.coerceIn(1, 120)
         val safeCurrent = currentDay.coerceIn(1, safeDays)
         val (videoId, playlistId) = parseYouTubeUrlIds(youtubeUrl)
+        val effectiveGoals = runCatching {
+            SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
+        }.getOrDefault(emptyList())
 
         val baseTopics = if (customDayTopics.isNotEmpty()) {
-            expandTopicsToDays(customDayTopics, safeDays)
+            expandTopicsToDaysWithMastery(
+                subject = resource.subject,
+                topics = customDayTopics,
+                totalDays = safeDays,
+                studentTopicGoals = effectiveGoals
+            )
         } else {
             val tpl = BuiltInCampCatalog.firstOrNull {
                 it.title.equals(campTitle.trim(), ignoreCase = true)
             }
-            tpl?.dayTopics?.let { expandTopicsToDays(it, safeDays) }
-                ?: defaultTopicsForSubject(resource.subject, safeDays)
+            val canonical = canonicalCurriculumForSubject(resource.subject, resource.title)
+            when {
+                canonical.isNotEmpty() -> expandTopicsToDaysWithMastery(resource.subject, canonical, safeDays, effectiveGoals)
+                tpl != null && tpl.dayTopics.isNotEmpty() -> expandTopicsToDaysWithMastery(resource.subject, tpl.dayTopics, safeDays, effectiveGoals)
+                else -> defaultTopicsForSubject(resource.subject, safeDays, effectiveGoals)
+            }
         }
 
+        val cleanInstructor = instructor.trim().ifBlank { resource.title.trim().ifBlank { resource.subject } }
         val episodes = (1..safeDays).map { d ->
             val topic = baseTopics.getOrElse(d - 1) { "${resource.subject} • $d. Gün" }
+            val coreTopic = topic.substringBefore(" (").trim()
             CampDayEpisode(
                 dayNumber = d,
                 topicTitle = topic,
                 videoId = if (safeDays == 1 || playlistId.isBlank()) videoId else "",
                 playlistId = playlistId,
                 customUrl = youtubeUrl.trim(),
-                searchQuery = "$campTitle $instructor $d. gün $topic",
+                searchQuery = "$cleanInstructor ${resource.subject} $coreTopic konu anlatımı",
                 isCompleted = d < safeCurrent
             )
         }
@@ -553,7 +1230,7 @@ object BookCampManager {
             resourceTitle = resource.title,
             subject = resource.subject,
             campTitle = campTitle.trim().ifBlank { "${resource.title} Kampı" },
-            instructor = instructor.trim().ifBlank { resource.subject },
+            instructor = cleanInstructor,
             totalDays = safeDays,
             currentDay = safeCurrent,
             youtubeUrl = youtubeUrl.trim(),
@@ -586,8 +1263,8 @@ object BookCampManager {
     }
 
     /**
-     * Uses Gemini AI (with instant offline curriculum fallback) to slice a book/camp into
-     * [totalDays] structured daily topics.
+     * Uses Gemini AI (with canonical curriculum ordering and topic mastery post-processing)
+     * to slice a book/camp into [totalDays] structured daily topics.
      */
     suspend fun generateDailyCampTopicsWithAi(
         context: Context,
@@ -597,10 +1274,21 @@ object BookCampManager {
         totalDays: Int
     ): List<String> = withContext(Dispatchers.IO) {
         val safeDays = totalDays.coerceIn(3, 90)
+        val effectiveGoals = runCatching {
+            SharkMentorDatabase.getDatabase(context.applicationContext).goalsDao().getAllTopicsRaw()
+        }.getOrDefault(emptyList())
         val compass = CoachingEngine.buildAiSystemCompassPrompt(context)
+        val canonicalList = canonicalCurriculumForSubject(subject, bookTitle)
+        val canonicalHint = if (canonicalList.isNotEmpty()) {
+            "Dersin pedagojik konu sırası: ${canonicalList.joinToString(" -> ")}"
+        } else ""
+
         val prompt = """
-            Kaynak Kitap / Kamp: "$bookTitle" ($subject - Eğitmen: $instructor)
-            Bu kampı tam $safeDays güne böl. Her satırda sadece o günün konu başlığını yaz (1. Gün numaralandırması koymadan, sadece konu adı).
+            Kaynak Kitap / Kamp: "$bookTitle" ($subject - Eğitmen/Yayın: $instructor)
+            $canonicalHint
+            Bu kampı tam $safeDays güne pedagojik müfredat sırasını kesinlikle bozmadan böl (Örn: Fonksiyonlar bitmeden asla Limit/Türev/İntegral yazma).
+            Öğrencinin hakimiyet seviyesi düşük konularına daha fazla gün ayır.
+            Her satırda sadece o günün konu başlığını yaz (1. Gün numaralandırması koymadan, sadece konu adı).
             Toplam $safeDays satır döndür. Açıklama veya emoji yazma.
         """.trimIndent()
 
@@ -622,16 +1310,21 @@ object BookCampManager {
         }.getOrDefault(emptyList())
 
         if (aiLines.size >= 3) {
-            return@withContext expandTopicsToDays(aiLines, safeDays)
+            return@withContext expandTopicsToDaysWithMastery(
+                subject = subject,
+                topics = aiLines,
+                totalDays = safeDays,
+                studentTopicGoals = effectiveGoals
+            )
         }
 
-        defaultTopicsForSubject(subject, safeDays)
+        defaultTopicsForSubject(subject, safeDays, effectiveGoals)
     }
 
     /**
-     * Distributes 7 consecutive camp days starting from [binding.currentDay] into the student's
-     * active weekly plan folder in Room (`planDao()`), so every day of the week has a scheduled
-     * camp box with direct video & question targets.
+     * Distributes 7 consecutive camp days starting from [binding.currentDay] for a SINGLE selected
+     * book into the student's active weekly plan folder in Room (`planDao()`), replacing any older
+     * tasks of that same camp so multiple books are not chaotically tangled together.
      */
     suspend fun distributeCampToWeeklyPlan(
         context: Context,
@@ -640,6 +1333,7 @@ object BookCampManager {
     ): Int = withContext(Dispatchers.IO) {
         val db = SharkMentorDatabase.getDatabase(context.applicationContext)
         val planDao = db.planDao()
+        val effectiveGoals = runCatching { db.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
 
         val existingFolders = planDao.getAllFoldersSync()
         val activeFolder = existingFolders.firstOrNull() ?: PlanFolderEntity(
@@ -658,7 +1352,13 @@ object BookCampManager {
                     dayNumber = campDayNum,
                     topicTitle = "${binding.subject} • $campDayNum. Gün"
                 )
-            val taskTopic = "${binding.campTitle} • ${ep.dayNumber}. Gün: ${ep.topicTitle}"
+            val gatedTopic = enforcePrerequisiteFoundationGate(
+                subject = binding.subject,
+                requestedTopic = ep.topicTitle,
+                studentTopicGoals = effectiveGoals
+            ).effectiveTopic
+
+            val taskTopic = "${binding.campTitle} • ${ep.dayNumber}. Gün: $gatedTopic"
             val entity = PlanEntity(
                 id = UUID.randomUUID().toString(),
                 folderId = activeFolder.id,
@@ -679,19 +1379,17 @@ object BookCampManager {
         newTasks.size
     }
 
-    private fun defaultTopicsForSubject(subject: String, totalDays: Int): List<String> {
-        val lower = subject.lowercase(Locale("tr"))
-        val base = when {
-            lower.contains("ayt") && lower.contains("mat") -> aytMathTopics
-            lower.contains("mat") -> tytMathTopics
-            lower.contains("geo") -> geometryTopics
-            lower.contains("fiz") -> physicsTopics
-            lower.contains("kim") -> chemistryTopics
-            lower.contains("biyo") -> biologyTopics
-            lower.contains("türk") || lower.contains("turk") || lower.contains("paragraf") -> turkishTopics
-            else -> (1..totalDays).map { "$subject • $it. Gün Konu & Soru" }
+    private fun defaultTopicsForSubject(
+        subject: String,
+        totalDays: Int,
+        studentTopicGoals: List<TopicGoalEntity> = emptyList()
+    ): List<String> {
+        val canonical = canonicalCurriculumForSubject(subject)
+        return if (canonical.isNotEmpty()) {
+            expandTopicsToDaysWithMastery(subject, canonical, totalDays, studentTopicGoals)
+        } else {
+            (1..totalDays.coerceAtLeast(1)).map { "$subject • $it. Gün Konu & Soru" }
         }
-        return expandTopicsToDays(base, totalDays)
     }
 
     private fun loadBindingsFromPrefs(context: Context): Map<Long, ResourceCampBinding> {

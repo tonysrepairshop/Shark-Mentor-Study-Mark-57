@@ -129,4 +129,39 @@ class FocusSessionRecorderTest {
         assertTrue(exact60m.second)
         assertTrue(exact60m.third)
     }
+
+    @Test
+    fun testOfflineSessionPreservesRealStudyTimestampInsteadOf3AmWifiReconnectTime() {
+        val studyStartedAt1800 = 1_700_000_000_000L
+        val studyDuration90Min = 90L * 60_000L
+        val studyLastActiveAt1930 = studyStartedAt1800 + studyDuration90Min
+        val wifiReconnectedAt0300 = studyLastActiveAt1930 + (7L * 3_600_000L) // 7 hours later at 3 AM
+
+        val resolvedCompletedAt = FocusSessionRecorder.resolveActualCompletedAtMillis(
+            startedAtWallMs = studyStartedAt1800,
+            lastActiveWallMs = studyLastActiveAt1930,
+            segmentDurationMs = studyDuration90Min,
+            nowWallMs = wifiReconnectedAt0300
+        )
+        assertEquals(studyLastActiveAt1930, resolvedCompletedAt)
+    }
+
+    @Test
+    fun testShouldSplitSessionAfterPausePreventsMergingOfflineStudyBlocks() {
+        val pausedAt = 1_700_000_000_000L
+        // Short 5-minute pause should NOT split into a new session
+        assertFalse(
+            FocusSessionRecorder.shouldSplitSessionAfterPause(
+                lastActiveWallMs = pausedAt,
+                resumeWallMs = pausedAt + (5L * 60_000L)
+            )
+        )
+        // 25-minute pause (>= 20m threshold) MUST split into a separate session
+        assertTrue(
+            FocusSessionRecorder.shouldSplitSessionAfterPause(
+                lastActiveWallMs = pausedAt,
+                resumeWallMs = pausedAt + (25L * 60_000L)
+            )
+        )
+    }
 }

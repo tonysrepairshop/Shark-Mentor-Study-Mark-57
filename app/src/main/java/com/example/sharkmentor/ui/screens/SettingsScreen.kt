@@ -276,9 +276,9 @@ fun SettingsScreen(
            
                 TopAppBar(
                 expandedHeight = 50.dp,
-              title = { Text(when (activeSubPage) { "topbar_hub" -> "Üst Bar Kontrolleri"; "topbar_weather" -> "Hava Durumu"; "topbar_texts" -> "Üst Bar Yazıları"; else -> "Ayarlar" }) },  
+              title = { Text(when (activeSubPage) { "coaching_support" -> "Kapsamlı Destek & Çalışma"; "topbar_hub" -> "Üst Bar Kontrolleri"; "topbar_weather" -> "Hava Durumu"; "topbar_texts" -> "Üst Bar Yazıları"; else -> "Ayarlar" }) },  
                 navigationIcon = {
-                    IconButton(onClick = { when (activeSubPage) { "topbar_weather", "topbar_texts" -> activeSubPage = "topbar_hub"; "topbar_hub" -> activeSubPage = null; else -> onBackClick() } }) {
+                    IconButton(onClick = { when (activeSubPage) { "topbar_weather", "topbar_texts" -> activeSubPage = "topbar_hub"; "topbar_hub", "coaching_support" -> activeSubPage = null; else -> onBackClick() } }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
                     }
                 }
@@ -314,6 +314,16 @@ HorizontalDivider()
 
            AppIconSelectorSection(snackbarHostState = snackbarHostState)
                         HorizontalDivider()
+
+            Text("Kapsamlı Destek & Çalışma Düzeni", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+
+            SettingRow(
+                icon = Icons.Default.Tune,
+                label = "Kapsamlı Destek, Çalışma Saati & Başlıklar",
+                onClick = { activeSubPage = "coaching_support" }
+            )
+
+            HorizontalDivider()
 
             Text("Yapay Zeka & API", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
 
@@ -406,6 +416,10 @@ HorizontalDivider()
                 Text("Hesabı Kalıcı Sil", fontWeight = FontWeight.Bold)
             }
         }
+        } "coaching_support" -> {
+            com.example.sharkmentor.ui.coaching.ComprehensiveSupportSettingsScreen(
+                modifier = Modifier.fillMaxSize().padding(padding)
+            )
         } "topbar_hub" -> { Box(modifier = Modifier.fillMaxSize().padding(padding)) { TopBarControlHubContent(settings = topBarSettings, onToggleHideBubbles = topBarPrefs::setHideBubbles, onToggleHideTopBarMenu = topBarPrefs::setHideTopBarMenu, onToggleHideDuringFocus = topBarPrefs::setHideDuringFocus, onOpenWeatherSettings = { activeSubPage = "topbar_weather" }, onOpenTextSettings = { activeSubPage = "topbar_texts" }, onOpenCountdownSettings = { onOpenCountdownSettings() }) } } "topbar_weather" -> {
             WeatherSettingsTab(modifier = Modifier.fillMaxSize().padding(padding))
                 } "topbar_texts" -> { Box(modifier = Modifier.fillMaxSize().padding(padding)) { TopBarTextSettingsContent(prefs = topBarPrefs) } }

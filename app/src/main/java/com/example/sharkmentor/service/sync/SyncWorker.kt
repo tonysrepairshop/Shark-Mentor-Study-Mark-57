@@ -1127,6 +1127,7 @@ class SyncWorker(
                     "institutionId" to instId,
                     "isIndividual" to (instId == "INDIVIDUAL"),
                     "timestamp" to session.completedAt,
+                    "completedAt" to session.completedAt,
                     "isFinalized" to true,
                     "isDeleted" to false,
                     "syncedAt" to System.currentTimeMillis()

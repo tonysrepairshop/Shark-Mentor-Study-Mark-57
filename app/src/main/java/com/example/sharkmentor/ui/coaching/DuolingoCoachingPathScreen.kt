@@ -113,6 +113,7 @@ import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.PlanEntity
 import com.example.sharkmentor.data.local.entity.PlanFolderEntity
 import com.example.sharkmentor.data.local.entity.ResourceEntity
+import com.example.sharkmentor.data.local.entity.TopicGoalEntity
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
 import java.util.Calendar
 import java.util.UUID
@@ -144,8 +145,9 @@ data class DuolingoPathNode(
 )
 
 /**
- * Top Mode Switcher Pill: lets the student switch seamlessly between
- * [AppStudyMode.FREE_TRACKING] ("Serbest Takip") and [AppStudyMode.REAL_COACHING] ("Gerçek Koçluk Yolu").
+ * Top Mode Switcher Pill (shown on HomeScreen when "Kapsamlı Destek" is enabled in Settings):
+ * lets the student switch seamlessly between [AppStudyMode.FREE_TRACKING] ("Kronometre")
+ * and [AppStudyMode.REAL_COACHING] ("Koçluk Yolu").
  */
 @Composable
 fun StudyModeHeaderSwitcher(
@@ -195,7 +197,7 @@ fun StudyModeHeaderSwitcher(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = if (mode == AppStudyMode.REAL_COACHING) "Gerçek Koçluk Yolu" else "Serbest Takip",
+                            text = if (mode == AppStudyMode.REAL_COACHING) "Koçluk Yolu" else "Kronometre",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                             color = contentColor
@@ -562,7 +564,7 @@ fun FocusTopicSelectorCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Çalışma Başlığı • Ligde Görünür",
+                    text = "Çalışma Başlığı",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface
@@ -677,8 +679,244 @@ fun FocusTopicSelectorCard(
 }
 
 /**
- * Full-Screen Duolingo-Style Guided Daily Path & Real Coaching Cockpit
- * rendered when [AppStudyMode.REAL_COACHING] is active.
+ * Compact modal dialog popped up over [com.example.sharkmentor.ui.screens.HomeScreen] right when
+ * the student taps Start on any focus mode (`Kronometre`, `90 Dk Blok`, `Pomodoro`).
+ * Lets the student select or add a focus title and immediately start via "Odağı Başlat".
+ */
+@Composable
+fun FocusTopicLaunchDialog(
+    mode: TimerMode,
+    availableTitles: List<String>,
+    customTitles: List<String>,
+    selectedTitle: String,
+    subNote: String,
+    onSelectTitle: (String) -> Unit,
+    onSubNoteChange: (String) -> Unit,
+    onAddCustomTitle: (String) -> Unit,
+    onRemoveCustomTitle: (String) -> Unit,
+    onConfirmStart: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colorScheme.surface,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Çalışma Başlığı Seç",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "${mode.displayName} oturumu için başlık belirleyin",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.primary
+                )
+            }
+        },
+        text = {
+            FocusTopicSelectorCard(
+                availableTitles = availableTitles,
+                customTitles = customTitles,
+                selectedTitle = selectedTitle,
+                subNote = subNote,
+                onSelectTitle = onSelectTitle,
+                onSubNoteChange = onSubNoteChange,
+                onAddCustomTitle = onAddCustomTitle,
+                onRemoveCustomTitle = onRemoveCustomTitle
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirmStart,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                )
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(text = "Odağı Başlat", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("İptal")
+            }
+        }
+    )
+}
+
+/**
+ * Dedicated Settings sub-page ("Kapsamlı Destek & Çalışma Ayarları") inside Ayarlar.
+ * Houses:
+ * 1. "Kapsamlı Destek" enable/disable toggle (adds the "Kronometre | Koçluk Yolu" bar to HomeScreen).
+ * 2. Daily Study Hours ("Günlük Çalışma Saati Belirleme") & AI Target-based Goal settings.
+ * 3. Focus Title / Category management ("Çalışma Başlığı Ayarları").
+ */
+@Composable
+fun ComprehensiveSupportSettingsScreen(
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
+
+    LaunchedEffect(context) {
+        CoachingEngine.ensureInitialized(context)
+        CoachingEngine.refreshTargetAndLedgerAsync(context)
+    }
+
+    val comprehensiveSupportEnabled by CoachingEngine.comprehensiveSupportEnabled.collectAsStateWithLifecycle()
+    val targetContext by CoachingEngine.targetContext.collectAsStateWithLifecycle()
+    val weekdayGoalMins by CoachingEngine.weekdayGoalMinutes.collectAsStateWithLifecycle()
+    val weekendGoalMins by CoachingEngine.weekendGoalMinutes.collectAsStateWithLifecycle()
+    val useAiGoal by CoachingEngine.useAiRecommendedGoal.collectAsStateWithLifecycle()
+    val customFocusTitles by CoachingEngine.customFocusTitles.collectAsStateWithLifecycle()
+    val selectedFocusTitle by CoachingEngine.selectedFocusTitle.collectAsStateWithLifecycle()
+    val focusSubNote by CoachingEngine.focusSubNote.collectAsStateWithLifecycle()
+
+    val todayBounds = remember { DailyFocusEngine.getTodayTimeBounds() }
+    val todayDbMinutesFlow = remember(context, todayBounds) {
+        SharkMentorDatabase.getDatabase(context)
+            .sessionDao()
+            .getTodayTotalFocusMinutes(todayBounds.first, todayBounds.second)
+    }
+    val todayDbMinutes by todayDbMinutesFlow.collectAsStateWithLifecycle(initialValue = 0)
+    val todayTargetMinutes = remember(targetContext, weekdayGoalMins, weekendGoalMins, useAiGoal) {
+        CoachingEngine.getTodayTargetMinutes(targetContext)
+    }
+    val dailyGoalStatus = remember(todayDbMinutes, todayTargetMinutes) {
+        CoachingEngine.computeDailyGoalStatus(
+            todayCompletedMinutes = todayDbMinutes ?: 0,
+            activeRunningSeconds = 0L,
+            targetMinutes = todayTargetMinutes
+        )
+    }
+    val availableFocusTitles = remember(targetContext.examType, customFocusTitles) {
+        CoachingEngine.availableFocusTitles(targetContext.examType)
+    }
+
+    var showDailyGoalDialog by remember { mutableStateOf(false) }
+    if (showDailyGoalDialog) {
+        DailyGoalConfigDialog(
+            weekdayMinutes = weekdayGoalMins,
+            weekendMinutes = weekendGoalMins,
+            useAiRecommendation = useAiGoal,
+            targetContext = targetContext,
+            onSave = { wd, we, ai ->
+                CoachingEngine.setDailyGoals(context, wd, we, ai)
+                showDailyGoalDialog = false
+            },
+            onDismiss = { showDailyGoalDialog = false }
+        )
+    }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // 1. Kapsamlı Destek Toggle Card
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
+            border = BorderStroke(
+                1.dp,
+                if (comprehensiveSupportEnabled) colorScheme.primary.copy(alpha = 0.55f)
+                else colorScheme.outlineVariant.copy(alpha = 0.45f)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Kapsamlı Destek",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Açıldığında ana ekrana Kronometre ve Koçluk Yolu geçiş barını ekler.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = comprehensiveSupportEnabled,
+                    onCheckedChange = { enabled ->
+                        CoachingEngine.setComprehensiveSupportEnabled(context, enabled)
+                    }
+                )
+            }
+        }
+
+        // 2. Günlük Çalışma Saati Belirleme Section
+        Text(
+            text = "Günlük Çalışma Saati Belirleme",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = colorScheme.primary
+        )
+        DailyGoalProgressCard(
+            goalStatus = dailyGoalStatus,
+            useAiGoal = useAiGoal,
+            onEditGoalClick = { showDailyGoalDialog = true }
+        )
+        OutlinedButton(
+            onClick = { showDailyGoalDialog = true },
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "Hafta İçi (${CoachingEngine.formatMinutesShort(weekdayGoalMins)}) • Hafta Sonu (${CoachingEngine.formatMinutesShort(weekendGoalMins)}) Düzenle",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp
+            )
+        }
+
+        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+        // 3. Çalışma Başlığı Seçimi & Başlık Yönetimi Section
+        Text(
+            text = "Çalışma Başlığı Ayarları",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = colorScheme.primary
+        )
+        FocusTopicSelectorCard(
+            availableTitles = availableFocusTitles,
+            customTitles = customFocusTitles,
+            selectedTitle = selectedFocusTitle,
+            subNote = focusSubNote,
+            onSelectTitle = { CoachingEngine.selectFocusTitle(context, it) },
+            onSubNoteChange = { CoachingEngine.setFocusSubNote(context, it) },
+            onAddCustomTitle = { CoachingEngine.addCustomFocusTitle(context, it) },
+            onRemoveCustomTitle = { CoachingEngine.removeCustomFocusTitle(context, it) }
+        )
+    }
+}
+
+/**
+ * Full-Screen Duolingo-Style Guided Daily Path & Comprehensive Support Cockpit
+ * rendered when [AppStudyMode.REAL_COACHING] ("Koçluk Yolu") is active.
  */
 @Composable
 fun DuolingoCoachingPathView(
@@ -706,7 +944,7 @@ fun DuolingoCoachingPathView(
     }
     var selectedDayIso by remember { mutableIntStateOf(todayIso) }
 
-    // Observe active plan folder & tasks + library resources
+    // Observe active plan folder & tasks + library resources + topic mastery goals
     val activeFolders by db.planDao().getAllActiveFolders().collectAsState(initial = emptyList())
     val selectedFolder = activeFolders.firstOrNull()
     val folderTasksFlow = remember(selectedFolder?.id) {
@@ -715,7 +953,14 @@ fun DuolingoCoachingPathView(
     }
     val allFolderTasks by folderTasksFlow.collectAsState(initial = emptyList())
     val libraryResources by db.goalsDao().getAllResourcesFlow().collectAsState(initial = emptyList())
+    val topicGoals by db.goalsDao().getAllTopicGoalsFlow().collectAsState(initial = emptyList())
     val campBindings by BookCampManager.bindingsByResourceId.collectAsStateWithLifecycle()
+
+    // Single-resource focus filter so books are NOT interleaved/mixed together
+    var selectedResourceId by remember { mutableStateOf<Long?>(null) }
+    val activeSelectedResource = remember(libraryResources, selectedResourceId) {
+        libraryResources.firstOrNull { it.id == selectedResourceId } ?: libraryResources.firstOrNull()
+    }
 
     var completedNodeIds by remember { mutableStateOf(loadCompletedNodeIds(context)) }
     var activeStudioNode by remember { mutableStateOf<DuolingoPathNode?>(null) }
@@ -727,17 +972,28 @@ fun DuolingoCoachingPathView(
         BookCampManager.ensureLoaded(context)
     }
 
-    // Build the 3-step Duolingo path nodes for the selected day
+    // Build the 3-step Duolingo path nodes for the selected day (canonically ordered & mastery gated)
     val dayTasks = remember(allFolderTasks, selectedDayIso) {
         allFolderTasks.filter { it.dayOfWeek == selectedDayIso }
     }
 
-    val pathNodes = remember(dayTasks, libraryResources, campBindings, selectedDayIso, completedNodeIds, targetContext) {
+    val pathNodes = remember(
+        dayTasks,
+        libraryResources,
+        activeSelectedResource,
+        topicGoals,
+        campBindings,
+        selectedDayIso,
+        completedNodeIds,
+        targetContext
+    ) {
         buildDuolingoDayNodes(
             context = context,
             dayIso = selectedDayIso,
             dayTasks = dayTasks,
             libraryResources = libraryResources,
+            activeResource = activeSelectedResource,
+            topicGoals = topicGoals,
             targetContext = targetContext,
             completedNodeIds = completedNodeIds
         )
@@ -995,12 +1251,14 @@ fun DuolingoCoachingPathView(
                                         context = context,
                                         db = db,
                                         libraryResources = libraryResources,
+                                        activeResource = activeSelectedResource,
+                                        topicGoals = topicGoals,
                                         targetContext = targetContext
                                     )
                                     isRebalancingWeek = false
                                     Toast.makeText(
                                         context,
-                                        "Haftalık program hedef ve çalışma tempona göre dengelendi ($count görev)",
+                                        "Haftalık program müfredat sırası ve konu hakimiyetine göre dengelendi ($count görev)",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -1083,6 +1341,50 @@ fun DuolingoCoachingPathView(
                             style = MaterialTheme.typography.bodySmall,
                             color = colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+            }
+        }
+
+        // 5b. Single Active Book / Resource Selector (prevents interleaving all library books together)
+        if (libraryResources.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                libraryResources.forEach { res ->
+                    val isSelected = activeSelectedResource?.id == res.id
+                    Surface(
+                        onClick = { selectedResourceId = res.id },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(
+                            1.dp,
+                            if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Book,
+                                contentDescription = null,
+                                tint = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "${res.title} (${res.subject})",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -1623,40 +1925,72 @@ private fun buildDuolingoDayNodes(
     dayIso: Int,
     dayTasks: List<PlanEntity>,
     libraryResources: List<ResourceEntity>,
+    activeResource: ResourceEntity?,
+    topicGoals: List<TopicGoalEntity>,
     targetContext: StudentTargetContext,
     completedNodeIds: Set<String>
 ): List<DuolingoPathNode> {
     val nodes = mutableListOf<DuolingoPathNode>()
 
-    val effectiveBlocks: List<Triple<String, String, PlanEntity?>> = if (dayTasks.isNotEmpty()) {
-        dayTasks.map { task ->
-            Triple(task.subject, task.topic.ifBlank { task.title }, task)
+    // 1. Build day's raw blocks without interleaving multiple library books together
+    val rawBlocks: List<Triple<String, String, PlanEntity?>> = when {
+        dayTasks.isNotEmpty() -> {
+            // Sort the day's tasks by canonical curriculum order within each subject
+            dayTasks
+                .sortedBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic.ifBlank { it.title }) }
+                .map { task ->
+                    Triple(task.subject, task.topic.ifBlank { task.title }, task)
+                }
         }
-    } else if (libraryResources.isNotEmpty()) {
-        libraryResources.take(2).map { res ->
-            val binding = BookCampManager.resolveCampForResource(context, res)
-            val ep = binding.currentEpisode()
-            Triple(res.subject, "${ep.dayNumber}. Gün: ${ep.topicTitle}", null)
+        activeResource != null -> {
+            // Use ONLY the currently selected active book so books are never mixed together
+            val binding = BookCampManager.resolveCampForResource(context, activeResource, topicGoals)
+            val epDay = (binding.currentDay + (dayIso - 1).coerceAtLeast(0)).coerceIn(1, binding.totalDays.coerceAtLeast(1))
+            val ep = binding.episodes.firstOrNull { it.dayNumber == epDay } ?: binding.currentEpisode()
+            listOf(Triple(activeResource.subject, ep.topicTitle, null))
         }
-    } else {
-        val defaultTitles = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).take(2)
-        defaultTitles.mapIndexed { i, subj ->
-            Triple(subj, "${dayIso}. Gün Temel Kazanım & Soru Bloğu ${i + 1}", null)
+        else -> {
+            val defaultSubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
+            val canonical = BookCampManager.canonicalCurriculumForSubject(defaultSubject)
+            val orderedTopics = if (canonical.isNotEmpty()) {
+                BookCampManager.expandTopicsToDaysWithMastery(defaultSubject, canonical, 30, topicGoals)
+            } else emptyList()
+            val topicForDay = orderedTopics.getOrElse((dayIso - 1).coerceAtLeast(0)) {
+                "${dayIso}. Gün Temel Kazanım & Soru Bloğu"
+            }
+            listOf(Triple(defaultSubject, topicForDay, null))
         }
     }
 
     var stepCounter = 1
-    effectiveBlocks.forEachIndexed { blockIdx, (subject, topic, planTask) ->
-        val matchedResource = libraryResources.firstOrNull {
-            it.subject.contains(subject, ignoreCase = true) || subject.contains(it.subject, ignoreCase = true)
+    rawBlocks.forEachIndexed { blockIdx, (subject, rawTopic, planTask) ->
+        // Enforce Prerequisite Foundation Gatekeeping & Mastery Weighting
+        val gateResult = BookCampManager.enforcePrerequisiteFoundationGate(
+            subject = subject,
+            requestedTopic = rawTopic,
+            studentTopicGoals = topicGoals
+        )
+        val topic = gateResult.effectiveTopic
+
+        val matchedResource = if (activeResource != null &&
+            (activeResource.subject.contains(subject, ignoreCase = true) || subject.contains(activeResource.subject, ignoreCase = true))
+        ) {
+            activeResource
+        } else {
+            libraryResources.firstOrNull {
+                it.subject.contains(subject, ignoreCase = true) || subject.contains(it.subject, ignoreCase = true)
+            }
         }
+
         val (campTitle, episode) = BookCampManager.resolveCampEpisodeForTask(
             context = context,
             subject = subject,
             topic = topic,
             taskTitle = planTask?.title.orEmpty(),
             dayHint = dayIso,
-            libraryResources = libraryResources
+            libraryResources = libraryResources,
+            preferredResource = matchedResource,
+            studentTopicGoals = topicGoals
         )
 
         val baseKey = planTask?.id ?: "day_${dayIso}_block_${blockIdx}_${subject}"
@@ -1730,6 +2064,8 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
     context: Context,
     db: SharkMentorDatabase,
     libraryResources: List<ResourceEntity>,
+    activeResource: ResourceEntity?,
+    topicGoals: List<TopicGoalEntity>,
     targetContext: StudentTargetContext
 ): Int = withContext(Dispatchers.IO) {
     val planDao = db.planDao()
@@ -1743,42 +2079,67 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
     val uncompleted = existingTasks.filter { !it.isCompleted }
 
     if (uncompleted.isNotEmpty()) {
-        // Redistribute uncompleted tasks evenly starting from today's ISO day of week through Sunday
+        // Sort uncompleted tasks by canonical curriculum order within each subject & apply prerequisite gatekeeping
+        val orderedUncompleted = uncompleted
+            .map { task ->
+                val gate = BookCampManager.enforcePrerequisiteFoundationGate(
+                    subject = task.subject,
+                    requestedTopic = task.topic.ifBlank { task.title },
+                    studentTopicGoals = topicGoals
+                )
+                task.copy(
+                    title = gate.effectiveTopic,
+                    topic = gate.effectiveTopic
+                )
+            }
+            .sortedWith(
+                compareBy<PlanEntity> { it.subject }
+                    .thenBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
+            )
+
         val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
         val targetDays = (todayIso..7).toList().ifEmpty { (1..7).toList() }
-        val rebalanced = uncompleted.mapIndexed { idx, task ->
+        val rebalanced = orderedUncompleted.mapIndexed { idx, task ->
             val assignedDay = targetDays[idx % targetDays.size]
-            task.copy(dayOfWeek = assignedDay)
+            task.copy(dayOfWeek = assignedDay, orderIndex = idx + 1)
         }
         planDao.insertTasks(rebalanced)
         return@withContext rebalanced.size
     }
 
-    // If no uncompleted tasks exist yet, build a 7-day balanced camp & target schedule
-    val subjects = if (libraryResources.isNotEmpty()) {
-        libraryResources.map { it.subject to BookCampManager.resolveCampForResource(context, it) }
-    } else {
-        CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).take(4).map { subj ->
-            subj to null
-        }
+    // If a single book is selected (or available), distribute that single book's camp sequentially
+    // across the 7 days without mixing multiple books together
+    val primaryResource = activeResource ?: libraryResources.firstOrNull()
+    if (primaryResource != null) {
+        val binding = BookCampManager.resolveCampForResource(context, primaryResource, topicGoals)
+        return@withContext BookCampManager.distributeCampToWeeklyPlan(context, binding, targetQuestionsPerDay = 40)
     }
+
+    // Fallback when no library books exist: use canonical curriculum for the primary exam subject
+    val primarySubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
+    val canonicalTopics = BookCampManager.canonicalCurriculumForSubject(primarySubject)
+    val weightedTopics = BookCampManager.expandTopicsToDaysWithMastery(
+        subject = primarySubject,
+        topics = canonicalTopics,
+        totalDays = 30,
+        studentTopicGoals = topicGoals
+    )
 
     val generated = mutableListOf<PlanEntity>()
     for (day in 1..7) {
-        val (subj, binding) = subjects[(day - 1) % subjects.size]
-        val topicLabel = if (binding != null) {
-            val epDay = (binding.currentDay + (day - 1)).coerceIn(1, binding.totalDays.coerceAtLeast(1))
-            val ep = binding.episodes.firstOrNull { it.dayNumber == epDay }
-            "${binding.campTitle} • ${epDay}. Gün: ${ep?.topicTitle ?: subj}"
-        } else {
-            "$subj • $day. Gün Hedef Konu & Soru Kampı"
-        }
+        val rawTopic = weightedTopics.getOrElse(day - 1) { "$primarySubject • $day. Gün" }
+        val gatedTopic = BookCampManager.enforcePrerequisiteFoundationGate(
+            subject = primarySubject,
+            requestedTopic = rawTopic,
+            studentTopicGoals = topicGoals
+        ).effectiveTopic
+        val topicLabel = "$primarySubject • $day. Gün: $gatedTopic"
         generated.add(
             PlanEntity(
                 id = UUID.randomUUID().toString(),
                 folderId = activeFolder.id,
                 title = topicLabel,
-                subject = subj,
+                subject = primarySubject,
                 topic = topicLabel,
                 dayOfWeek = day,
                 scheduledTime = "10:00 - 11:30",

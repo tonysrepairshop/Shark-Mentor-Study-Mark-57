@@ -94,13 +94,13 @@ fun FirstTimeTutorialOverlay(
     val steps = remember {
         listOf(
             TutorialStep(
-                title = "Gerçek Koçluk Yolu ve Serbest Takip",
-                description = "Ana ekrandaki üst anahtardan Serbest Takip ile adım adım ilerleyen Gerçek Koçluk Yolu arasında tek dokunuşla geçiş yapabilirsin.",
+                title = "Kapsamlı Destek: Kronometre ve Koçluk Yolu",
+                description = "Ayarlar > Kapsamlı Destek bölümünden bu özelliği açarak ana ekrana Kronometre ve adım adım ilerleyen Koçluk Yolu geçiş barını ekleyebilirsin.",
                 icon = Icons.Default.Route
             ),
             TutorialStep(
-                title = "Günlük Hedef, Sapma (-/+) ve Canlı Başlıklar",
-                description = "Günlük süre hedefini belirleyip eksi/artı durumunu canlı izleyebilir; odak başlatırken seçtiğin başlık ve alt detayı ligdeki arkadaşlarınla paylaşabilirsin.",
+                title = "Çalışma Saati ve Odağı Başlat Penceresi",
+                description = "Günlük çalışma saatini ve başlıklarını Ayarlar'dan düzenleyebilir; odak sayacını başlatırken açılan pencereden başlığını seçip Odağı Başlat ile oturumu başlatabilirsin.",
                 icon = Icons.Default.Flag
             ),
             TutorialStep(

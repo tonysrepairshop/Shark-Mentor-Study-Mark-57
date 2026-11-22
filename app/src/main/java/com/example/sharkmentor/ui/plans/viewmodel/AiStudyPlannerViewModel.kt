@@ -122,14 +122,43 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 "19:00 - 20:30"
             )
 
-            // Sort each day's tasks: hardest (most questions) first, then alphabetically
-            val organized: List<PlanItem> = currentPlans
+            // Sort each subject's topics across the week in canonical curriculum order (e.g. Fonksiyonlar before Türev)
+            val localTopicGoals = runCatching { database.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
+            val gatedPlans = currentPlans.map { item ->
+                val gate = com.example.sharkmentor.core.coaching.BookCampManager.enforcePrerequisiteFoundationGate(
+                    subject = item.subject,
+                    requestedTopic = item.topic,
+                    studentTopicGoals = localTopicGoals
+                )
+                item.copy(topic = gate.effectiveTopic)
+            }
+            val curriculumReorderedBySubject = gatedPlans
+                .groupBy { it.subject.lowercase() }
+                .values
+                .flatMap { subjectTasks ->
+                    val sortedByDaySlots = subjectTasks.sortedWith(compareBy<PlanItem> { it.dayOfWeek }.thenBy { it.timeSlot })
+                    val sortedTopics = subjectTasks.sortedBy {
+                        com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic)
+                    }
+                    sortedByDaySlots.mapIndexed { idx, slotItem ->
+                        val topicSource = sortedTopics[idx]
+                        slotItem.copy(
+                            topic = topicSource.topic,
+                            targetQuestions = topicSource.targetQuestions,
+                            focusStrategy = topicSource.focusStrategy
+                        )
+                    }
+                }
+
+            val organized: List<PlanItem> = curriculumReorderedBySubject
                 .groupBy { it.dayOfWeek }
                 .toSortedMap()
                 .flatMap { (_, dayTasks) ->
                     dayTasks
                         .sortedWith(
-                            compareByDescending<PlanItem> { it.targetQuestions }
+                            compareBy<PlanItem> {
+                                com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic)
+                            }.thenByDescending { it.targetQuestions }
                                 .thenBy { it.subject }
                         )
                         .mapIndexed { index, item ->
@@ -213,8 +242,9 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
             }
 
             try {
-                // 1. Fetch competencies, goal, and past schedules in parallel
+                // 1. Fetch competencies, local Room topic mastery, goal, and past schedules in parallel
                 val scheduleDao = database.institutionScheduleDao()
+                val localTopicGoals = runCatching { database.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
                 val (compDocs, goalDoc, currentSchedules) = coroutineScope {
                     val compDeferred = async {
                         db.collection("students").document(uid)
@@ -227,12 +257,20 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     val schedulesDeferred = async { scheduleDao.getAllSchedules() }
                     Triple(compDeferred.await(), goalDeferred.await(), schedulesDeferred.await())
                 }
-                val allCompetencies = compDocs.documents.mapNotNull { it.toObject(TopicCompetency::class.java) }
+                val remoteCompetencies = compDocs.documents.mapNotNull { it.toObject(TopicCompetency::class.java) }
+                val localCompetencies = localTopicGoals.map {
+                    TopicCompetency(subject = it.subject, topic = it.topic, level = it.currentLevel)
+                }
+                val mergedCompetencies = (localCompetencies + remoteCompetencies)
+                    .distinctBy { "${it.subject.lowercase()}_${it.topic.lowercase()}" }
 
-                // Optimization: Filter to top 15 weak competencies (weakest scores first) to keep token size low and latency fast
-                val prunedCompetencies = allCompetencies
+                // Filter to top 15 weak competencies (weakest scores first)
+                val prunedCompetencies = mergedCompetencies
                     .filter { it.level <= 3 }
-                    .sortedBy { it.level }
+                    .sortedWith(
+                        compareBy<TopicCompetency> { it.level }
+                            .thenBy { com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
+                    )
                     .take(15)
 
                 val activeGoal = goalDoc.toObject(UserGoal::class.java) ?: UserGoal()
@@ -251,7 +289,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(getApplication())
                 }.getOrDefault("")
 
-                // 2. System Instruction for Gemini 3.6 Flash
+                // 2. System Instruction
                 val systemPrompt = """
                     Sen SharkMentor'un kıdemli pedagojik planlama motorusun.
                     GÖREV: Öğrencinin konu yetkinliklerine, hedef üniversite/bölüm/sıralama pusulasına, günlük çalışma hedefi sapmalarına ve önceki hafta verilerine dayanarak 7 günlük (Pazartesi-Pazar) operasyonel çalışma planı hazırla.
@@ -266,10 +304,11 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     2. Eğer okul 13:00'te bitiyorsa, 13:30 - 17:00 aralığını ve akşam saatlerini değerlendir.
                     3. Görevleri sadece öğrencinin TAMAMEN BOŞ olduğu saat pencerelerine yerleştir.
 
-                    EK KURALLAR (Anti-Clone ve Verimlilik):
-                    - KLON PLAN YASAKTIR: Öğrencinin 'previousPlanItems' listesini analiz et. Eğer bir konu geçen hafta planlanmış ve 'isCompleted=true' olarak bitirilmişse, bu konuyu ana odak bloğu yapma. Sadece hafta sonuna kısa tarama/branş denemesi ekle.
-                    - TAMAMLANMAYANLARI TELAFİ ET: Geçen hafta planda olup 'isCompleted=false' kalan veya yetkinliği hala seviye 1-2 olan konuları bu hafta farklı bir stratejiyle ('Konu Anlatımı' yerine 'Soru Kampı & Video Çözüm') tekrar planla.
-                    - MÜFREDAT SENKRONİZASYONU: O gün okulda görülen branşların tekrarını ve soru çözümünü aynı günün boş saatlerine (özellikle öğleden sonra ve akşam) öncelikli olarak yerleştir.
+                    EK KURALLAR (Müfredat Bütünlüğü, Ön Koşul Zemini ve Eksik Konu Takibi):
+                    - MÜFREDAT SIRALAMASI VE DERS BÜTÜNLÜĞÜ: Konuları ders içindeki pedagojik sırasına göre diz. Asla ilk güne Fonksiyonlar veya Limit'ten önce Türev/İntegral yazma. Her ders kendi içinde temelden ileriye doğru sıralanmalıdır.
+                    - EKSİK KONUNUN PEŞİNİ BIRAKMA: Konu hakimiyetinde (competencies) seviyesi 1 veya 2 olan zayıf konulara hafta içinde birden fazla etüt bloğu vererek ağırlık tanı; o konu sağlamlaşmadan geçiştirme.
+                    - ZEMİN OTURTMADAN GEÇİRTME: Birbiriyle bağlantılı konularda (Örn: Fonksiyonlar -> Limit -> Türev -> İntegral veya Mol -> Kimyasal Hesaplamalar) temel ön koşul konunun hakimiyeti düşükse ileri konuyu yazma, önce ön koşul konunun zeminini sağlamlaştır.
+                    - KLON PLAN YASAKTIR: Öğrencinin 'previousPlanItems' listesini analiz et. Eğer bir konu geçen hafta planlanmış ve 'isCompleted=true' ve hakimiyeti yüksekse, bu konuyu ana odak bloğu yapma.
                     - Her çalışma bloğunda öğrencinin seviyesine uygun net konu başlığı ve minimum 30 soru hedefi belirtilmelidir.
 
                     ÇIKTI FORMATI:
@@ -282,7 +321,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                           "dayOfWeek": 1,
                           "timeSlot": "17:00 - 18:30",
                           "subject": "Matematik",
-                          "topic": "Türev",
+                          "topic": "Fonksiyonlar",
                           "targetQuestions": 40,
                           "focusStrategy": "Konu Pekiştirme ve Hata Çözümü"
                         }
@@ -318,8 +357,11 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 }
                 val parsedResponse = gson.fromJson(jsonString, AiWeeklyPlanResponse::class.java)
 
-                // Programmatic Validation for time collisions
-                val validatedSchedule = parsedResponse.schedule.map { task ->
+                // Programmatic Validation:
+                // (a) Time collisions
+                // (b) Prerequisite Foundation Gatekeeping (don't allow Türev if Fonksiyonlar/Limit mastery <= 2)
+                // (c) Canonical Curriculum Ordering across days within each subject (Fonksiyonlar always before Türev)
+                val collisionChecked = parsedResponse.schedule.map { task ->
                     var adjustedTimeSlot = task.timeSlot
                     val dayClasses = currentSchedules.filter { it.dayOfWeek == task.dayOfWeek }
                     val parts = adjustedTimeSlot.split(" - ")
@@ -338,8 +380,36 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                             adjustedTimeSlot = availableSlots.firstOrNull() ?: "21:00 - 22:30"
                         }
                     }
-                    task.copy(timeSlot = adjustedTimeSlot)
+                    val gate = com.example.sharkmentor.core.coaching.BookCampManager.enforcePrerequisiteFoundationGate(
+                        subject = task.subject,
+                        requestedTopic = task.topic,
+                        studentTopicGoals = localTopicGoals
+                    )
+                    task.copy(
+                        timeSlot = adjustedTimeSlot,
+                        topic = gate.effectiveTopic
+                    )
                 }
+
+                // Ensure within each subject across the 7-day week, earlier curriculum topics come on earlier days
+                val validatedSchedule = collisionChecked
+                    .groupBy { it.subject.trim().lowercase() }
+                    .values
+                    .flatMap { subjectTasks ->
+                        val chronologicalSlots = subjectTasks.sortedWith(compareBy({ it.dayOfWeek }, { it.timeSlot }))
+                        val pedagogicalOrder = subjectTasks.sortedBy {
+                            com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic)
+                        }
+                        chronologicalSlots.mapIndexed { idx, slotTask ->
+                            val orderedTopicTask = pedagogicalOrder[idx]
+                            slotTask.copy(
+                                topic = orderedTopicTask.topic,
+                                targetQuestions = orderedTopicTask.targetQuestions,
+                                focusStrategy = orderedTopicTask.focusStrategy
+                            )
+                        }
+                    }
+                    .sortedWith(compareBy({ it.dayOfWeek }, { it.timeSlot }))
 
                 // 5. PRIMARY PERSISTENCE: Save generated items into Room Database for instant UI rendering
                 val tasksToSave = validatedSchedule.map { raw ->
