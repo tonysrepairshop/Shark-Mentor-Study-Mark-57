@@ -128,7 +128,8 @@ class Mark60FeaturesTest {
     @Test
     fun mathSymbolCatalog_insertsSymbolsCleanly() {
         assertEquals("∫", MathSymbolCatalog.insertSymbol("", "∫"))
-        assertEquals("f(x) = x² + √()", MathSymbolCatalog.insertSymbol("f(x) = x² +", "√()"))
+        assertEquals("f(x) = x² + √()", MathSymbolCatalog.insertSymbol("f(x) = x² + ", "√()"))
+        assertEquals("x² + 1 = ", MathSymbolCatalog.insertSymbol("x² + 1", "="))
         assertTrue(MathSymbolCatalog.categories.size >= 4)
         assertTrue(MathSymbolCatalog.categories.all { it.symbols.isNotEmpty() })
     }
