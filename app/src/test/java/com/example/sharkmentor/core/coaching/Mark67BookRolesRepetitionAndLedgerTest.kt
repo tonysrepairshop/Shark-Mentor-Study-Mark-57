@@ -21,11 +21,11 @@ class Mark67BookRolesRepetitionAndLedgerTest {
 
     @Test
     fun testBookCoachingRolesPriorityPassiveExclusionAndNaturalLanguageParsers() {
-        val ferrum = ResourceEntity(id = 1L, title = "Ferrum AYT Kimya", subject = "AYT Kimya")
-        val aydin = ResourceEntity(id = 2L, title = "Aydın AYT Kimya", subject = "AYT Kimya")
-        val orbital = ResourceEntity(id = 3L, title = "Orbital AYT Kimya", subject = "AYT Kimya")
-        val palme = ResourceEntity(id = 4L, title = "Palme AYT Kimya", subject = "AYT Kimya")
-        val passiveExtra = ResourceEntity(id = 5L, title = "Eski Kimya Soru Bankası", subject = "AYT Kimya")
+        val ferrum = ResourceEntity(id = 1L, title = "Ferrum AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val aydin = ResourceEntity(id = 2L, title = "Aydın AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val orbital = ResourceEntity(id = 3L, title = "Orbital AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val palme = ResourceEntity(id = 4L, title = "Palme AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val passiveExtra = ResourceEntity(id = 5L, title = "Eski Kimya Soru Bankası", subject = "AYT Kimya", totalUnits = 100)
 
         val assignments = mapOf(
             1L to BookCoachingAssignment(1L, "AYT Kimya", BookCoachingRole.CONCEPT_VIDEO, priorityOrder = 1, videoDisabled = false),
@@ -278,13 +278,16 @@ class Mark67BookRolesRepetitionAndLedgerTest {
             DiscoveredYouTubePlaylist("PL_TINY_VID_7", "Ferrum AYT Kimya Tanıtım", "Ferrum Kimya", 2),       // < 3 videos!
             DiscoveredYouTubePlaylist("PL_SHORTS_8", "AYT Kimya #shorts özetler", "Kimya Shorts", 15)        // Shorts junk!
         )
-        val rankedTop3 = BookCampManager.rankHybridBookCandidates(
-            bookTitle = "Ferrum AYT Kimya",
+        val (hasDirectMatch, rankedTop3) = BookCampManager.rankHybridBookCandidates(
+            resourceTitle = "Ferrum AYT Kimya",
             subject = "AYT Kimya",
-            candidates = noisyCandidates
+            directRaw = noisyCandidates,
+            subjectRaw = emptyList()
         )
+        assertTrue("Expected direct book match", hasDirectMatch)
         assertTrue("Must return at most 3 playlists", rankedTop3.size <= 3)
         assertTrue("Top match must be Ferrum AYT Kimya", rankedTop3.first().playlistId == "PL_FERRUM_AYT_1")
+        assertTrue("Top match should be recommended", rankedTop3.first().isRecommended)
         assertFalse(rankedTop3.any { it.playlistId == "PL_WRONG_TYT_5" })
         assertFalse(rankedTop3.any { it.playlistId == "PL_WRONG_MAT_6" })
         assertFalse(rankedTop3.any { it.playlistId == "PL_TINY_VID_7" })
@@ -307,7 +310,7 @@ class Mark67BookRolesRepetitionAndLedgerTest {
 
         val episodes = BookCampManager.buildEpisodesFromRealPlaylistVideos(
             playlistId = "PLFerrumAytKimya2026",
-            videos = rawVideos,
+            rawVideos = rawVideos,
             subject = "AYT Kimya"
         )
         assertEquals(3, episodes.size) // Both intro + shorts promo cleanly stripped!
@@ -323,11 +326,11 @@ class Mark67BookRolesRepetitionAndLedgerTest {
     @Test
     fun testBalancedMultiDayPlanSpecsEnforcesMultiRoleSameWeekPractice137ReviewsAndPassiveExclusion() {
         val today = 20_100L
-        val ferrum = ResourceEntity(id = 1L, title = "Ferrum AYT Kimya", subject = "AYT Kimya")
-        val aydin = ResourceEntity(id = 2L, title = "Aydın AYT Kimya", subject = "AYT Kimya")
-        val orbital = ResourceEntity(id = 3L, title = "Orbital AYT Kimya", subject = "AYT Kimya")
-        val passiveChem = ResourceEntity(id = 4L, title = "Kullanılmayan Pasif Kimya", subject = "AYT Kimya")
-        val math3D = ResourceEntity(id = 5L, title = "3D AYT Matematik", subject = "AYT Matematik")
+        val ferrum = ResourceEntity(id = 1L, title = "Ferrum AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val aydin = ResourceEntity(id = 2L, title = "Aydın AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val orbital = ResourceEntity(id = 3L, title = "Orbital AYT Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val passiveChem = ResourceEntity(id = 4L, title = "Kullanılmayan Pasif Kimya", subject = "AYT Kimya", totalUnits = 100)
+        val math3D = ResourceEntity(id = 5L, title = "3D AYT Matematik", subject = "AYT Matematik", totalUnits = 100)
 
         val assignments = mapOf(
             1L to BookCoachingAssignment(1L, "AYT Kimya", BookCoachingRole.CONCEPT_VIDEO, priorityOrder = 1),
