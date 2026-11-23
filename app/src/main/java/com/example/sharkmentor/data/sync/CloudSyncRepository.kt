@@ -340,44 +340,8 @@ class CloudSyncRepository(private val context: Context) {
     // ── Topics (Konularım) ──────────────────────────────────────────
 
     private suspend fun syncPendingTopics(uid: String): Int {
-        val fs = firestore ?: return 0
-        val pending = syncDao.getUnsyncedTopics()
-        if (pending.isEmpty()) return 0
-
-        Log.d(TAG, "Uploading ${pending.size} pending topics to Firestore...")
-        var synced = 0
-        for (topic in pending) {
-            try {
-                val docId = "${uid}_${topic.id}"
-                val rootTopicData = hashMapOf<String, Any?>(
-                    "id"                 to docId,
-                    "localId"            to topic.id,
-                    "studentId"          to uid,
-                    "userId"             to uid,
-                    "subject"            to topic.subject,
-                    "topic"              to topic.topic,
-                    "topicName"          to topic.topic,
-                    "masteryLevel"       to topic.currentLevel,
-                    "targetMasteryScore" to topic.targetLevel,
-                    "isDeleted"          to false,
-                    "updatedAt"          to FieldValue.serverTimestamp()
-                )
-                fs.collection("topics").document(docId)
-                    .set(rootTopicData, SetOptions.merge())
-                    .await()
-                runCatching {
-                    fs.collection("students").document(uid).collection("topics").document(docId)
-                        .set(rootTopicData, SetOptions.merge())
-                        .await()
-                }
-                syncDao.markTopicsAsSynced(listOf(topic.id))
-                synced++
-                Log.d(TAG, "Synced topic id=${topic.id} -> topics/$docId")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to sync topic id=${topic.id}: ${e.message}")
-            }
-        }
-        return synced
+        if (uid.isBlank() || uid == "student_default") return 0
+        return TopicCloudSyncManager.pushPendingTopicsNow(context)
     }
 
     // ── New Entities (Phase 1) ──────────────────────────────────────────

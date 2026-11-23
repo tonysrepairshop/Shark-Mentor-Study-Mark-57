@@ -57,6 +57,13 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     private var targetDao: ConcreteTargetDao? = null
     @Volatile
     private var resourcesListener: ListenerRegistration? = null
+    @Volatile
+    private var topicsSubcollectionListener: ListenerRegistration? = null
+    @Volatile
+    private var topicsRootListener: ListenerRegistration? = null
+    @Volatile
+    private var activeListenersUid: String? = null
+    private var authStateListener: FirebaseAuth.AuthStateListener? = null
     private val aiService = com.example.sharkmentor.core.ai.GeminiCoreService(application)
 
     private val _topicGoals = MutableStateFlow<List<TopicGoalEntity>>(emptyList())
@@ -164,109 +171,168 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Reconcile incoming remote resource changes into Room (single source of truth)
-            val currentUser = runCatching { FirebaseAuth.getInstance().currentUser }.getOrNull()
-                ?: GoogleServicesHelper.getCurrentUser(context = getApplication())
-            val uid = currentUser?.uid
-            if (currentUser != null && uid != null) {
-                runCatching {
-                    resourcesListener?.remove()
-                    resourcesListener = GoogleServicesHelper.getFirebaseFirestore(getApplication())?.collection("resources")
-                        ?.whereEqualTo("studentId", uid)
-                        ?.addSnapshotListener { snapshots, error ->
-                            if (error != null) {
-                                Log.w("ResourceSync", "Kaynak dinleme hatası (offline): ${error.message}")
-                                return@addSnapshotListener
-                            }
-                            if (snapshots != null) {
-                                launch(Dispatchers.IO) {
-                                    val goalsDao = dao ?: return@launch
-                                    snapshots.documents.forEach { doc ->
-                                        runCatching {
-                                            val existingByCloud = goalsDao.getResourceByCloudId(doc.id)
-                                            val resolvedId = existingByCloud?.id
-                                                ?: doc.getLong("localId")
-                                                ?: doc.getLong("id")
-                                                ?: doc.id.removePrefix("res_").removePrefix("${uid}_").toLongOrNull()
-                                                ?: abs(doc.id.hashCode().toLong())
-                                            val isDeleted = doc.getBoolean("isDeleted") ?: false
-                                            if (isDeleted) {
-                                                goalsDao.deleteResourcePermanently(resolvedId)
-                                                return@runCatching
-                                            }
-                                            val existing = existingByCloud ?: goalsDao.getResourceById(resolvedId)
-                                            if (existing != null && !existing.isSynced) {
-                                                // Preserve pending local offline mutations until SyncWorker uploads them
-                                                return@runCatching
-                                            }
-                                            val totalUnits = (doc.getLong("totalUnits")?.toInt()
-                                                ?: doc.getLong("totalTarget")?.toInt()
-                                                ?: 0).coerceAtLeast(0)
-                                            val rawCompleted = (doc.getLong("completedUnits")?.toInt()
-                                                ?: doc.getLong("currentUnits")?.toInt()
-                                                ?: 0).coerceAtLeast(0)
-                                            val completedUnits = if (totalUnits > 0) rawCompleted.coerceIn(0, totalUnits) else rawCompleted
-                                            val remoteUpdatedMs = doc.getTimestamp("updatedAt")?.toDate()?.time
-                                                ?: System.currentTimeMillis()
-                                            val entity = ResourceEntity(
-                                                id = resolvedId,
-                                                title = doc.getString("title") ?: existing?.title ?: "",
-                                                subject = doc.getString("subject") ?: existing?.subject ?: "Genel",
-                                                totalUnits = totalUnits,
-                                                completedUnits = completedUnits,
-                                                unitType = doc.getString("unitType") ?: doc.getString("unit") ?: existing?.unitType ?: "Sayfa",
-                                                updatedAtMillis = remoteUpdatedMs,
-                                                colorHex = doc.getString("colorHex") ?: existing?.colorHex ?: "#0ea5e9",
-                                                cloudId = doc.id,
-                                                isSynced = true,
-                                                lastModifiedMillis = remoteUpdatedMs,
-                                                isAssignedByCoach = doc.getBoolean("isAssignedByCoach")
-                                                    ?: doc.getBoolean("isCoachAssigned")
-                                                    ?: (doc.getString("assignedBy") == "coach")
-                                            )
-                                            goalsDao.upsertResource(entity)
-                                        }
+            // Attach cloud listeners immediately if already signed in, and re-attach on auth changes
+            val authInstance = runCatching { GoogleServicesHelper.getFirebaseAuth(getApplication()) }.getOrNull()
+            val initialUid = runCatching { FirebaseAuth.getInstance().currentUser?.uid }.getOrNull()
+                ?: GoogleServicesHelper.getCurrentUser(authInstance, getApplication())?.uid
+            if (!initialUid.isNullOrBlank() && initialUid != "student_default") {
+                attachCloudSyncListeners(initialUid)
+            }
+            if (authInstance != null) {
+                val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+                    val nextUid = firebaseAuth.currentUser?.uid
+                    if (!nextUid.isNullOrBlank() && nextUid != "student_default") {
+                        if (activeListenersUid != nextUid) {
+                            attachCloudSyncListeners(nextUid)
+                        }
+                    } else {
+                        detachCloudSyncListeners()
+                    }
+                }
+                authStateListener = listener
+                runCatching { authInstance.addAuthStateListener(listener) }
+            }
+        }
+    }
+
+    private fun detachCloudSyncListeners() {
+        resourcesListener?.remove()
+        resourcesListener = null
+        topicsSubcollectionListener?.remove()
+        topicsSubcollectionListener = null
+        topicsRootListener?.remove()
+        topicsRootListener = null
+        activeListenersUid = null
+    }
+
+    private fun attachCloudSyncListeners(uid: String) {
+        detachCloudSyncListeners()
+        activeListenersUid = uid
+        val appContext = getApplication<Application>()
+        val fs = GoogleServicesHelper.getFirebaseFirestore(appContext) ?: return
+
+        // Immediate one-shot pull + merge for Topic Mastery (handles fresh reinstalls instantaneously)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                    .pullAndMergeFromCloud(appContext, forceServer = false)
+            }
+        }
+
+        // 1. Live Resources Listener (Kütüphane)
+        runCatching {
+            resourcesListener = fs.collection("resources")
+                .whereEqualTo("studentId", uid)
+                .addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.w("ResourceSync", "Kaynak dinleme hatası (offline): ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            val goalsDao = dao ?: return@launch
+                            snapshots.documents.forEach { doc ->
+                                runCatching {
+                                    val existingByCloud = goalsDao.getResourceByCloudId(doc.id)
+                                    val resolvedId = existingByCloud?.id
+                                        ?: doc.getLong("localId")
+                                        ?: doc.getLong("id")
+                                        ?: doc.id.removePrefix("res_").removePrefix("${uid}_").toLongOrNull()
+                                        ?: abs(doc.id.hashCode().toLong())
+                                    val isDeleted = doc.getBoolean("isDeleted") ?: false
+                                    if (isDeleted) {
+                                        goalsDao.deleteResourcePermanently(resolvedId)
+                                        return@runCatching
                                     }
-                                    _isLoading.value = false
+                                    val existing = existingByCloud ?: goalsDao.getResourceById(resolvedId)
+                                    if (existing != null && !existing.isSynced) {
+                                        // Preserve pending local offline mutations until SyncWorker uploads them
+                                        return@runCatching
+                                    }
+                                    val totalUnits = (doc.getLong("totalUnits")?.toInt()
+                                        ?: doc.getLong("totalTarget")?.toInt()
+                                        ?: 0).coerceAtLeast(0)
+                                    val rawCompleted = (doc.getLong("completedUnits")?.toInt()
+                                        ?: doc.getLong("currentUnits")?.toInt()
+                                        ?: 0).coerceAtLeast(0)
+                                    val completedUnits = if (totalUnits > 0) rawCompleted.coerceIn(0, totalUnits) else rawCompleted
+                                    val remoteUpdatedMs = doc.getTimestamp("updatedAt")?.toDate()?.time
+                                        ?: System.currentTimeMillis()
+                                    val entity = ResourceEntity(
+                                        id = resolvedId,
+                                        title = doc.getString("title") ?: existing?.title ?: "",
+                                        subject = doc.getString("subject") ?: existing?.subject ?: "Genel",
+                                        totalUnits = totalUnits,
+                                        completedUnits = completedUnits,
+                                        unitType = doc.getString("unitType") ?: doc.getString("unit") ?: existing?.unitType ?: "Sayfa",
+                                        updatedAtMillis = remoteUpdatedMs,
+                                        colorHex = doc.getString("colorHex") ?: existing?.colorHex ?: "#0ea5e9",
+                                        cloudId = doc.id,
+                                        isSynced = true,
+                                        lastModifiedMillis = remoteUpdatedMs,
+                                        isAssignedByCoach = doc.getBoolean("isAssignedByCoach")
+                                            ?: doc.getBoolean("isCoachAssigned")
+                                            ?: (doc.getString("assignedBy") == "coach")
+                                    )
+                                    goalsDao.upsertResource(entity)
                                 }
                             }
+                            _isLoading.value = false
                         }
-                }.onFailure { e ->
-                    Log.w("ResourceSync", "Failed to attach resources listener: ${e.message}")
+                    }
                 }
-            }
+        }.onFailure { e ->
+            Log.w("ResourceSync", "Failed to attach resources listener: ${e.message}")
+        }
+
+        // 2. Live Topic Mastery Listener — Canonical Owner Subcollection (`students/{uid}/topics`)
+        runCatching {
+            topicsSubcollectionListener = fs.collection("students").document(uid)
+                .collection("topics")
+                .addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.w("TopicSync", "Konu subcollection dinleme hatası: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null && snapshots.documents.isNotEmpty()) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                .reconcileLiveSnapshot(appContext, snapshots.documents, fromSubcollection = true)
+                            _isLoading.value = false
+                        }
+                    }
+                }
+        }.onFailure { e ->
+            Log.w("TopicSync", "Failed to attach topics subcollection listener: ${e.message}")
+        }
+
+        // 3. Live Topic Mastery Listener — Root Compatibility Collection (`topics`)
+        runCatching {
+            topicsRootListener = fs.collection("topics")
+                .whereEqualTo("studentId", uid)
+                .addSnapshotListener { snapshots, error ->
+                    if (error != null) {
+                        Log.w("TopicSync", "Konu root dinleme hatası: ${error.message}")
+                        return@addSnapshotListener
+                    }
+                    if (snapshots != null && snapshots.documents.isNotEmpty()) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                .reconcileLiveSnapshot(appContext, snapshots.documents, fromSubcollection = false)
+                            _isLoading.value = false
+                        }
+                    }
+                }
+        }.onFailure { e ->
+            Log.w("TopicSync", "Failed to attach topics root listener: ${e.message}")
         }
     }
 
     // ── Direct Firestore Sync Helpers ──────────────────────────────────────────
 
-    private suspend fun syncTopicToFirestore(localTopicId: Long, subject: String, topicName: String, masteryLevel: Int) {
-        val uid = GoogleServicesHelper.getCurrentUser(context = getApplication())?.uid ?: return
-        val db = GoogleServicesHelper.getFirebaseFirestore(getApplication()) ?: return
-        val docId = "${uid}_${localTopicId}"
-
-        val topicData = hashMapOf<String, Any?>(
-            "id"           to docId,
-            "localId"      to localTopicId,
-            "studentId"    to uid,
-            "userId"       to uid,
-            "subject"      to subject,
-            "topic"        to topicName,
-            "topicName"    to topicName,
-            "masteryLevel" to masteryLevel,
-            "isDeleted"    to false,
-            "updatedAt"    to FieldValue.serverTimestamp()
-        )
-
-        runCatching {
-            db.collection("topics").document(docId).set(topicData, SetOptions.merge()).await()
-            runCatching {
-                db.collection("students").document(uid).collection("topics").document(docId)
-                    .set(topicData, SetOptions.merge()).await()
-            }
-        }.onFailure { e ->
-            Log.e("SharkSync", "Failed to sync topic $docId: ${e.message}", e)
-        }
+    private suspend fun syncTopicToFirestore(entity: TopicGoalEntity): Boolean {
+        return com.example.sharkmentor.data.sync.TopicCloudSyncManager
+            .pushTopicsNow(getApplication(), listOf(entity)) > 0
     }
 
     private suspend fun syncResourceToFirestore(resource: ResourceEntity): Boolean {
@@ -319,10 +385,12 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 updatedAtMillis = System.currentTimeMillis()
             )
             dao?.updateTopicGoal(updated)
-            syncTopicToFirestore(updated.id, updated.subject, updated.topic, updated.currentLevel)
+            val pushed = syncTopicToFirestore(updated)
             val context = getApplication<android.app.Application>()
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            SyncWorker.enqueueImmediateSync(context)
+            if (!pushed) {
+                SyncWorker.enqueueImmediateSync(context)
+            }
         }
     }
 
@@ -330,20 +398,26 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<android.app.Application>()
             val institutionId = com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).institutionId ?: "INDIVIDUAL"
+            val now = System.currentTimeMillis()
             val entity = TopicGoalEntity(
                 subject = subject,
                 topic = topic,
                 targetLevel = targetLevel,
                 currentLevel = 1,
                 isSynced = false,
-                institutionId = institutionId
+                institutionId = institutionId,
+                updatedAtMillis = now
             )
             val insertedId = dao?.insertTopicGoal(entity) ?: 0L
-            if (insertedId > 0L) {
-                syncTopicToFirestore(insertedId, subject, topic, 1)
+            val pushed = if (insertedId > 0L) {
+                syncTopicToFirestore(entity.copy(id = insertedId))
+            } else {
+                false
             }
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            SyncWorker.enqueueImmediateSync(context)
+            if (!pushed) {
+                SyncWorker.enqueueImmediateSync(context)
+            }
         }
     }
 
@@ -351,15 +425,19 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<android.app.Application>()
             dao?.softDeleteTopicGoal(topic.id)
-            val database = SharkMentorDatabase.getDatabase(context)
-            database.pendingDeletionDao().insert(
-                com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
-                    entityId = topic.id.toString(),
-                    collectionName = "topics"
+            val deletedRemote = com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                .deleteTopicsInCloudNow(context, listOf(topic))
+            if (!deletedRemote) {
+                val database = SharkMentorDatabase.getDatabase(context)
+                database.pendingDeletionDao().insert(
+                    com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
+                        entityId = topic.id.toString(),
+                        collectionName = "topics"
+                    )
                 )
-            )
+                SyncWorker.enqueueImmediateSync(context)
+            }
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            SyncWorker.enqueueImmediateSync(context)
         }
     }
 
@@ -367,19 +445,23 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<android.app.Application>()
             val database = SharkMentorDatabase.getDatabase(context)
-            val allTopics = dao?.getAllTopicsRaw()?.filter { it.subject == subjectName }
+            val allTopics = dao?.getAllTopicsRaw()?.filter { it.subject == subjectName }.orEmpty()
             dao?.softDeleteBySubject(subjectName)
 
-            allTopics?.forEach { topic ->
-                database.pendingDeletionDao().insert(
-                    com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
-                        entityId = topic.id.toString(),
-                        collectionName = "topics"
+            val deletedRemote = com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                .deleteTopicsInCloudNow(context, allTopics)
+            if (!deletedRemote) {
+                allTopics.forEach { topic ->
+                    database.pendingDeletionDao().insert(
+                        com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
+                            entityId = topic.id.toString(),
+                            collectionName = "topics"
+                        )
                     )
-                )
+                }
+                SyncWorker.enqueueImmediateSync(context)
             }
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            SyncWorker.enqueueImmediateSync(context)
         }
     }
 
@@ -534,6 +616,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             result.onSuccess { topicPairs ->
                 kotlinx.coroutines.withContext(Dispatchers.IO) {
                     val institutionId = com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).institutionId ?: "INDIVIDUAL"
+                    val now = System.currentTimeMillis()
                     val entities = topicPairs.map { (subject, topic) ->
                         TopicGoalEntity(
                             subject = subject,
@@ -541,18 +624,21 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                             currentLevel = 1,
                             targetLevel = 5,
                             isSynced = false,
-                            institutionId = institutionId
+                            institutionId = institutionId,
+                            updatedAtMillis = now
                         )
                     }
                     val insertedIds = dao?.insertTopicGoals(entities) ?: emptyList()
-                    entities.forEachIndexed { index, topicEntity ->
+                    val persistedEntities = entities.mapIndexed { index, topicEntity ->
                         val topicId = insertedIds.getOrNull(index)?.takeIf { it > 0L } ?: topicEntity.id
-                        if (topicId > 0L) {
-                            syncTopicToFirestore(topicId, topicEntity.subject, topicEntity.topic, topicEntity.currentLevel)
-                        }
-                    }
+                        topicEntity.copy(id = topicId)
+                    }.filter { it.id > 0L }
+                    val pushed = com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                        .pushTopicsNow(context, persistedEntities)
                     com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-                    SyncWorker.enqueueImmediateSync(context)
+                    if (pushed < persistedEntities.size) {
+                        SyncWorker.enqueueImmediateSync(context)
+                    }
                 }
 
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -611,9 +697,16 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                     targetData["targetRanking"] = if (targetRanking != null && targetRanking > 0) targetRanking else null
                     targetData["targetUniversity"] = targetUniversity
                     targetData["targetDepartment"] = targetDepartment
+                    targetData["targetTitle"] = targetTitle
+                    targetData["targetExamType"] = examType
+                    targetData["targetAnalysisSummary"] = analysisSummary
                     
-                    db.collection("users").document(uid).set(targetData, SetOptions.merge())
-                    db.collection("students").document(uid).set(targetData, SetOptions.merge())
+                    runCatching {
+                        db.collection("students").document(uid).set(targetData, SetOptions.merge()).await()
+                    }
+                    runCatching {
+                        db.collection("users").document(uid).set(targetData, SetOptions.merge()).await()
+                    }
                 }
                 com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
                 com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
@@ -660,8 +753,11 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        resourcesListener?.remove()
-        resourcesListener = null
+        authStateListener?.let { listener ->
+            runCatching { GoogleServicesHelper.getFirebaseAuth(getApplication())?.removeAuthStateListener(listener) }
+        }
+        authStateListener = null
+        detachCloudSyncListeners()
         super.onCleared()
     }
 }

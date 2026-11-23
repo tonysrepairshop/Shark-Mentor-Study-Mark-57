@@ -750,31 +750,13 @@ private suspend fun persistTopicMasteryUpdate(
     )
     db.goalsDao().updateTopicGoal(updated)
 
-    runCatching {
-        val uid = GoogleServicesHelper.getCurrentUser(context = context)?.uid
-        val firestore = GoogleServicesHelper.getFirebaseFirestore(context)
-        if (!uid.isNullOrBlank() && firestore != null) {
-            val docId = "${uid}_${updated.id}"
-            val payload = hashMapOf<String, Any?>(
-                "id" to docId,
-                "localId" to updated.id,
-                "studentId" to uid,
-                "userId" to uid,
-                "subject" to updated.subject,
-                "topic" to updated.topic,
-                "topicName" to updated.topic,
-                "masteryLevel" to clamped,
-                "targetMasteryScore" to updated.targetLevel,
-                "isDeleted" to false,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            firestore.collection("topics").document(docId).set(payload, SetOptions.merge())
-            firestore.collection("students").document(uid).collection("topics").document(docId)
-                .set(payload, SetOptions.merge())
-        }
-    }
+    val pushed = runCatching {
+        com.example.sharkmentor.data.sync.TopicCloudSyncManager.pushTopicsNow(context, listOf(updated))
+    }.getOrDefault(0)
     StudentDossierManager.syncInBackground(context)
-    SyncWorker.enqueueImmediateSync(context)
+    if (pushed <= 0) {
+        SyncWorker.enqueueImmediateSync(context)
+    }
 }
 
 private suspend fun persistBookProgressUpdate(

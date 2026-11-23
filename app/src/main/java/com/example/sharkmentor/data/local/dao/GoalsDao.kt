@@ -33,6 +33,9 @@ interface GoalsDao {
     @Query("SELECT * FROM topic_goals WHERE isDeleted = 0")
     fun getAllTopicsRaw(): List<TopicGoalEntity>
 
+    @Query("SELECT * FROM topic_goals")
+    fun getAllTopicsIncludingDeletedRaw(): List<TopicGoalEntity>
+
     @Query("SELECT * FROM resources WHERE isDeleted = 0")
     fun getAllResourcesRaw(): List<ResourceEntity>
 

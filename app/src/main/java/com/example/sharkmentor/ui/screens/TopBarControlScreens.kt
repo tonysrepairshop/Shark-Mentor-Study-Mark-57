@@ -101,54 +101,54 @@ fun TopBarControlHubContent(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        SectionContainer(title = "Görünüm Kontrolleri") {
+        SectionContainer(title = "Üst Bar Görünümü") {
             SwitchSettingRow(
                 title = "Baloncukları Kapat",
-                subtitle = "Hava durumu, motivasyon ve DM dış çerçevelerini kaldırır",
+                subtitle = "Üst bardaki kart çerçevelerini sadeleştirir",
                 checked = settings.hideBubbles,
                 onCheckedChange = onToggleHideBubbles
             )
             SectionDivider()
             SwitchSettingRow(
-                title = "Üst Bar Menüsünü Kapat",
-                subtitle = "Üst bar kontrol menüsünü gizler",
+                title = "Üst Bar Menüsünü Gizle",
+                subtitle = "Üst bar kontrol kısayolunu kapatır",
                 checked = settings.hideTopBarMenu,
                 onCheckedChange = onToggleHideTopBarMenu
             )
             SectionDivider()
             SwitchSettingRow(
-                title = "Odak Sırasında Kapat",
-                subtitle = "Odak oturumu çalışırken üst barı otomatik gizler",
+                title = "Odak Sırasında Gizle",
+                subtitle = "Odak oturumu başlarken üst barı otomatik kapatır",
                 checked = settings.hideDuringFocus,
                 onCheckedChange = onToggleHideDuringFocus
             )
             if (onToggleInAppSuggestions != null) {
                 SectionDivider()
                 SwitchSettingRow(
-                    title = "Uygulama İçi Akıllı Öneriler",
-                    subtitle = "Yağmurlu havada yağmur sesi açma gibi tek dokunuşluk öneriler sunar",
+                    title = "Akıllı Öneriler",
+                    subtitle = "Hava durumuna göre ambiyans ve hızlı kısayollar önerir",
                     checked = settings.inAppSuggestionsEnabled,
                     onCheckedChange = onToggleInAppSuggestions
                 )
             }
         }
 
-        SectionContainer(title = "Alt Ayarlar") {
+        SectionContainer(title = "İçerik & Modüller") {
             NavigationSettingRow(
                 icon = Icons.Rounded.TextFields,
-                title = "Üst Bar Yazıları & Yenileme Sıklığı",
+                title = "Üst Bar Yazıları & Sıklık",
                 onClick = onOpenTextSettings
             )
             SectionDivider()
             NavigationSettingRow(
                 icon = Icons.Rounded.WbSunny,
-                title = "Hava Durumu Ayarları",
+                title = "Hava Durumu",
                 onClick = onOpenWeatherSettings
             )
             SectionDivider()
             NavigationSettingRow(
                 icon = Icons.Rounded.Timer,
-                title = "Hedef Sınav & Geri Sayım",
+                title = "Sınav Geri Sayımı",
                 onClick = onOpenCountdownSettings
             )
         }
@@ -180,15 +180,6 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
                     label = source.label,
                     selected = settings.textSource == source,
                     onClick = { prefs.setTextSource(source) }
-                )
-            }
-            if (settings.textSource == TopBarTextSource.AI_SUGGESTIONS) {
-                SectionDivider()
-                SwitchSettingRow(
-                    title = "Uygulama İçi Akıllı Öneriler",
-                    subtitle = "Hava durumuna göre ambiyans sesi (ör. yağmur sesi) ve hızlı kısayollar önerir",
-                    checked = settings.inAppSuggestionsEnabled,
-                    onCheckedChange = prefs::setInAppSuggestionsEnabled
                 )
             }
         }
@@ -776,7 +767,10 @@ private fun RadioOptionRow(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
+fun FocusWellnessSettingsContent(
+    prefs: TopBarPreferences,
+    onOpenReflectionTime: (() -> Unit)? = null
+) {
     val settings by prefs.settings.collectAsStateWithLifecycle()
 
     Column(
@@ -786,10 +780,20 @@ fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        SectionContainer(title = "Uzun Çalışma Sağlık Hatırlatmaları") {
+        if (onOpenReflectionTime != null) {
+            SectionContainer(title = "Günlük Değerlendirme") {
+                NavigationSettingRow(
+                    icon = Icons.Rounded.Timer,
+                    title = "Gün Değerlendirmesi Saati",
+                    onClick = onOpenReflectionTime
+                )
+            }
+        }
+
+        SectionContainer(title = "Odak Sağlık Hatırlatmaları") {
             SwitchSettingRow(
                 title = "Su İçme Hatırlatması",
-                subtitle = "Uzun odak oturumlarında belirli aralıklarla su içme bildirimi ve üst bar uyarısı gönderir",
+                subtitle = "Uzun oturumlarda belirli aralıklarla su hatırlatması verir",
                 checked = settings.hydrationReminderEnabled,
                 onCheckedChange = prefs::setHydrationReminderEnabled
             )
@@ -802,7 +806,7 @@ fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Su hatırlatma aralığı: Her ${settings.hydrationIntervalMinutes} dk",
+                        text = "Aralık: Her ${settings.hydrationIntervalMinutes} dk",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
@@ -838,8 +842,8 @@ fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
             SectionDivider()
 
             SwitchSettingRow(
-                title = "Oturma & Duruş Uyarısı",
-                subtitle = "Uzun süre masada kalındığında sırtını dikleştirme ve göz dinlendirme uyarısı verir",
+                title = "Duruş & Göz Dinlendirme",
+                subtitle = "Uzun masa başı çalışmasında kısa duruş uyarısı verir",
                 checked = settings.postureReminderEnabled,
                 onCheckedChange = prefs::setPostureReminderEnabled
             )
@@ -852,7 +856,7 @@ fun FocusWellnessSettingsContent(prefs: TopBarPreferences) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = "Duruş uyarısı aralığı: Her ${settings.postureIntervalMinutes} dk",
+                        text = "Aralık: Her ${settings.postureIntervalMinutes} dk",
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary

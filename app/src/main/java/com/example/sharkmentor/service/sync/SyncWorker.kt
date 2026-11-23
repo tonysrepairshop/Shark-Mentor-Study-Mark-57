@@ -118,15 +118,14 @@ class SyncWorker(
         fun enqueueImmediateSync(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
-                .setRequiresBatteryNotLow(true)
                 .build()
 
             val oneTimeRequest = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(constraints)
-                .setInitialDelay(15, TimeUnit.SECONDS)
+                .setInitialDelay(3, TimeUnit.SECONDS)
                 .setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL,
-                    30,
+                    20,
                     TimeUnit.SECONDS
                 )
                 .addTag(UNIQUE_IMMEDIATE_WORK)
@@ -137,7 +136,7 @@ class SyncWorker(
                 ExistingWorkPolicy.KEEP,
                 oneTimeRequest
             )
-            Log.d(TAG, "Immediate plan sync enqueued with KEEP policy (15s debounce)")
+            Log.d(TAG, "Immediate sync enqueued with KEEP policy (3s debounce)")
         }
 
         fun enqueueForceFullSync(context: Context) {
@@ -322,10 +321,10 @@ class SyncWorker(
                         try { pullRemoteResources(db, firestore, syncTag, uid) } catch (e: Exception) { Log.e(syncTag, "Err pull res", e) }
                     }
                     val topicsJob = async {
-                        try { pullRemoteTopics(db, firestore, syncTag, uid) } catch (e: Exception) { Log.e(syncTag, "Err pull topics", e) }
+                        try { pullRemoteTopics(db, firestore, syncTag, uid, forceServer = forcePull) } catch (e: Exception) { Log.e(syncTag, "Err pull topics", e) }
                     }
                     val goalsJob = async {
-                        try { pullRemoteGoals(db, firestore, syncTag, uid) } catch (e: Exception) { Log.e(syncTag, "Err pull goals", e) }
+                        try { pullRemoteGoals(db, firestore, syncTag, uid, studentDoc = studentDoc) } catch (e: Exception) { Log.e(syncTag, "Err pull goals", e) }
                     }
                     awaitAll(streakAndCountdownJob, planAndScheduleJob, resourcesJob, topicsJob, goalsJob)
                 }
@@ -692,108 +691,19 @@ class SyncWorker(
         }
     }
 
-    // ── 3. Inbound Downstream Pull: Coach-Assigned Topics ──
+    // ── 3. Inbound Downstream Pull: Topic Mastery (Dual-Collection Merge) ──
     private suspend fun pullRemoteTopics(
         db: com.example.sharkmentor.data.local.SharkMentorDatabase,
         firestore: FirebaseFirestore,
         syncTag: String,
-        uid: String
+        uid: String,
+        forceServer: Boolean = false
     ) = withContext(Dispatchers.IO) {
         if (uid.isBlank() || uid == "student_default") return@withContext
         try {
-            var snapshot: com.google.firebase.firestore.QuerySnapshot? = null
-
-            // 1. Try student's subcollection first
-            try {
-                snapshot = firestore.collection("students").document(uid)
-                    .collection("topics")
-                    .limit(TOPIC_QUERY_LIMIT)
-                    .get(Source.DEFAULT).await()
-            } catch (e: Exception) {
-                Log.w(syncTag, "Subcollection pull failed for students/$uid/topics: ${e.message}")
-            }
-
-            // 2. Fallback to legacy root collection if subcollection was empty (24h cooldown)
-            if ((snapshot == null || snapshot.isEmpty) &&
-                shouldRunLegacyFallback(applicationContext, "topics")
-            ) {
-                try {
-                    val rootSnapshot = firestore.collection("topics")
-                        .whereEqualTo("studentId", uid)
-                        .limit(TOPIC_QUERY_LIMIT)
-                        .get(Source.DEFAULT).await()
-                    if (rootSnapshot.isEmpty) {
-                        markLegacyFallbackChecked(applicationContext, "topics")
-                    }
-                    if (snapshot == null || !rootSnapshot.isEmpty) {
-                        snapshot = rootSnapshot
-                    }
-                } catch (e: Exception) {
-                    Log.w(syncTag, "Legacy root collection pull failed for topics: ${e.message}")
-                }
-            }
-
-            if (snapshot == null) {
-                Log.w(syncTag, "pullRemoteTopics: Cloud topics query returned null. Retaining local topics.")
-                return@withContext
-            }
-
-            val syncDao = db.syncDao()
-            val goalsDao = db.goalsDao()
-
-            val resolvedDocs = snapshot.documents.map { doc ->
-                val resolvedId = doc.getSafeLong("localId")
-                    ?: doc.getSafeLong("id")
-                    ?: doc.id.removePrefix("${uid}_").toLongOrNull()
-                    ?: abs(doc.id.hashCode().toLong())
-                resolvedId to doc
-            }
-
-            val activeRemoteIds = resolvedDocs
-                .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
-                .map { it.first }
-
-            val canSafelyPruneTopics = !snapshot.metadata.isFromCache &&
-                snapshot.size().toLong() < TOPIC_QUERY_LIMIT
-            if (canSafelyPruneTopics) {
-                if (activeRemoteIds.isEmpty()) {
-                    goalsDao.clearAllTopics()
-                } else {
-                    goalsDao.deleteOrphanedTopics(activeRemoteIds)
-                }
-            } else {
-                Log.d(syncTag, "Skipped destructive topic orphan sweep (fromCache=${snapshot.metadata.isFromCache}, size=${snapshot.size()})")
-            }
-
-            for ((remoteId, doc) in resolvedDocs) {
-                val isDeleted = doc.getSafeBoolean("isDeleted") ?: false
-                if (isDeleted) {
-                    syncDao.deleteTopicPermanently(remoteId)
-                    continue
-                }
-
-                val existing = goalsDao.getTopicById(remoteId)
-                if (existing != null && !existing.isSynced) {
-                    continue
-                }
-
-                val topicEntity = com.example.sharkmentor.data.local.entity.TopicGoalEntity(
-                    id = remoteId,
-                    subject = sanitizeTurkishText(doc.getSafeString("subject") ?: doc.getSafeString("subjectName") ?: "Genel"),
-                    topic = sanitizeTurkishText(doc.getSafeString("topicName") ?: doc.getSafeString("topic") ?: "Konu"),
-                    currentLevel = doc.getSafeInt("masteryLevel") ?: doc.getSafeInt("masteryScore") ?: 0,
-                    targetLevel = doc.getSafeInt("targetMasteryScore") ?: 5,
-                    notes = "",
-                    isSynced = true,
-                    isDeleted = false,
-                    updatedAtMillis = doc.getTimestamp("updatedAt")?.toDate()?.time
-                        ?: doc.getSafeLong("updatedAt")
-                        ?: System.currentTimeMillis()
-                )
-
-                syncDao.upsertTopic(topicEntity)
-                Log.d(syncTag, "Successfully saved remote topic to Room: id=$remoteId, topic=${topicEntity.topic}")
-            }
+            val activeCount = com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                .pullAndMergeFromCloud(applicationContext, forceServer = forceServer)
+            Log.d(syncTag, "pullRemoteTopics via TopicCloudSyncManager finished (activeLocal=$activeCount, forceServer=$forceServer)")
         } catch (e: Exception) {
             Log.e(syncTag, "Error in pullRemoteTopics: ${e.message}", e)
         }
@@ -804,7 +714,8 @@ class SyncWorker(
         db: com.example.sharkmentor.data.local.SharkMentorDatabase,
         firestore: FirebaseFirestore,
         syncTag: String,
-        uid: String
+        uid: String,
+        studentDoc: DocumentSnapshot? = null
     ) = withContext(Dispatchers.IO) {
         if (uid.isBlank() || uid == "student_default") return@withContext
         try {
@@ -840,109 +751,143 @@ class SyncWorker(
                 }
             }
 
-            if (goalsSnapshot == null) {
-                Log.w(syncTag, "pullRemoteGoals: Cloud goals query returned null. Retaining local goals.")
-                return@withContext
-            }
-
-            val targetDao = db.targetDao()
             val concreteTargetDao = db.concreteTargetDao()
 
-            val resolvedGoalDocs = goalsSnapshot.documents.map { doc ->
-                val remoteId = doc.getSafeLong("localId")
-                    ?: doc.getSafeLong("id")
-                    ?: doc.id.removePrefix("${uid}_").toLongOrNull()
-                    ?: abs(doc.id.hashCode().toLong())
-                remoteId to doc
-            }
-            val activeGoalIds = resolvedGoalDocs
-                .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
-                .map { it.first }
+            if (goalsSnapshot != null) {
+                val targetDao = db.targetDao()
 
-            val canSafelyPruneGoals = !goalsSnapshot.metadata.isFromCache &&
-                goalsSnapshot.size().toLong() < COLLECTION_QUERY_LIMIT
-            if (canSafelyPruneGoals) {
-                if (activeGoalIds.isNotEmpty()) {
-                    targetDao.deleteOrphanedTargets(activeGoalIds)
+                val resolvedGoalDocs = goalsSnapshot.documents.map { doc ->
+                    val remoteId = doc.getSafeLong("localId")
+                        ?: doc.getSafeLong("id")
+                        ?: doc.id.removePrefix("${uid}_").toLongOrNull()
+                        ?: abs(doc.id.hashCode().toLong())
+                    remoteId to doc
+                }
+                val activeGoalIds = resolvedGoalDocs
+                    .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
+                    .map { it.first }
+
+                val canSafelyPruneGoals = !goalsSnapshot.metadata.isFromCache &&
+                    goalsSnapshot.size().toLong() < COLLECTION_QUERY_LIMIT
+                if (canSafelyPruneGoals) {
+                    if (activeGoalIds.isNotEmpty()) {
+                        targetDao.deleteOrphanedTargets(activeGoalIds)
+                    } else {
+                        targetDao.clearAllTargets()
+                    }
                 } else {
-                    targetDao.clearAllTargets()
+                    Log.d(syncTag, "Skipped destructive goal orphan sweep (fromCache=${goalsSnapshot.metadata.isFromCache}, size=${goalsSnapshot.size()})")
+                }
+
+                var latestMacroGoal: com.google.firebase.firestore.DocumentSnapshot? = null
+
+                for ((remoteId, doc) in resolvedGoalDocs) {
+                    val isDeleted = doc.getSafeBoolean("isDeleted") ?: false
+                    if (isDeleted) {
+                        targetDao.purgeTarget(remoteId)
+                        continue
+                    }
+
+                    // Check if it's the latest macro goal
+                    val hasTargetUni = !doc.getString("targetUniversity").isNullOrBlank()
+                    val hasTargetDep = !doc.getString("targetDepartment").isNullOrBlank()
+                    val hasTargetRank = (doc.getLong("targetRanking") ?: 0L) > 0L
+                    if (hasTargetUni || hasTargetDep || hasTargetRank) {
+                        val currentCreatedAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: doc.id.toLongOrNull() ?: 0L
+                        val latestCreatedAt = latestMacroGoal?.getTimestamp("createdAt")?.toDate()?.time ?: latestMacroGoal?.id?.toLongOrNull() ?: -1L
+                        if (currentCreatedAt > latestCreatedAt) {
+                            latestMacroGoal = doc
+                        }
+                    }
+
+                    val existingTarget = targetDao.getTargetById(remoteId)
+                    if (existingTarget != null && !existingTarget.isSynced) {
+                        continue
+                    }
+
+                    val title = sanitizeTurkishText(doc.getSafeString("title") ?: "Hedef")
+                    val category = doc.getSafeString("category") ?: "CUSTOM"
+                    val isCompleted = doc.getSafeBoolean("isCompleted") ?: false
+
+                    val targetEntity = TargetEntity(
+                        id = remoteId,
+                        title = title,
+                        description = sanitizeTurkishText(doc.getSafeString("description") ?: ""),
+                        deadlineMillis = System.currentTimeMillis() + (7L * 24 * 60 * 60 * 1000),
+                        type = TargetType.LONG_TERM,
+                        period = TargetPeriod.MONTHLY,
+                        priority = "NORMAL",
+                        category = category,
+                        targetValue = null,
+                        isCompleted = isCompleted,
+                        isAssignedByCoach = true,
+                        coachNote = doc.getSafeString("coachNote"),
+                        date = "",
+                        isSynced = true,
+                        isDeleted = false,
+                        cloudId = doc.id,
+                        lastModifiedMillis = System.currentTimeMillis()
+                    )
+
+                    targetDao.upsertTarget(targetEntity)
+                    Log.d(syncTag, "Successfully saved remote goal to Room: id=$remoteId, title=$title")
+                }
+
+                // Bridge to ConcreteTargetDao (Macro Target)
+                latestMacroGoal?.let { doc ->
+                    val title = sanitizeTurkishText(doc.getSafeString("title") ?: "Hedef")
+                    val targetRanking = doc.getSafeLong("targetRanking")?.toInt()
+                    val targetScoreOrRank = if (targetRanking != null && targetRanking > 0) "$targetRanking Sıralama" else ""
+                    val concreteTarget = com.example.sharkmentor.data.local.entity.ConcreteTargetEntity(
+                        id = 1,
+                        examType = "YKS",
+                        targetTitle = title,
+                        targetScoreOrRank = targetScoreOrRank,
+                        aiAnalysisSummary = sanitizeTurkishText(doc.getSafeString("coachNote") ?: ""),
+                        targetRanking = targetRanking,
+                        targetUniversity = sanitizeTurkishText(doc.getSafeString("targetUniversity") ?: ""),
+                        targetDepartment = sanitizeTurkishText(doc.getSafeString("targetDepartment") ?: ""),
+                        updatedAtMillis = System.currentTimeMillis()
+                    )
+                    concreteTargetDao.saveTarget(concreteTarget)
+                    Log.d(syncTag, "Successfully bridged latest macro goal into ConcreteTargetDao")
                 }
             } else {
-                Log.d(syncTag, "Skipped destructive goal orphan sweep (fromCache=${goalsSnapshot.metadata.isFromCache}, size=${goalsSnapshot.size()})")
+                Log.w(syncTag, "pullRemoteGoals: Cloud goals query returned null. Retaining local goals.")
             }
 
-            var latestMacroGoal: com.google.firebase.firestore.DocumentSnapshot? = null
-
-            for ((remoteId, doc) in resolvedGoalDocs) {
-                val isDeleted = doc.getSafeBoolean("isDeleted") ?: false
-                if (isDeleted) {
-                    targetDao.purgeTarget(remoteId)
-                    continue
+            // Fallback restore for student's personal ConcreteTarget from students/{uid} profile fields
+            if (concreteTargetDao.getTargetRaw() == null && studentDoc != null && studentDoc.exists()) {
+                val uni = sanitizeTurkishText(studentDoc.getSafeString("targetUniversity")).trim()
+                val dep = sanitizeTurkishText(studentDoc.getSafeString("targetDepartment")).trim()
+                val rank = studentDoc.getSafeLong("targetRanking")?.toInt()?.takeIf { it > 0 }
+                val rawTitle = sanitizeTurkishText(studentDoc.getSafeString("targetTitle")).trim()
+                val resolvedTitle = rawTitle.ifBlank {
+                    listOf(uni, dep).filter { it.isNotBlank() }.joinToString(" - ")
                 }
-
-                // Check if it's the latest macro goal
-                val hasTargetUni = !doc.getString("targetUniversity").isNullOrBlank()
-                val hasTargetDep = !doc.getString("targetDepartment").isNullOrBlank()
-                val hasTargetRank = (doc.getLong("targetRanking") ?: 0L) > 0L
-                if (hasTargetUni || hasTargetDep || hasTargetRank) {
-                    val currentCreatedAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: doc.id.toLongOrNull() ?: 0L
-                    val latestCreatedAt = latestMacroGoal?.getTimestamp("createdAt")?.toDate()?.time ?: latestMacroGoal?.id?.toLongOrNull() ?: -1L
-                    if (currentCreatedAt > latestCreatedAt) {
-                        latestMacroGoal = doc
-                    }
+                if (resolvedTitle.isNotBlank() || rank != null) {
+                    val examType = sanitizeTurkishText(
+                        studentDoc.getSafeString("targetExamType")
+                            ?: studentDoc.getSafeString("targetExam")
+                            ?: "YKS"
+                    ).ifBlank { "YKS" }
+                    val scoreOrRank = if (rank != null) "$rank Sıralama" else "Hedef Belirlenmedi"
+                    val summary = sanitizeTurkishText(studentDoc.getSafeString("targetAnalysisSummary") ?: "")
+                    concreteTargetDao.saveTarget(
+                        com.example.sharkmentor.data.local.entity.ConcreteTargetEntity(
+                            id = 1,
+                            examType = examType,
+                            targetTitle = resolvedTitle.ifBlank { "$examType Hedefim" },
+                            targetScoreOrRank = scoreOrRank,
+                            aiAnalysisSummary = summary,
+                            targetRanking = rank,
+                            targetUniversity = uni.takeIf { it.isNotBlank() },
+                            targetDepartment = dep.takeIf { it.isNotBlank() },
+                            updatedAtMillis = System.currentTimeMillis()
+                        )
+                    )
+                    Log.d(syncTag, "Restored ConcreteTargetEntity from students/$uid profile fields")
                 }
-
-                val existingTarget = targetDao.getTargetById(remoteId)
-                if (existingTarget != null && !existingTarget.isSynced) {
-                    continue
-                }
-
-                val title = sanitizeTurkishText(doc.getSafeString("title") ?: "Hedef")
-                val category = doc.getSafeString("category") ?: "CUSTOM"
-                val isCompleted = doc.getSafeBoolean("isCompleted") ?: false
-
-                val targetEntity = TargetEntity(
-                    id = remoteId,
-                    title = title,
-                    description = sanitizeTurkishText(doc.getSafeString("description") ?: ""),
-                    deadlineMillis = System.currentTimeMillis() + (7L * 24 * 60 * 60 * 1000),
-                    type = TargetType.LONG_TERM,
-                    period = TargetPeriod.MONTHLY,
-                    priority = "NORMAL",
-                    category = category,
-                    targetValue = null,
-                    isCompleted = isCompleted,
-                    isAssignedByCoach = true,
-                    coachNote = doc.getSafeString("coachNote"),
-                    date = "",
-                    isSynced = true,
-                    isDeleted = false,
-                    cloudId = doc.id,
-                    lastModifiedMillis = System.currentTimeMillis()
-                )
-
-                targetDao.upsertTarget(targetEntity)
-                Log.d(syncTag, "Successfully saved remote goal to Room: id=$remoteId, title=$title")
-            }
-
-            // Bridge to ConcreteTargetDao (Macro Target)
-            latestMacroGoal?.let { doc ->
-                val title = sanitizeTurkishText(doc.getSafeString("title") ?: "Hedef")
-                val targetRanking = doc.getSafeLong("targetRanking")?.toInt()
-                val targetScoreOrRank = if (targetRanking != null && targetRanking > 0) "$targetRanking Sıralama" else ""
-                val concreteTarget = com.example.sharkmentor.data.local.entity.ConcreteTargetEntity(
-                    id = 1,
-                    examType = "YKS",
-                    targetTitle = title,
-                    targetScoreOrRank = targetScoreOrRank,
-                    aiAnalysisSummary = sanitizeTurkishText(doc.getSafeString("coachNote") ?: ""),
-                    targetRanking = targetRanking,
-                    targetUniversity = sanitizeTurkishText(doc.getSafeString("targetUniversity") ?: ""),
-                    targetDepartment = sanitizeTurkishText(doc.getSafeString("targetDepartment") ?: ""),
-                    updatedAtMillis = System.currentTimeMillis()
-                )
-                concreteTargetDao.saveTarget(concreteTarget)
-                Log.d(syncTag, "Successfully bridged latest macro goal into ConcreteTargetDao")
             }
         } catch (e: Exception) {
             Log.e(syncTag, "Error in pullRemoteGoals: ${e.message}", e)
@@ -1336,30 +1281,11 @@ class SyncWorker(
         syncTag: String,
         uid: String
     ): Int {
-        var count = 0
-        for (deleted in db.goalsDao().getPendingDeletedTopics()) {
-            try {
-                val docId = "${uid}_${deleted.id}"
-                val deleteData = mapOf("isDeleted" to true, "updatedAt" to FieldValue.serverTimestamp())
-                var updatedRemote = false
-                runCatching {
-                    firestore.collection("topics").document(docId).set(deleteData, SetOptions.merge()).await()
-                    updatedRemote = true
-                }
-                runCatching {
-                    firestore.collection("students").document(uid)
-                        .collection("topics").document(docId).set(deleteData, SetOptions.merge()).await()
-                    updatedRemote = true
-                }
-                if (updatedRemote) {
-                    db.goalsDao().deleteTopicPermanently(deleted.id)
-                    count++
-                }
-            } catch (e: Exception) {
-                Log.e(syncTag, "Topic del err", e)
-            }
-        }
-        return count
+        val pendingDeleted = db.goalsDao().getPendingDeletedTopics()
+        if (pendingDeleted.isEmpty()) return 0
+        val ok = com.example.sharkmentor.data.sync.TopicCloudSyncManager
+            .deleteTopicsInCloudNow(applicationContext, pendingDeleted)
+        return if (ok) pendingDeleted.size else 0
     }
 
     private suspend fun syncLocalPlans(
@@ -1413,38 +1339,11 @@ class SyncWorker(
         syncTag: String,
         uid: String
     ): Int {
-        var count = 0
+        if (uid.isBlank() || uid == "student_default") return 0
         val pendingTopics = db.syncDao().getUnsyncedTopics()
-        val succeededIds = mutableListOf<Long>()
-        for (topic in pendingTopics) {
-            try {
-                val docId = "${uid}_${topic.id}"
-                val rootTopicData = hashMapOf<String, Any?>(
-                    "id" to docId,
-                    "localId" to topic.id,
-                    "studentId" to uid,
-                    "userId" to uid,
-                    "subject" to topic.subject,
-                    "topic" to topic.topic,
-                    "topicName" to topic.topic,
-                    "masteryLevel" to topic.currentLevel,
-                    "targetMasteryScore" to topic.targetLevel,
-                    "isDeleted" to false,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                firestore.collection("topics").document(docId).set(rootTopicData, SetOptions.merge()).await()
-                runCatching {
-                    firestore.collection("students").document(uid).collection("topics").document(docId)
-                        .set(rootTopicData, SetOptions.merge()).await()
-                }
-                succeededIds.add(topic.id)
-                count++
-            } catch (e: Exception) {
-                Log.e(syncTag, "Topic err", e)
-            }
-        }
-        if (succeededIds.isNotEmpty()) db.syncDao().markTopicsAsSynced(succeededIds)
-        return count
+        if (pendingTopics.isEmpty()) return 0
+        return com.example.sharkmentor.data.sync.TopicCloudSyncManager
+            .pushTopicsNow(applicationContext, pendingTopics)
     }
 
     private suspend fun syncLocalResources(

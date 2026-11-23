@@ -261,171 +261,149 @@ fun AiSettingsScreen(
                     .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Active Status Banner
+                val hasAnyCustomKeyInput = hasCustomGeminiInput ||
+                    deepSeekInput.isNotBlank() ||
+                    kimiInput.isNotBlank() ||
+                    claudeInput.isNotBlank() ||
+                    openAiInput.isNotBlank() ||
+                    grokInput.isNotBlank()
+
+                // Compact Unified Active Status & Transparent Policy Banner
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f),
                     shape = RoundedCornerShape(16.dp),
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .size(24.dp)
                         )
-                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            val hasAnyCustomKeyInput = hasCustomGeminiInput ||
-                                deepSeekInput.isNotBlank() ||
-                                kimiInput.isBlank().not() ||
-                                claudeInput.isNotBlank() ||
-                                openAiInput.isNotBlank() ||
-                                grokInput.isNotBlank()
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
                                 text = if (hasAnyCustomKeyInput) {
                                     "Aktif Model: ${liveActivePair.first.shortLabel} • ${liveActivePair.second}"
                                 } else {
-                                    "Aktif Model: Shark AI"
+                                    "Aktif Model: Shark AI (Yerleşik)"
                                 },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontSize = 16.sp,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            val bannerSub = if (!hasAnyCustomKeyInput) {
-                                "Özel API anahtarı girilmediğinde tüm modüller yerleşik Shark AI (sabit altyapı) ile çalışır. Kendi API anahtarını ekleyip sohbet ekranından doğrudan model değiştirebilirsin."
-                            } else {
-                                "Sağlayıcı tercihin: ${selectedProvider.label}. Sohbet ekranındaki yazma kutusunun sol altından eklediğin tüm modeller arasında tek dokunuşla geçiş yapabilirsin."
-                            }
                             Text(
-                                text = bannerSub,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontSize = 13.sp,
-                                lineHeight = 18.sp,
+                                text = if (!hasAnyCustomKeyInput) {
+                                    "Tüm araçlar yerleşik Shark AI ile hazır çalışır. İstersen aşağıdan kendi API anahtarını ekleyip sohbet ekranından model değiştirebilirsin."
+                                } else {
+                                    "Planlama (/plan) ve video keşfi kararlılık için yerleşik Shark AI altyapısını kullanır; sohbet ve diğer tüm araçlar seçtiğin kendi API anahtarınla çalışır."
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                fontSize = 12.5.sp,
+                                lineHeight = 17.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
 
-                // Transparent Built-In Infrastructure Policy Notice (Theme-Synced)
+                // Video Studio Controls
                 Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f),
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.28f)),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
                         modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Şeffaf Altyapı Politikası",
+                            text = "Video Stüdyosu",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                        Text(
-                            text = "Hız ve kararlılık açısından yalnızca Gerçek Koçluk planlama motoru (/plan) ile YouTube video/oynatma listesi keşfi uygulamanın kendi yerleşik Shark AI sabit anahtarlarını kullanır. Sohbet, uygulama içi Agent işlemleri, Soru Çözücü, Notlar, PDF ve Video İçi AI Asistanı ise girdiğin kendi API anahtarın ve tam olarak seçtiğin modelle çalışır.",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.88f)
-                        )
-                    }
-                }
-
-                // Active Provider Choice
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text(
-                            text = "Aktif Sağlayıcı Tercihi",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Sohbet, Video Stüdyosu ve analizlerde kullanılacak birincil AI sağlayıcısını seçin:",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            AiProviderChoice.entries.forEach { provider ->
-                                val isSelected = selectedProvider == provider
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = {
-                                        selectedProvider = provider
-                                        persistAll(showFeedback = false)
-                                    },
-                                    label = {
-                                        Text(
-                                            text = provider.label,
-                                            fontSize = 14.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            modifier = Modifier.padding(vertical = 4.dp)
-                                        )
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Video Studio AI & Ad Blocker Controls (Notes & Drawing AI live exclusively in Note Settings)
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text(
-                            text = "Video Stüdyosu Kontrolleri",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            color = MaterialTheme.colorScheme.primary
                         )
                         AiModuleToggleRow(
-                            title = "Video Stüdyosu AI Asistanı",
-                            subtitle = "İzlenen video bağlantısı ve dakikaya göre soru sorma",
+                            title = "Video İçi AI Asistanı",
+                            subtitle = "İzlenen ders ve dakikaya göre soru sorma",
                             checked = videoStudioAiEnabled,
                             onCheckedChange = { userAiPrefs.setVideoStudioAiEnabled(context, it) }
                         )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                         AiModuleToggleRow(
-                            title = "Video Reklam Engelleyici",
-                            subtitle = "Video Stüdyosu'nda reklam isteklerini ve video içi reklamları engeller",
+                            title = "Reklam Engelleyici",
+                            subtitle = "Video Stüdyosu'nda reklamları engeller",
                             checked = videoAdBlockerEnabled,
                             onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
                         )
                     }
                 }
+
+                // Active Provider Choice (shown only when user configures at least one custom key)
+                if (hasAnyCustomKeyInput) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Birincil Sağlayıcı",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                AiProviderChoice.entries.forEach { provider ->
+                                    val isSelected = selectedProvider == provider
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = {
+                                            selectedProvider = provider
+                                            persistAll(showFeedback = false)
+                                        },
+                                        label = {
+                                            Text(
+                                                text = provider.shortLabel,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Özel API Anahtarları (İsteğe Bağlı)",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
 
                 // 1. Gemini (Google AI Studio)
                 ProviderConfigCard(
@@ -838,346 +816,367 @@ private fun ProviderConfigCard(
         }
     }
 
+    var isCardExpanded by remember(provider) { mutableStateOf(hasConfiguredKey) }
+
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(16.dp),
         border = BorderStroke(
             width = if (isPreferred) 1.5.dp else 1.dp,
-            color = if (isPreferred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+            color = if (isPreferred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Card Header
+            // Card Header (Tap to expand/collapse)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isCardExpanded = !isCardExpanded },
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Key,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
+                        tint = if (hasConfiguredKey || isPreferred) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
                     )
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = title,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                            style = MaterialTheme.typography.titleSmall,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = when {
-                                hasConfiguredKey -> "Seçili model: $selectedModel"
-                                provider == AiProviderChoice.GEMINI -> "Varsayılan model: ${UserAiPreferences.STANDARD_GEMINI_MODEL}"
-                                allowTestWithoutUserKey -> "Yerleşik anahtar • Model: $selectedModel"
-                                else -> "Anahtar girilmedi"
+                                hasConfiguredKey -> selectedModel
+                                provider == AiProviderChoice.GEMINI -> "Yerleşik Shark AI hazır"
+                                allowTestWithoutUserKey -> "Yerleşik • $selectedModel"
+                                else -> "Anahtar eklenmedi"
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            fontSize = 13.sp,
-                            color = if (hasConfiguredKey || allowTestWithoutUserKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            color = if (hasConfiguredKey) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                FilterChip(
-                    selected = isPreferred,
-                    onClick = onSelectProvider,
-                    label = {
-                        Text(
-                            text = if (isPreferred) "Aktif" else "Kullan",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (hasConfiguredKey || isPreferred) {
+                        FilterChip(
+                            selected = isPreferred,
+                            onClick = onSelectProvider,
+                            label = {
+                                Text(
+                                    text = if (isPreferred) "Aktif" else "Kullan",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                            )
                         )
-                    },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary,
-                        selectedLabelColor = MaterialTheme.colorScheme.onPrimary
+                    }
+                    Icon(
+                        imageVector = if (isCardExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (isCardExpanded) "Daralt" else "Genişlet",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
+                }
+            }
+
+            if (isCardExpanded) {
+                // Key Field
+                AiKeyField(
+                    value = keyValue,
+                    onValueChange = {
+                        onKeyChange(it)
+                        testResult = null
+                    },
+                    label = keyLabel,
+                    placeholder = keyPlaceholder,
+                    isVisible = showKey,
+                    onToggleVisibility = { showKey = !showKey },
+                    onClear = {
+                        onClearKey()
+                        lastAutoDiscoveredKey = ""
+                        discoveryError = null
+                        testResult = null
+                        searchQuery = ""
+                        modelsExpanded = false
+                    }
                 )
-            }
 
-            // Key Field
-            AiKeyField(
-                value = keyValue,
-                onValueChange = {
-                    onKeyChange(it)
-                    testResult = null
-                },
-                label = keyLabel,
-                placeholder = keyPlaceholder,
-                isVisible = showKey,
-                onToggleVisibility = { showKey = !showKey },
-                onClear = {
-                    onClearKey()
-                    lastAutoDiscoveredKey = ""
-                    discoveryError = null
-                    testResult = null
-                    searchQuery = ""
-                    modelsExpanded = false
-                }
-            )
-
-            // Action Buttons: Fetch Models + Test Connection
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        if (isDiscovering) return@OutlinedButton
-                        scope.launch {
-                            isDiscovering = true
-                            discoveryError = null
-                            val res = onDiscover(keyValue)
-                            isDiscovering = false
-                            if (res.success && res.models.isNotEmpty()) {
-                                onModelsDiscovered(res.models)
-                                modelsExpanded = true
-                            } else {
-                                discoveryError = res.summary
+                // Action Buttons: Fetch Models + Test Connection
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (isDiscovering) return@OutlinedButton
+                            scope.launch {
+                                isDiscovering = true
+                                discoveryError = null
+                                val res = onDiscover(keyValue)
+                                isDiscovering = false
+                                if (res.success && res.models.isNotEmpty()) {
+                                    onModelsDiscovered(res.models)
+                                    modelsExpanded = true
+                                } else {
+                                    discoveryError = res.summary
+                                }
                             }
+                        },
+                        enabled = !isDiscovering && (hasConfiguredKey || (provider != AiProviderChoice.GEMINI && allowTestWithoutUserKey)),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 44.dp)
+                    ) {
+                        if (isDiscovering) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Taranıyor...", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        } else {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Modelleri Getir", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                         }
-                    },
-                    enabled = !isDiscovering && (hasConfiguredKey || (provider != AiProviderChoice.GEMINI && allowTestWithoutUserKey)),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 46.dp)
-                ) {
-                    if (isDiscovering) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Taranıyor...", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } else {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Modelleri Getir", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            if (isTesting) return@OutlinedButton
+                            scope.launch {
+                                isTesting = true
+                                testResult = null
+                                val res = onTest(keyValue, selectedModel)
+                                testResult = res
+                                isTesting = false
+                            }
+                        },
+                        enabled = !isTesting && (hasConfiguredKey || allowTestWithoutUserKey),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .heightIn(min = 44.dp)
+                    ) {
+                        if (isTesting) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Test Ediliyor...", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(17.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Bağlantıyı Test Et", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        }
                     }
                 }
 
-                OutlinedButton(
-                    onClick = {
-                        if (isTesting) return@OutlinedButton
-                        scope.launch {
-                            isTesting = true
-                            testResult = null
-                            val res = onTest(keyValue, selectedModel)
-                            testResult = res
-                            isTesting = false
-                        }
-                    },
-                    enabled = !isTesting && (hasConfiguredKey || allowTestWithoutUserKey),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 46.dp)
-                ) {
-                    if (isTesting) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Test Ediliyor...", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } else {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Bağlantıyı Test Et", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    }
-                }
-            }
-
-            // Discovery Error Banner
-            discoveryError?.let { errText ->
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = errText,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        modifier = Modifier.padding(12.dp)
-                    )
-                }
-            }
-
-            // Per-provider Connection Test Result Banner
-            testResult?.let { result ->
-                val containerColor = if (result.success) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
-                } else {
-                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
-                }
-                val contentColor = if (result.success) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onErrorContainer
-                }
-                Surface(
-                    color = containerColor,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                // Discovery Error Banner
+                discoveryError?.let { errText ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = result.summary,
+                            text = errText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                }
+
+                // Per-provider Connection Test Result Banner
+                testResult?.let { result ->
+                    val containerColor = if (result.success) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                    } else {
+                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+                    }
+                    val contentColor = if (result.success) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    }
+                    Surface(
+                        color = containerColor,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = result.summary,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = contentColor
+                            )
+                            result.details.forEach { detailLine ->
+                                Text(
+                                    text = "• $detailLine",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                    color = contentColor.copy(alpha = 0.92f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Discovered Models Selector
+                if ((hasConfiguredKey || (provider != AiProviderChoice.GEMINI && allowTestWithoutUserKey)) && discoveredModels.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { modelsExpanded = !modelsExpanded }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Desteklenen Modeller (${discoveredModels.size})",
                             style = MaterialTheme.typography.titleSmall,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
-                            color = contentColor
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        result.details.forEach { detailLine ->
-                            Text(
-                                text = "• $detailLine",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontSize = 13.sp,
-                                lineHeight = 18.sp,
-                                color = contentColor.copy(alpha = 0.92f)
+                        Icon(
+                            imageVector = if (modelsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = if (modelsExpanded) "Gizle" else "Göster",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+
+                    if (modelsExpanded) {
+                        if (discoveredModels.size > 6) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text(searchPlaceholder, fontSize = 14.sp) },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Temizle")
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
-                    }
-                }
-            }
 
-            // Discovered Models Selector (Large, Tablet-Friendly Cards)
-            if ((hasConfiguredKey || (provider != AiProviderChoice.GEMINI && allowTestWithoutUserKey)) && discoveredModels.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { modelsExpanded = !modelsExpanded }
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Desteklenen Modeller (${discoveredModels.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Icon(
-                        imageVector = if (modelsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                        contentDescription = if (modelsExpanded) "Gizle" else "Göster",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                if (modelsExpanded) {
-                    if (discoveredModels.size > 6) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text(searchPlaceholder, fontSize = 14.sp) },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Temizle")
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        filteredModels.forEach { modelOpt ->
-                            val isSelected = selectedModel == modelOpt.id
-                            Surface(
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (isSelected) {
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                                } else {
-                                    MaterialTheme.colorScheme.surface
-                                },
-                                border = BorderStroke(
-                                    width = if (isSelected) 2.dp else 1.dp,
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            filteredModels.forEach { modelOpt ->
+                                val isSelected = selectedModel == modelOpt.id
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
                                     color = if (isSelected) {
-                                        MaterialTheme.colorScheme.primary
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
                                     } else {
-                                        MaterialTheme.colorScheme.outlineVariant
-                                    }
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        onSelectModel(modelOpt.id)
-                                        testResult = null
-                                    }
-                            ) {
-                                Row(
+                                        MaterialTheme.colorScheme.surface
+                                    },
+                                    border = BorderStroke(
+                                        width = if (isSelected) 1.8.dp else 1.dp,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.outlineVariant
+                                        }
+                                    ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    RadioButton(
-                                        selected = isSelected,
-                                        onClick = {
+                                        .clickable {
                                             onSelectModel(modelOpt.id)
                                             testResult = null
                                         }
-                                    )
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        Text(
-                                            text = modelOpt.displayName.ifBlank { modelOpt.id },
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = {
+                                                onSelectModel(modelOpt.id)
+                                                testResult = null
+                                            }
                                         )
-                                        Text(
-                                            text = modelOpt.id,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        if (modelOpt.description.isNotBlank()) {
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
                                             Text(
-                                                text = modelOpt.description,
+                                                text = modelOpt.displayName.ifBlank { modelOpt.id },
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = modelOpt.id,
                                                 style = MaterialTheme.typography.bodySmall,
-                                                fontSize = 13.sp,
-                                                lineHeight = 18.sp,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                fontSize = 12.5.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                            if (modelOpt.description.isNotBlank()) {
+                                                Text(
+                                                    text = modelOpt.description,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontSize = 12.sp,
+                                                    lineHeight = 16.sp,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.CheckCircle,
+                                                contentDescription = "Seçili",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
                                             )
                                         }
-                                    }
-                                    if (isSelected) {
-                                        Icon(
-                                            imageVector = Icons.Default.CheckCircle,
-                                            contentDescription = "Seçili",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(22.dp)
-                                        )
                                     }
                                 }
                             }

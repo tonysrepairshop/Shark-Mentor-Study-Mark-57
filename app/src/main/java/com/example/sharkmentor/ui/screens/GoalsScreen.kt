@@ -331,8 +331,8 @@ fun GoalsScreen(
                                     folder.topics.forEach { topic ->
                                         TopicItemRow(
                                             topic = topic,
-                                            onLevelSelected = remember(topic.id) { { lvl -> viewModel.updateTopicGoal(topic.copy(currentLevel = lvl)) } },
-                                            onDeleteClick = remember(topic.id) { { topicToDelete = topic } }
+                                            onLevelSelected = remember(topic) { { lvl -> viewModel.updateTopicGoal(topic.copy(currentLevel = lvl)) } },
+                                            onDeleteClick = remember(topic) { { topicToDelete = topic } }
                                         )
                                     }
                                 }

@@ -2607,29 +2607,28 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 savedTarget = topicEntity.targetLevel
                             }
 
-                            runCatching {
-                                val firestore = GoogleServicesHelper.getFirebaseFirestore(getApplication())
-                                val uid = GoogleServicesHelper.getCurrentUser(context = getApplication())?.uid
-                                if (uid != null && firestore != null && targetTopicId > 0L) {
-                                    val docId = "${uid}_${targetTopicId}"
-                                    val topicData = hashMapOf<String, Any>(
-                                        "id" to docId,
-                                        "localId" to targetTopicId,
-                                        "subject" to savedSubject,
-                                        "topic" to savedTopic,
-                                        "topicName" to savedTopic,
-                                        "masteryLevel" to savedLevel,
-                                        "targetMasteryScore" to savedTarget,
-                                        "isDeleted" to false,
-                                        "studentId" to uid,
-                                        "userId" to uid,
-                                        "updatedAt" to now
-                                    )
-                                    firestore.collection("students").document(uid).collection("topics").document(docId).set(topicData, SetOptions.merge())
-                                    firestore.collection("topics").document(docId).set(topicData, SetOptions.merge())
-                                }
+                            val savedEntity = TopicGoalEntity(
+                                id = targetTopicId,
+                                subject = savedSubject,
+                                topic = savedTopic,
+                                currentLevel = savedLevel,
+                                targetLevel = savedTarget,
+                                isSynced = false,
+                                isDeleted = false,
+                                institutionId = com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(getApplication()).institutionId ?: "INDIVIDUAL",
+                                updatedAtMillis = now
+                            )
+                            val pushed = if (targetTopicId > 0L) {
+                                runCatching {
+                                    com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                        .pushTopicsNow(getApplication(), listOf(savedEntity))
+                                }.getOrDefault(0)
+                            } else {
+                                0
                             }
-                            SyncWorker.enqueueImmediateSync(getApplication())
+                            if (pushed <= 0) {
+                                SyncWorker.enqueueImmediateSync(getApplication())
+                            }
                         }
                         memoryRepository.recordInsight(
                             persona = persona,
@@ -2867,8 +2866,18 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         }
 
         if (entitiesToInsert.isNotEmpty()) {
-            database.goalsDao().insertTopicGoals(entitiesToInsert)
-            SyncWorker.enqueueImmediateSync(getApplication())
+            val insertedIds = database.goalsDao().insertTopicGoals(entitiesToInsert)
+            val persistedEntities = entitiesToInsert.mapIndexed { idx, entity ->
+                val resolvedId = insertedIds.getOrNull(idx)?.takeIf { it > 0L } ?: entity.id
+                entity.copy(id = resolvedId)
+            }
+            val pushed = runCatching {
+                com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                    .pushTopicsNow(getApplication(), persistedEntities)
+            }.getOrDefault(0)
+            if (pushed < persistedEntities.size) {
+                SyncWorker.enqueueImmediateSync(getApplication())
+            }
         }
         entitiesToInsert.size
     }

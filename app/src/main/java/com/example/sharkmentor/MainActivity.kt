@@ -126,6 +126,14 @@ class MainActivity : ComponentActivity() {
                                             .pullAndMergeFromCloud()
                                     }
                                     runCatching {
+                                        com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                            .pullAndMergeFromCloud(this@MainActivity, forceServer = true)
+                                    }
+                                    runCatching {
+                                        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pullFromCloudIfNewer(this@MainActivity)
+                                        com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pullFromCloudIfNewer(this@MainActivity)
+                                    }
+                                    runCatching {
                                         com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(this@MainActivity)
                                     }
                                     runCatching {

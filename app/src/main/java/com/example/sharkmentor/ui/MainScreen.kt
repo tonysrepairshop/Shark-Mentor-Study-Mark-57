@@ -579,6 +579,10 @@ fun MainScreen(
                                                 .pullAndMergeFromCloud()
                                         }
                                         runCatching {
+                                            com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                                .pullAndMergeFromCloud(context, forceServer = true)
+                                        }
+                                        runCatching {
                                             com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pullFromCloudIfNewer(context)
                                             com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pullFromCloudIfNewer(context)
                                         }

@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PersonOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Route
@@ -279,6 +281,9 @@ fun SettingsScreen(
         )
     }
 
+    var isSyncingNow by remember { mutableStateOf(false) }
+    var showAppIconPicker by remember { mutableStateOf(false) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -287,13 +292,14 @@ fun SettingsScreen(
                 title = {
                     Text(
                         when (activeSubPage) {
-                            "coaching_support" -> "Kapsamlı Destek & Çalışma"
-                            "focus_wellness" -> "Odak Sağlığı & Hatırlatmalar"
-                            "topbar_hub" -> "Üst Bar Kontrolleri"
+                            "coaching_support" -> "Gerçek Koçluk & Çalışma"
+                            "focus_wellness" -> "Hatırlatmalar"
+                            "topbar_hub" -> "Üst Bar & Hava Durumu"
                             "topbar_weather" -> "Hava Durumu"
-                            "topbar_texts" -> "Üst Bar Yazıları & Sıklık"
+                            "topbar_texts" -> "Üst Bar Yazıları"
                             else -> "Ayarlar"
-                        }
+                        },
+                        fontWeight = FontWeight.SemiBold
                     )
                 },
                 navigationIcon = {
@@ -318,161 +324,259 @@ fun SettingsScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
-                        .padding(16.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    // 1. Kapsamlı Destek & Çalışma Düzeni
-                    Text(
-                        "Kapsamlı Destek & Çalışma Düzeni",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    SettingRow(
-                        icon = Icons.Default.Route,
-                        label = "Kapsamlı Destek, Çalışma Saati & Başlıklar",
-                        onClick = { activeSubPage = "coaching_support" }
-                    )
-
-                    HorizontalDivider()
-
-                    // 2. Yapay Zeka, Video Stüdyosu & Notlar
-                    Text(
-                        "Yapay Zeka & Notlar",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    SettingRow(
-                        icon = Icons.Default.AutoAwesome,
-                        label = "Yapay Zeka, API & Video Stüdyosu",
-                        onClick = onOpenAiSettings
-                    )
-                    SettingRow(
-                        icon = Icons.Default.EditNote,
-                        label = "Not & Çizim Özellikleri",
-                        onClick = onOpenNoteSettings
-                    )
-
-                    HorizontalDivider()
-
-                    // 3. Üst Bar & Odak Sağlığı
-                    Text(
-                        "Üst Bar & Odak Sağlığı",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    SettingRow(
-                        icon = Icons.Default.Tune,
-                        label = "Üst Bar, Yazılar & Yenileme Sıklığı",
-                        onClick = { activeSubPage = "topbar_hub" }
-                    )
-                    SettingRow(
-                        icon = Icons.Default.WaterDrop,
-                        label = "Odak Sağlığı (Su & Duruş Hatırlatmaları)",
-                        onClick = { activeSubPage = "focus_wellness" }
-                    )
-                    SettingRow(
-                        icon = Icons.Default.AccessTime,
-                        label = "Gün Değerlendirmesi Saati",
-                        onClick = { showTimeDialog = true }
-                    )
-
-                    HorizontalDivider()
-
-                    // 4. Odak Modülleri & Analiz
-                    Text(
-                        "Odak Modülleri & Analiz",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    SettingRow(
-                        icon = Icons.Default.SelfImprovement,
-                        label = "Zen Odası",
-                        onClick = onOpenZenRoom
-                    )
-                    SettingRow(
-                        icon = Icons.Default.Block,
-                        label = "Uygulama Engelleyici",
-                        onClick = onOpenAppBlocker
-                    )
-                    SettingRow(
-                        icon = Icons.Default.Analytics,
-                        label = "Detaylı Analiz",
-                        onClick = onOpenAnalysis
-                    )
-                    SettingRow(
-                        icon = Icons.Default.History,
-                        label = "Çalışma Geçmişi",
-                        onClick = onOpenHistory
-                    )
-
-                    HorizontalDivider()
-
-                    // 5. Görünüm & Kişiselleştirme
-                    ThemeSelectorSection(
-                        themeMode = themeMode,
-                        onThemeModeToggle = { mode ->
-                            if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
-                                com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
-                            }
-                            themePrefs.setThemeMode(mode)
-                        },
-                        currentPalette = currentPalette,
-                        onSelectPalette = { palette ->
-                            if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
-                                com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
-                            }
-                            themePrefs.setPalette(palette)
-                        }
-                    )
-
-                    HorizontalDivider()
-
-                    AppIconSelectorSection(snackbarHostState = snackbarHostState)
-
-                    HorizontalDivider()
-
-                    // 6. Sosyal, Senkronizasyon & Hesap
-                    Text(
-                        "Sosyal, Senkronizasyon & Hesap",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    SettingRow(
-                        icon = Icons.Default.Refresh,
-                        label = "Verileri Şimdi Senkronize Et",
-                        onClick = {
-                            SyncWorker.enqueueForceFullSync(context)
-                            CoachingEngine.flushPendingPresenceIfConnected(context)
-                            coroutineScope.launch {
-                                snackbarHostState.currentSnackbarData?.dismiss()
-                                snackbarHostState.showSnackbar("Bulut senkronizasyonu başlatıldı.")
-                            }
-                        }
-                    )
-                    SettingRow(
-                        icon = Icons.Default.PersonOff,
-                        label = "Engellenen Kullanıcılar",
-                        onClick = { showBlockedUsersDialog = true }
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    Button(
-                        onClick = { executePermanentAccountDeletion(context, onAccountDeleted) },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.DeleteForever, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Hesabı Kalıcı Sil", fontWeight = FontWeight.Bold)
+                    // 1. Çalışma & Yapay Zeka
+                    SettingsGroupCard(title = "Çalışma & Yapay Zeka") {
+                        SettingRow(
+                            icon = Icons.Default.Route,
+                            label = "Gerçek Koçluk & Çalışma Saatleri",
+                            subtitle = "Kapsamlı destek, günlük hedef ve çalışma başlıkları",
+                            onClick = { activeSubPage = "coaching_support" }
+                        )
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.AutoAwesome,
+                            label = "Yapay Zeka & Video Stüdyosu",
+                            subtitle = "Shark AI, özel API anahtarları ve reklam engelleyici",
+                            onClick = onOpenAiSettings
+                        )
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.EditNote,
+                            label = "Not & Çizim",
+                            subtitle = "Kalem, cetvel ve not içi yapay zeka",
+                            onClick = onOpenNoteSettings
+                        )
                     }
+
+                    // 2. Görünüm & Kişiselleştirme
+                    SettingsGroupCard(title = "Görünüm") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            ThemeSelectorSection(
+                                themeMode = themeMode,
+                                onThemeModeToggle = { mode ->
+                                    if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
+                                        com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
+                                    }
+                                    themePrefs.setThemeMode(mode)
+                                },
+                                currentPalette = currentPalette,
+                                onSelectPalette = { palette ->
+                                    if (com.example.sharkmentor.core.theme.ThemeManager.isZenMode.value) {
+                                        com.example.sharkmentor.core.theme.ThemeManager.setZenMode(context, false)
+                                    }
+                                    themePrefs.setPalette(palette)
+                                }
+                            )
+                        }
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showAppIconPicker = !showAppIconPicker }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Uygulama Simgesi",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (showAppIconPicker) "Simge seçmek için kaydır" else "Ana ekran ve açılış simgesini değiştir",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = if (showAppIconPicker) {
+                                    Icons.Default.KeyboardArrowUp
+                                } else {
+                                    Icons.Default.KeyboardArrowDown
+                                },
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (showAppIconPicker) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
+                            ) {
+                                AppIconSelectorSection(snackbarHostState = snackbarHostState)
+                            }
+                        }
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.Tune,
+                            label = "Üst Bar & Hava Durumu",
+                            subtitle = "Üst bar görünümü, yazılar, konum ve sınav sayacı",
+                            onClick = { activeSubPage = "topbar_hub" }
+                        )
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.WaterDrop,
+                            label = "Hatırlatmalar",
+                            subtitle = "Su, duruş ve gün değerlendirmesi saati",
+                            onClick = { activeSubPage = "focus_wellness" }
+                        )
+                    }
+
+                    // 3. Odak Araçları & Kayıtlar (Compact 2x2 Grid)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Odak Araçları & Kayıtlar",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            SettingsQuickTile(
+                                icon = Icons.Default.SelfImprovement,
+                                label = "Zen Odası",
+                                onClick = onOpenZenRoom,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SettingsQuickTile(
+                                icon = Icons.Default.Block,
+                                label = "Uygulama Engelleyici",
+                                onClick = onOpenAppBlocker,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            SettingsQuickTile(
+                                icon = Icons.Default.Analytics,
+                                label = "Detaylı Analiz",
+                                onClick = onOpenAnalysis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            SettingsQuickTile(
+                                icon = Icons.Default.History,
+                                label = "Çalışma Geçmişi",
+                                onClick = onOpenHistory,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    // 4. Bulut & Hesap
+                    SettingsGroupCard(title = "Bulut & Hesap") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !isSyncingNow) {
+                                    isSyncingNow = true
+                                    coroutineScope.launch {
+                                        val restoredTopics = withContext(Dispatchers.IO) {
+                                            runCatching { CoachingEngine.flushPendingPresenceIfConnected(context) }
+                                            runCatching { com.example.sharkmentor.data.sync.CloudSyncRepository(context).syncAll() }
+                                            val topicCount = runCatching {
+                                                com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                                    .pullAndMergeFromCloud(context, forceServer = true)
+                                            }.getOrDefault(-1)
+                                            runCatching {
+                                                com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pullFromCloudIfNewer(context)
+                                                com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pushToCloudIfSignedIn(context)
+                                                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pullFromCloudIfNewer(context)
+                                                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pushToCloudIfSignedIn(context)
+                                            }
+                                            runCatching { SyncWorker.enqueueForceFullSync(context) }
+                                            topicCount
+                                        }
+                                        isSyncingNow = false
+                                        snackbarHostState.currentSnackbarData?.dismiss()
+                                        val msg = if (restoredTopics >= 0) {
+                                            "Bulut senkronizasyonu tamamlandı ($restoredTopics konu güncel)."
+                                        } else {
+                                            "Bulut senkronizasyonu başlatıldı."
+                                        }
+                                        snackbarHostState.showSnackbar(msg)
+                                    }
+                                }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            if (isSyncingNow) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = if (isSyncingNow) "Senkronize Ediliyor..." else "Verileri Şimdi Senkronize Et",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Konu hakimiyeti, kütüphane ve hedefleri bulutla eşitle",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.PersonOff,
+                            label = "Engellenen Kullanıcılar",
+                            subtitle = "Sosyal ve mesaj engellerini yönet",
+                            onClick = { showBlockedUsersDialog = true }
+                        )
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { executePermanentAccountDeletion(context, onAccountDeleted) }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.DeleteForever,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(21.dp)
+                            )
+                            Text(
+                                text = "Hesabı Kalıcı Sil",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
             }
 
@@ -490,7 +594,10 @@ fun SettingsScreen(
                         .fillMaxSize()
                         .padding(padding)
                 ) {
-                    FocusWellnessSettingsContent(prefs = topBarPrefs)
+                    FocusWellnessSettingsContent(
+                        prefs = topBarPrefs,
+                        onOpenReflectionTime = { showTimeDialog = true }
+                    )
                 }
             }
 
@@ -536,17 +643,89 @@ fun SettingsScreen(
 
 
 @Composable
+private fun SettingsGroupCard(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 4.dp)
+        )
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.fillMaxWidth(), content = content)
+        }
+    }
+}
+
+@Composable
+private fun SettingsCardDivider() {
+    HorizontalDivider(
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+        modifier = Modifier.padding(horizontal = 14.dp)
+    )
+}
+
+@Composable
+private fun SettingsQuickTile(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 fun ThemeSelectorSection(
     themeMode: AppThemeMode,
     onThemeModeToggle: (AppThemeMode) -> Unit,
     currentPalette: ThemePalette,
     onSelectPalette: (ThemePalette) -> Unit
 ) {
-    Text("Görünüm & Tema", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-    Spacer(modifier = Modifier.height(4.dp))
-
-    Text("Tema Modu", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        "Tema Modu",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 
     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
         SegmentedButton(
@@ -572,20 +751,25 @@ fun ThemeSelectorSection(
         }
     }
 
-    Spacer(modifier = Modifier.height(12.dp))
+    Text(
+        "Renk Paleti",
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 
-    Text("Renk Paleti", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-    Spacer(modifier = Modifier.height(6.dp))
-
+    val palettes = remember {
+        ThemePalette.entries.filter { it != ThemePalette.GALATASARAY || SpecialMemberConfig.isEmreBey() }
+    }
     LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(vertical = 2.dp)
     ) {
-        items(ThemePalette.entries.filter { it != ThemePalette.GALATASARAY || SpecialMemberConfig.isEmreBey() }.toTypedArray()) { palette ->
+        items(palettes, key = { it.name }) { palette ->
             val isSelected = currentPalette == palette
             Card(
                 modifier = Modifier
-                    .width(120.dp)
+                    .width(106.dp)
                     .clickable { onSelectPalette(palette) },
                 colors = CardDefaults.cardColors(containerColor = Color(palette.bgHex)),
                 border = BorderStroke(
@@ -594,11 +778,17 @@ fun ThemeSelectorSection(
                 ),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Box(modifier = Modifier.size(18.dp).background(Color(palette.primaryHex), CircleShape))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(palette.title, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                    Text(palette.desc, color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Column(modifier = Modifier.padding(9.dp)) {
+                    Box(modifier = Modifier.size(16.dp).background(Color(palette.primaryHex), CircleShape))
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        palette.title,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -607,66 +797,183 @@ fun ThemeSelectorSection(
 
 @Composable
 private fun WeatherSettingsTab(modifier: Modifier = Modifier) {
-val context = LocalContext.current
-val weatherRepository = remember { WeatherRepository.getInstance(context) }
-val weatherSettings by weatherRepository.settings.collectAsStateWithLifecycle()
-val coroutineScope = rememberCoroutineScope()
-var searchQuery by remember { mutableStateOf("") }
-var searchResults by remember { mutableStateOf<List<GeocodingResult>>(emptyList()) }
-var isSearching by remember { mutableStateOf(false) }
-val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ -> coroutineScope.launch { weatherRepository.refreshWeather(force = true) } }
-    Column(modifier = modifier.padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
-Row(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-Text("Otomatik Konum", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-Switch(checked = weatherSettings.autoLocation, onCheckedChange = { enabled -> weatherRepository.setAutoLocation(enabled); if (enabled && ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) { locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)) } else { coroutineScope.launch { weatherRepository.refreshWeather(force = true)  }} })
+    val context = LocalContext.current
+    val weatherRepository = remember { WeatherRepository.getInstance(context) }
+    val weatherSettings by weatherRepository.settings.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<GeocodingResult>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        coroutineScope.launch { weatherRepository.refreshWeather(force = true) }
+    }
+    Column(
+        modifier = modifier
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Otomatik Konum", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Switch(
+                    checked = weatherSettings.autoLocation,
+                    onCheckedChange = { enabled ->
+                        weatherRepository.setAutoLocation(enabled)
+                        if (enabled &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+                        } else {
+                            coroutineScope.launch { weatherRepository.refreshWeather(force = true) }
+                        }
+                    }
+                )
+            }
+        }
+        if (!weatherSettings.autoLocation) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Manuel Yerleşim Seçimi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text("Seçili: ${weatherSettings.manualCity}, ${weatherSettings.manualCountry}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            label = { Text("Şehir ara") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                if (searchQuery.isNotBlank()) {
+                                    coroutineScope.launch {
+                                        isSearching = true
+                                        searchResults = weatherRepository.searchLocations(searchQuery.trim())
+                                        isSearching = false
+                                    }
+                                }
+                            },
+                            enabled = !isSearching
+                        ) {
+                            Text("Ara")
+                        }
+                    }
+                    searchResults.forEach { res ->
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    weatherRepository.setManualLocation(res.name, res.country, res.latitude, res.longitude)
+                                    coroutineScope.launch { weatherRepository.refreshWeather(force = true) }
+                                    searchResults = emptyList()
+                                },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surface
+                        ) {
+                            val label = if (res.admin1.isNotBlank()) "${res.name}, ${res.admin1}, ${res.country}" else "${res.name}, ${res.country}"
+                            Text(text = label, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+            }
+        }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Sıcaklık Birimi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = !weatherSettings.useFahrenheit,
+                        onClick = { weatherRepository.setUseFahrenheit(false) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text("Santigrat (°C)", fontSize = 12.sp) }
+                    SegmentedButton(
+                        selected = weatherSettings.useFahrenheit,
+                        onClick = { weatherRepository.setUseFahrenheit(true) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text("Fahrenhayt (°F)", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
 }
-}
-if (!weatherSettings.autoLocation) {
-Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
-Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-Text("Manuel Yerleşim Seçimi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-Text("Seçili: ${weatherSettings.manualCity}, ${weatherSettings.manualCountry}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary)
-Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-OutlinedTextField(value = searchQuery, onValueChange = { searchQuery = it }, label = { Text("Şehir ara") }, singleLine = true, modifier = Modifier.weight(1f))
-Button(onClick = { if (searchQuery.isNotBlank()) { coroutineScope.launch { isSearching = true; searchResults = weatherRepository.searchLocations(searchQuery.trim()); isSearching = false } } }, enabled = !isSearching) { Text("Ara") }
-}
-searchResults.forEach { res ->
-Surface(modifier = Modifier.fillMaxWidth().clickable { weatherRepository.setManualLocation(res.name, res.country, res.latitude, res.longitude); coroutineScope.launch { weatherRepository.refreshWeather(force = true) }; searchResults = emptyList() }, shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surface) {
-val label = if (res.admin1.isNotBlank()) "${res.name}, ${res.admin1}, ${res.country}" else "${res.name}, ${res.country}"
-Text(text = label, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-}
-}
-}
-}
-}
-Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))) {
-Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-Text("Sıcaklık Birimi", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-SegmentedButton(selected = !weatherSettings.useFahrenheit, onClick = { weatherRepository.setUseFahrenheit(false) }, shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)) { Text("Santigrat (°C)", fontSize = 12.sp) }
-SegmentedButton(selected = weatherSettings.useFahrenheit, onClick = { weatherRepository.setUseFahrenheit(true) }, shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)) { Text("Fahrenhayt (°F)", fontSize = 12.sp) }
-}
-}
-}
-}
-}
+
 @Composable
-private fun SettingRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun SettingRow(
+    icon: ImageVector,
+    label: String,
+    subtitle: String? = null,
+    onClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp, horizontal = 4.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(label, style = MaterialTheme.typography.bodyLarge)
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(21.dp)
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-        Icon(Icons.AutoMirrored.Filled.ArrowForwardIos, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowForwardIos,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.size(14.dp)
+        )
     }
 }
 
@@ -760,19 +1067,11 @@ fun AppIconSelectorSection(snackbarHostState: SnackbarHostState) {
     val selectedIcon by AppIconManager.activeIconFlow.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { AppIconManager.getActiveIcon(context) }
 
-    Text(
-        "Uygulama Simgesi",
-        style = MaterialTheme.typography.titleMedium,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary
-    )
-    Spacer(modifier = Modifier.height(10.dp))
-
     LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(vertical = 2.dp)
     ) {
-        items(SharkAppIcon.entries.toTypedArray()) { item ->
+        items(SharkAppIcon.entries, key = { it.name }) { item ->
             val isSelected = selectedIcon == item
 
             Column(

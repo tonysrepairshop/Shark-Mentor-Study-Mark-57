@@ -1867,7 +1867,7 @@ fun ResourceCampConfigDialog(
                                 skippedIntroCount = discovered.skippedIntroCount
                                 statusNotice = discovered.discoveryStatusMessage.ifBlank {
                                     if (discovered.hasVerifiedVideoSupport) {
-                                        "${discovered.episodes.size} gerçek ders özümsendi."
+                                        "${discovered.episodes.size} gerçek ders içe aktarıldı."
                                     } else {
                                         "Doğrudan liste bulunamadı; önerilen kamplardan seçebilir veya link ekleyebilirsin."
                                     }
@@ -1917,7 +1917,7 @@ fun ResourceCampConfigDialog(
                     if (candidatePlaylists.isNotEmpty()) {
                         Text(
                             text = if (hasDirectBookPlaylist) {
-                                "En Alakalı ${candidatePlaylists.size} Oynatma Listesi (Seç & Özümse)"
+                                "En Alakalı ${candidatePlaylists.size} Oynatma Listesi (Seç & İçe Aktar)"
                             } else {
                                 "${resource.subject.ifBlank { "Ders" }} İçin En Alakalı ${candidatePlaylists.size} Kamp Önerisi"
                             },
@@ -1933,7 +1933,7 @@ fun ResourceCampConfigDialog(
                                     onClick = {
                                         if (selectingCandidateId != null) return@Surface
                                         selectingCandidateId = cand.playlistId
-                                        statusNotice = "\"${cand.title}\" oynatma listesi özümseniyor (gerçek ders sırası ve konular işleniyor)..."
+                                        statusNotice = "\"${cand.title}\" oynatma listesi içe aktarılıyor (gerçek ders sırası ve konular işleniyor)..."
                                         scope.launch {
                                             val selected = BookCampManager.selectCandidatePlaylistForResource(
                                                 context = context,
@@ -2034,7 +2034,7 @@ fun ResourceCampConfigDialog(
                         }
                     }
 
-                    // 3. Manual YouTube Playlist / Video Link + Absorb button
+                    // 3. Manual YouTube Playlist / Video Link + Import button
                     OutlinedTextField(
                         value = youtubeUrl,
                         onValueChange = { youtubeUrl = it },
@@ -2073,7 +2073,7 @@ fun ResourceCampConfigDialog(
                                     return@OutlinedButton
                                 }
                                 isFetchingPlaylist = true
-                                statusNotice = "Oynatma listesi özümseniyor (gerçek dersler ve konular eşleştiriliyor)..."
+                                statusNotice = "Oynatma listesi içe aktarılıyor (gerçek dersler ve konular eşleştiriliyor)..."
                                 scope.launch {
                                     val absorbed = BookCampManager.absorbRealPlaylist(youtubeUrl, subject = resource.subject)
                                     isFetchingPlaylist = false
@@ -2084,7 +2084,7 @@ fun ResourceCampConfigDialog(
                                         skippedIntroCount = absorbed.skippedIntroCount
                                         currentDayText = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, absorbed.episodes.size).toString()
                                         val skipNote = if (absorbed.skippedIntroCount > 0) " (${absorbed.skippedIntroCount} tanıtım elendi)" else ""
-                                        statusNotice = "${absorbed.episodes.size} gerçek ders özümsendi$skipNote."
+                                        statusNotice = "${absorbed.episodes.size} gerçek ders içe aktarıldı$skipNote."
                                     } else {
                                         statusNotice = "Oynatma listesi okunamadı. Bağlantının herkese açık olduğundan emin ol."
                                     }
@@ -2100,7 +2100,7 @@ fun ResourceCampConfigDialog(
                                 Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp))
                             }
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text("Listeyi Özümse", fontSize = 11.sp)
+                            Text("Listeyi İçe Aktar", fontSize = 11.sp)
                         }
 
                         if (hasValidMedia && loadedEpisodes.isNotEmpty()) {
@@ -2152,7 +2152,7 @@ fun ResourceCampConfigDialog(
                         }
                     }
 
-                    // Real absorbed episode preview with mapped curriculum topics
+                    // Real imported episode preview with mapped curriculum topics
                     if (loadedEpisodes.isNotEmpty()) {
                         val selectedDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, loadedEpisodes.size)
                         val startIdx = (selectedDay - 1).coerceAtLeast(0)
@@ -2160,7 +2160,7 @@ fun ResourceCampConfigDialog(
                         HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                         val skipTag = if (skippedIntroCount > 0) " • $skippedIntroCount tanıtım elendi" else ""
                         Text(
-                            text = "Özümsenen Ders Sırası (${loadedEpisodes.size} Ders$skipTag • Kaldığın yere dokun)",
+                            text = "İçe Aktarılan Ders Sırası (${loadedEpisodes.size} Ders$skipTag • Kaldığın yere dokun)",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurfaceVariant

@@ -2616,9 +2616,9 @@ object BookCampManager {
 
         val skippedNote = if (absorbed.skippedIntroCount > 0) " (${absorbed.skippedIntroCount} tanıtım/ders dışı elendi)" else ""
         val statusMsg = if (candidate.isDirectBookMatch) {
-            "${realEpisodes.size} gerçek ders videosu özümsendi$skippedNote."
+            "${realEpisodes.size} gerçek ders videosu içe aktarıldı$skippedNote."
         } else {
-            "Seçtiğin ${resource.subject} kampı özümsendi: ${realEpisodes.size} gerçek ders$skippedNote."
+            "Seçtiğin ${resource.subject} kampı içe aktarıldı: ${realEpisodes.size} gerçek ders$skippedNote."
         }
         val syncedStartDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
             ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
@@ -2706,7 +2706,7 @@ object BookCampManager {
                         isFromRealPlaylist = true,
                         isAutoMatched = existing.isAutoMatched,
                         hasDirectBookPlaylist = existing.hasDirectBookPlaylist,
-                        discoveryStatusMessage = "${absorbed.episodes.size} gerçek ders özümsendi$skipSuffix.",
+                        discoveryStatusMessage = "${absorbed.episodes.size} gerçek ders içe aktarıldı$skipSuffix.",
                         candidatePlaylists = existing.candidatePlaylists.take(3)
                     ).copy(skippedIntroCount = absorbed.skippedIntroCount)
                     val map = _bindingsByResourceId.value.toMutableMap().apply { put(resource.id, saved) }
@@ -2868,7 +2868,7 @@ object BookCampManager {
                         isFromRealPlaylist = true,
                         isAutoMatched = true,
                         hasDirectBookPlaylist = true,
-                        discoveryStatusMessage = "${realEpisodes.size} gerçek ders özümsendi$skipSuffix. En alakalı ${rankedCandidates.size} seçenekten istediğini seçebilirsin.",
+                        discoveryStatusMessage = "${realEpisodes.size} gerçek ders içe aktarıldı$skipSuffix. En alakalı ${rankedCandidates.size} seçenekten istediğini seçebilirsin.",
                         candidatePlaylists = rankedCandidates
                     ).copy(skippedIntroCount = absorbed.skippedIntroCount)
                     val updatedMap = _bindingsByResourceId.value.toMutableMap().apply { put(resource.id, saved) }
@@ -2895,7 +2895,7 @@ object BookCampManager {
                     isFromRealPlaylist = true,
                     isAutoMatched = true,
                     hasDirectBookPlaylist = true,
-                    discoveryStatusMessage = "${realEpisodes.size} gerçek ders özümsendi. En alakalı ${rankedCandidates.size} seçenekten istediğini seçebilirsin.",
+                    discoveryStatusMessage = "${realEpisodes.size} gerçek ders içe aktarıldı. En alakalı ${rankedCandidates.size} seçenekten istediğini seçebilirsin.",
                     candidatePlaylists = rankedCandidates
                 ).copy(skippedIntroCount = absorbed.skippedIntroCount)
                 val updatedMap = _bindingsByResourceId.value.toMutableMap().apply { put(resource.id, saved) }
@@ -2948,10 +2948,10 @@ object BookCampManager {
             )
         }
 
-        // 6. No direct book playlist absorbed -> state clearly AND offer strictly Top 3 relevant camps!
+        // 6. No direct book playlist imported -> state clearly AND offer strictly Top 3 relevant camps!
         val honestMsg = if (rankedCandidates.isNotEmpty()) {
             if (hasDirectBookMatch) {
-                "En alakalı ${rankedCandidates.size} oynatma listesi bulundu. Aşağıdan birini seçerek tüm derslerini özümseyebilirsin."
+                "En alakalı ${rankedCandidates.size} oynatma listesi bulundu. Aşağıdan birini seçerek tüm derslerini içe aktarabilirsin."
             } else {
                 "Bu kitap için doğrudan oynatma listesi bulunamadı. ${cleanSubject.ifBlank { "Bu ders" }} için en alakalı ${rankedCandidates.size} kampı seçebilir veya videosuz devam edebilirsin."
             }

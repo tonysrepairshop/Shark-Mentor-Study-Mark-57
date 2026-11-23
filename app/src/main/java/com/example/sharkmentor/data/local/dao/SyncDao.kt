@@ -154,7 +154,8 @@ interface SyncDao {
             (SELECT COUNT(*) FROM focus_sessions  WHERE isSynced = 0) +
             (SELECT COUNT(*) FROM targets         WHERE isSynced = 0) +
             (SELECT COUNT(*) FROM tasks           WHERE isSynced = 0) +
-            (SELECT COUNT(*) FROM resources       WHERE isSynced = 0 AND isDeleted = 0)
+            (SELECT COUNT(*) FROM resources       WHERE isSynced = 0 AND isDeleted = 0) +
+            (SELECT COUNT(*) FROM topic_goals     WHERE isSynced = 0)
     """)
     suspend fun getTotalPendingSyncCount(): Int
 }
