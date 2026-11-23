@@ -63,50 +63,16 @@ object GeminiAiFactory {
     const val FAST_MODEL_3_6 = SOLE_GEMINI_MODEL
     const val FALLBACK_MODEL_3_6 = CONTROLLED_404_FALLBACK_MODEL
 
-    internal val CUSTOM_GEMINI_FALLBACK_MODELS = listOf(
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-2.0-flash"
-    )
-    private val workingModelByCustomKey = java.util.concurrent.ConcurrentHashMap<String, String>()
-
-    internal fun clearCustomKeyModelCacheForTesting() {
-        workingModelByCustomKey.clear()
-    }
-
-    internal fun rememberWorkingCustomKeyModel(
-        apiKey: String,
-        modelName: String,
-        configuredModel: String? = null
-    ) {
-        val cleanKey = GeminiRestClient.sanitizeApiKey(apiKey)
-        val cleanModel = GeminiRestClient.sanitizeModelName(modelName)
-        if (cleanKey.isNotBlank() && cleanModel.isNotBlank()) {
-            val baseModel = configuredModel?.takeIf { it.isNotBlank() }
-                ?.let { GeminiRestClient.sanitizeModelName(it) }
-                ?: UserAiPreferences.resolveEffectiveGeminiModel(cleanKey)
-            workingModelByCustomKey["$cleanKey|$baseModel"] = cleanModel
-        }
-    }
-
-    internal fun resolveEffectiveModelForCustomKey(
-        context: Context?,
-        apiKey: String,
-        overrideModel: String? = null
-    ): String {
-        if (!overrideModel.isNullOrBlank()) {
-            return GeminiRestClient.sanitizeModelName(overrideModel)
-        }
-        val cleanKey = GeminiRestClient.sanitizeApiKey(apiKey)
-        val configuredModel = UserAiPreferences.resolveEffectiveGeminiModel(context, cleanKey)
-        workingModelByCustomKey["$cleanKey|$configuredModel"]?.takeIf { it.isNotBlank() }?.let { return it }
-        return configuredModel
-    }
-
-    internal fun resolveCustomKeyFallbackModels(failedModel: String): List<String> {
-        val cleanFailed = GeminiRestClient.sanitizeModelName(failedModel)
-        return CUSTOM_GEMINI_FALLBACK_MODELS.filterNot { it.equals(cleanFailed, ignoreCase = true) }
-    }
+    /**
+     * Returns ONLY the app's built-in Gemini keys (NEVER user-entered custom keys),
+     * used exclusively when `forceBuiltInOnly = true` (Real Coaching planning & YouTube video discovery)
+     * so those infrastructure paths strictly invoke `gemini-3.6-flash` / `gemini-3.5-flash-lite`.
+     */
+    internal fun resolveBuiltInOnlyKeys(): List<String> =
+        ApiKeyRotator.getAllBuiltInKeys()
+            .map { GeminiRestClient.sanitizeApiKey(it) }
+            .filter { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            .distinct()
 
     val VISION_PRESET_CONFIG = GeminiGenerationConfig(
         temperature = 0.1f,
@@ -246,7 +212,7 @@ object GeminiAiFactory {
                 !overrideModel.isNullOrBlank() && (!overrideKey.isNullOrBlank() || key in customKeysSet) ->
                     GeminiRestClient.sanitizeModelName(overrideModel)
                 key in customKeysSet ->
-                    resolveEffectiveModelForCustomKey(null, key)
+                    UserAiPreferences.resolveEffectiveGeminiModel(key)
                 else ->
                     SOLE_GEMINI_MODEL
             }
@@ -390,7 +356,7 @@ object GeminiAiFactory {
                 !overrideModel.isNullOrBlank() && (!overrideKey.isNullOrBlank() || key in customKeysSet) ->
                     GeminiRestClient.sanitizeModelName(overrideModel)
                 key in customKeysSet ->
-                    resolveEffectiveModelForCustomKey(null, key)
+                    UserAiPreferences.resolveEffectiveGeminiModel(key)
                 else ->
                     SOLE_GEMINI_MODEL
             }
@@ -504,6 +470,8 @@ object GeminiAiFactory {
 
     /**
      * Unified non-streaming failover entrypoint used across repositories, ViewModels, workers & activities.
+     * When [forceBuiltInOnly] is true (Real Coaching planning & YouTube video discovery), bypasses user custom keys
+     * and strictly executes on built-in Shark AI keys + Firebase Proxy (`gemini-3.6-flash` / `gemini-3.5-flash-lite`).
      */
     suspend fun generateContentWithFailover(
         context: Context? = null,
@@ -517,7 +485,8 @@ object GeminiAiFactory {
         temperature: Float? = null,
         maxOutputTokens: Int = 8192,
         topP: Float? = null,
-        timeoutMs: Long = 60_000L
+        timeoutMs: Long = 60_000L,
+        forceBuiltInOnly: Boolean = false
     ): Result<GeminiSdkResult> = withContext(Dispatchers.IO) {
         executeRestWithFailover(
             context = context,
@@ -532,12 +501,14 @@ object GeminiAiFactory {
             temperature = temperature,
             maxOutputTokens = maxOutputTokens,
             topP = topP,
+            forceBuiltInOnly = forceBuiltInOnly,
             onPartialText = {}
         )
     }
 
     /**
      * Unified SSE streaming failover entrypoint used across Shark AI, Notes AI, and PDF Reader AI.
+     * When [forceBuiltInOnly] is true, strictly executes on built-in Shark AI keys (`gemini-3.6-flash` / `gemini-3.5-flash-lite`).
      */
     suspend fun streamContentWithFailover(
         context: Context? = null,
@@ -552,6 +523,7 @@ object GeminiAiFactory {
         maxOutputTokens: Int = 8192,
         topP: Float? = null,
         timeoutMs: Long = 60_000L,
+        forceBuiltInOnly: Boolean = false,
         onPartialText: (String) -> Unit = {}
     ): Result<GeminiSdkResult> = withContext(Dispatchers.IO) {
         executeRestWithFailover(
@@ -567,6 +539,7 @@ object GeminiAiFactory {
             temperature = temperature,
             maxOutputTokens = maxOutputTokens,
             topP = topP,
+            forceBuiltInOnly = forceBuiltInOnly,
             onPartialText = onPartialText
         )
     }
@@ -584,16 +557,21 @@ object GeminiAiFactory {
         temperature: Float?,
         maxOutputTokens: Int,
         topP: Float?,
+        forceBuiltInOnly: Boolean = false,
         onPartialText: (String) -> Unit
     ): Result<GeminiSdkResult> {
         if (context != null) {
             UserAiPreferences.initialize(context)
         }
-        val hasCustomUserKeys = UserAiPreferences.hasCustomUserGeminiKeys(context)
-        val keys = ApiKeyRotator.getAllEffectiveKeys(context)
-            .map { GeminiRestClient.sanitizeApiKey(it) }
-            .filter { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
-            .distinct()
+        val hasCustomUserKeys = !forceBuiltInOnly && UserAiPreferences.hasCustomUserGeminiKeys(context)
+        val keys = if (forceBuiltInOnly) {
+            resolveBuiltInOnlyKeys()
+        } else {
+            ApiKeyRotator.getAllEffectiveKeys(context)
+                .map { GeminiRestClient.sanitizeApiKey(it) }
+                .filter { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                .distinct()
+        }
 
         val resolvedTemp = temperature ?: if (responseJson) 0.2f else if (bitmaps.isNotEmpty()) 0.1f else 0.35f
         val resolvedTopP = topP ?: if (responseJson) 0.8f else 0.85f
@@ -628,7 +606,7 @@ object GeminiAiFactory {
                 inlineFiles = inlineFiles
             )
 
-            // Standard mode (no custom user key): prefer Firebase Cloud Functions proxy first.
+            // Standard mode (or forceBuiltInOnly): prefer Firebase Cloud Functions proxy first.
             var proxyError: Throwable? = null
             if (!hasCustomUserKeys) {
                 var lastProxyEmitted = ""
@@ -687,17 +665,17 @@ object GeminiAiFactory {
             var fallbackEligibleBuiltInError: Throwable? = null
             var triedAnyBuiltInKey = false
             var builtInKeysNeedFallbackModel = false
-            val userKeysSet = UserAiPreferences.getParsedUserGeminiKeys().toSet()
+            val userKeysSet = if (forceBuiltInOnly) emptySet() else UserAiPreferences.getParsedUserGeminiKeys().toSet()
             val failureNotes = mutableListOf<String>()
 
             for ((pos, pair) in orderedWithIndex.withIndex()) {
                 val (keyIndex, activeKey) = pair
                 val masked = ApiKeyRotator.maskApiKey(activeKey, slotIndex = null)
-                val isBuiltInKey = activeKey !in userKeysSet
+                val isBuiltInKey = forceBuiltInOnly || (activeKey !in userKeysSet)
                 val modelName = if (isBuiltInKey) {
                     SOLE_GEMINI_MODEL
                 } else {
-                    resolveEffectiveModelForCustomKey(context, activeKey)
+                    UserAiPreferences.resolveEffectiveGeminiModel(context, activeKey)
                 }
                 if (isBuiltInKey) {
                     triedAnyBuiltInKey = true
@@ -730,7 +708,6 @@ object GeminiAiFactory {
                     }
                     if (finalText.isNotBlank() || resp.functionCalls.isNotEmpty()) {
                         ApiKeyRotator.reportKeySuccess(activeKey)
-                        if (!isBuiltInKey) rememberWorkingCustomKeyModel(activeKey, resp.modelName.ifBlank { modelName })
                         if (finalText.isNotBlank() && finalText != lastEmitted) {
                             onPartialText(finalText)
                         }
@@ -746,68 +723,8 @@ object GeminiAiFactory {
                     }
                 }
 
-                var err = attempt.lastError
+                val err = attempt.lastError
                 if (err is CancellationException) throw err
-
-                // Smart custom-key 404 model recovery: if user's own Gemini key (e.g. AIza...) returned
-                // 404 NOT_FOUND on default/preview model (e.g. gemini-3.6-flash), automatically probe live
-                // Google AI Studio models (gemini-2.5-flash -> gemini-2.5-flash-lite -> gemini-2.0-flash)
-                // on that SAME user key and cache the working model for zero-latency future calls!
-                if (!isBuiltInKey && (err as? GeminiApiException)?.isModelNotFound == true) {
-                    for (fbModel in resolveCustomKeyFallbackModels(modelName)) {
-                        var fbLastEmitted = ""
-                        val fbAttempt = executeSingleKey(
-                            key = activeKey,
-                            modelName = fbModel,
-                            stream = stream,
-                            contents = contents,
-                            systemInstruction = systemInstruction,
-                            generationConfig = genConfig,
-                            tools = tools,
-                            responseJson = responseJson,
-                            onPartialText = { partial ->
-                                fbLastEmitted = partial
-                                onPartialText(partial)
-                            }
-                        )
-                        fbAttempt.response?.let { resp ->
-                            val finalText = if (responseJson) {
-                                GeminiRestClient.extractCleanJsonString(resp.text)
-                            } else {
-                                resp.text.trim()
-                            }
-                            if (finalText.isNotBlank() || resp.functionCalls.isNotEmpty()) {
-                                ApiKeyRotator.reportKeySuccess(activeKey)
-                                rememberWorkingCustomKeyModel(activeKey, fbModel)
-                                if (finalText.isNotBlank() && finalText != fbLastEmitted) {
-                                    onPartialText(finalText)
-                                }
-                                ApiKeyRotator.markCurrentIndex(keyIndex)
-                                return Result.success(
-                                    GeminiSdkResult(
-                                        text = finalText,
-                                        functionCalls = resp.functionCalls,
-                                        usedKeyIndex = keyIndex,
-                                        modelUsed = fbModel
-                                    )
-                                )
-                            }
-                        }
-                        val fbErr = fbAttempt.lastError
-                        if (fbErr is CancellationException) throw fbErr
-                        if (fbErr != null) {
-                            err = fbErr
-                            // Stop probing models on this key if key itself is unauthorized/rate-limited/offline
-                            val fbApiErr = fbErr as? GeminiApiException
-                            if (fbApiErr?.isAuthOrKeyError == true || fbApiErr?.isQuotaOrRateLimit == true ||
-                                (GeminiRestClient.isNetworkUnreachableError(fbErr) && !GeminiRestClient.isTimeoutError(fbErr))
-                            ) {
-                                break
-                            }
-                        }
-                    }
-                }
-
                 lastException = err
 
                 if (err != null && GeminiRestClient.isNetworkUnreachableError(err) && !GeminiRestClient.isTimeoutError(err)) {
@@ -1114,37 +1031,12 @@ object GeminiAiFactory {
             ).ifBlank { SOLE_GEMINI_MODEL }
 
             return@withContext UserAiPreferences.parseGeminiKeyList(effectiveCustomKey).mapIndexed { idx, singleKey ->
-                val slotLabel = "Özel Anahtar #${idx + 1}"
-                val masked = ApiKeyRotator.maskApiKey(singleKey, slotIndex = null)
-                val initialModel = resolveEffectiveModelForCustomKey(null, singleKey, customModelOverride)
-                var result = GeminiRestClient.testConnection(
+                GeminiRestClient.testConnection(
                     apiKey = singleKey,
-                    modelName = initialModel,
-                    slotLabel = slotLabel,
-                    maskedKey = masked
+                    modelName = targetModel,
+                    slotLabel = "Özel Anahtar #${idx + 1}",
+                    maskedKey = ApiKeyRotator.maskApiKey(singleKey, slotIndex = null)
                 )
-                if (result.isSuccess) {
-                    rememberWorkingCustomKeyModel(singleKey, initialModel, targetModel)
-                } else if (result.httpCode == 404) {
-                    for (fbModel in resolveCustomKeyFallbackModels(initialModel)) {
-                        val fbResult = GeminiRestClient.testConnection(
-                            apiKey = singleKey,
-                            modelName = fbModel,
-                            slotLabel = slotLabel,
-                            maskedKey = masked
-                        )
-                        if (fbResult.isSuccess) {
-                            rememberWorkingCustomKeyModel(singleKey, fbModel, targetModel)
-                            result = fbResult
-                            break
-                        }
-                        if (fbResult.httpCode != 404) {
-                            result = fbResult
-                            break
-                        }
-                    }
-                }
-                result
             }
         }
 
@@ -1320,41 +1212,11 @@ object GeminiAiFactory {
                         tools = tools
                     )
                     ApiKeyRotator.reportKeySuccess(key)
-                    if (!isBuiltInKey) rememberWorkingCustomKeyModel(key, response.modelName.ifBlank { modelName })
                     return KeyAttemptOutcome(response = response, triedBuiltInKeys = triedBuiltIn)
                 } catch (ce: CancellationException) {
                     throw ce
                 } catch (e: Throwable) {
-                    var effectiveErr: Throwable = e
-                    // Smart custom-key 404 model recovery on user's own Gemini key
-                    if (!isBuiltInKey && (e as? GeminiApiException)?.isModelNotFound == true) {
-                        for (fbModel in resolveCustomKeyFallbackModels(modelName)) {
-                            try {
-                                val fbResp = GeminiRestClient.generateContent(
-                                    apiKey = key,
-                                    modelName = fbModel,
-                                    contents = contents,
-                                    systemInstruction = systemPrompt,
-                                    generationConfig = generationConfig,
-                                    tools = tools
-                                )
-                                ApiKeyRotator.reportKeySuccess(key)
-                                rememberWorkingCustomKeyModel(key, fbModel)
-                                return KeyAttemptOutcome(response = fbResp, triedBuiltInKeys = triedBuiltIn)
-                            } catch (fbCe: CancellationException) {
-                                throw fbCe
-                            } catch (fbErr: Throwable) {
-                                effectiveErr = fbErr
-                                val fbApi = fbErr as? GeminiApiException
-                                if (fbApi?.isAuthOrKeyError == true || fbApi?.isQuotaOrRateLimit == true ||
-                                    (GeminiRestClient.isNetworkUnreachableError(fbErr) && !GeminiRestClient.isTimeoutError(fbErr))
-                                ) {
-                                    break
-                                }
-                            }
-                        }
-                    }
-
+                    val effectiveErr: Throwable = e
                     lastError = effectiveErr
                     if (isBuiltInKey && fallbackEligibleError == null && isFallbackEligibleFailure(effectiveErr)) {
                         fallbackEligibleError = effectiveErr
@@ -1450,7 +1312,6 @@ object GeminiAiFactory {
                         onThinkingText = onThinkingText
                     )
                     ApiKeyRotator.reportKeySuccess(key)
-                    if (!isBuiltInKey) rememberWorkingCustomKeyModel(key, response.modelName.ifBlank { modelName })
                     return KeyAttemptOutcome(response = response, triedBuiltInKeys = triedBuiltIn)
                 } catch (ce: CancellationException) {
                     throw ce
@@ -1467,50 +1328,7 @@ object GeminiAiFactory {
                         )
                     }
 
-                    var effectiveErr: Throwable = e
-                    if (!isBuiltInKey && (e as? GeminiApiException)?.isModelNotFound == true) {
-                        for (fbModel in resolveCustomKeyFallbackModels(modelName)) {
-                            val fbPartial = StringBuilder()
-                            try {
-                                val fbResp = GeminiRestClient.streamGenerateContent(
-                                    apiKey = key,
-                                    modelName = fbModel,
-                                    contents = contents,
-                                    systemInstruction = systemPrompt,
-                                    generationConfig = generationConfig,
-                                    tools = tools,
-                                    onPartialText = { acc ->
-                                        fbPartial.setLength(0)
-                                        fbPartial.append(acc)
-                                        onPartialText(acc)
-                                    },
-                                    onThinkingText = onThinkingText
-                                )
-                                ApiKeyRotator.reportKeySuccess(key)
-                                rememberWorkingCustomKeyModel(key, fbModel)
-                                return KeyAttemptOutcome(response = fbResp, triedBuiltInKeys = triedBuiltIn)
-                            } catch (fbCe: CancellationException) {
-                                throw fbCe
-                            } catch (fbErr: Throwable) {
-                                if (fbPartial.length >= 40) {
-                                    ApiKeyRotator.reportKeySuccess(key)
-                                    rememberWorkingCustomKeyModel(key, fbModel)
-                                    return KeyAttemptOutcome(
-                                        response = GeminiResponse(text = fbPartial.toString(), modelName = fbModel),
-                                        triedBuiltInKeys = triedBuiltIn
-                                    )
-                                }
-                                effectiveErr = fbErr
-                                val fbApi = fbErr as? GeminiApiException
-                                if (fbApi?.isAuthOrKeyError == true || fbApi?.isQuotaOrRateLimit == true ||
-                                    (GeminiRestClient.isNetworkUnreachableError(fbErr) && !GeminiRestClient.isTimeoutError(fbErr))
-                                ) {
-                                    break
-                                }
-                            }
-                        }
-                    }
-
+                    val effectiveErr: Throwable = e
                     lastError = effectiveErr
                     if (isBuiltInKey && fallbackEligibleError == null && isFallbackEligibleFailure(effectiveErr)) {
                         fallbackEligibleError = effectiveErr

@@ -221,7 +221,8 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
             temperature = 0.2f,
             maxTokens = 8192,
             responseJson = true,
-            timeoutMs = 55_000L
+            timeoutMs = 55_000L,
+            forceBuiltInOnly = true
         )
         val cleanJson = GeminiRestClient.extractCleanJsonString(raw)
         if (cleanJson.isBlank()) {
@@ -250,10 +251,11 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
             }
 
             UserAiPreferences.initialize(getApplication())
-            if (!ApiKeyRotator.hasAnyGeminiKey(getApplication()) &&
-                !com.example.sharkmentor.core.ai.MultiProviderAiClient.hasAnyExternalProviderKey(getApplication())
+            // Real Coaching planner strictly uses built-in Shark AI keys + Firebase Proxy (gemini-3.6-flash / 3.5-flash-lite)
+            if (com.example.sharkmentor.core.ai.GeminiAiFactory.resolveBuiltInOnlyKeys().isEmpty() &&
+                !ApiKeyRotator.hasAnyGeminiKey(getApplication())
             ) {
-                _uiState.value = PlannerUiState.Error("AI API anahtarı tanımlanmamış. Ayarlardan bir anahtar ekleyin.")
+                _uiState.value = PlannerUiState.Error("Yerleşik Shark AI anahtarı tanımlanmamış.")
                 return@launch
             }
 

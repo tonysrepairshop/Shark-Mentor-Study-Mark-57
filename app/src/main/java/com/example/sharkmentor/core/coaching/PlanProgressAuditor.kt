@@ -353,7 +353,38 @@ object PlanProgressAuditor {
             return false
         }
 
-        // Exclude pure book/topic logging mutations that don't ask to build/rebuild a plan
+        // Exclude pure book/topic logging & Agent curriculum tracking requests
+        // (e.g. "konu takip çizelgesi hazırla", "hakimiyet puanı 0 başlasın", "ders klasörleri oluştur", "kütüphaneye kitap ekle")
+        val hasExplicitStudySchedulePhrase = text.contains("haftalık plan") ||
+            text.contains("haftalik plan") ||
+            text.contains("günlük plan") ||
+            text.contains("gunluk plan") ||
+            text.contains("çalışma plan") ||
+            text.contains("calisma plan") ||
+            text.contains("çalışma program") ||
+            text.contains("calisma program") ||
+            text.contains("haftalık program") ||
+            text.contains("haftalik program") ||
+            text.contains("ders çalışma program") ||
+            text.contains("ders calisma program")
+
+        val isTopicTrackingOrAgentDataRequest = (
+            text.contains("konu takip") ||
+                text.contains("konu çizelge") ||
+                text.contains("konu cizelge") ||
+                text.contains("hakimiyet puan") ||
+                text.contains("hakimiyet liste") ||
+                text.contains("ders klasör") ||
+                text.contains("ders klasor") ||
+                text.contains("ortak konular") ||
+                text.contains("müfredat liste") ||
+                text.contains("mufredat liste") ||
+                text.contains("kütüphaneye kitap") ||
+                text.contains("kutuphaneye kitap") ||
+                text.contains("hata bankas")
+            ) && !hasExplicitStudySchedulePhrase
+        if (isTopicTrackingOrAgentDataRequest) return false
+
         val isSingleItemEdit = (text.contains("sayfaya kadar") || text.contains("sayfadayım") ||
             text.contains("sayfadayim") || text.contains("teste kadar") ||
             text.contains("testteyim") || text.contains("seviyemi")) &&
@@ -362,9 +393,10 @@ object PlanProgressAuditor {
 
         val mentionsPlanNoun = text.contains("plan") ||
             text.contains("program") ||
-            text.contains("çizelge") ||
-            text.contains("cizelge") ||
-            text.contains("rota")
+            text.contains("çalışma çizelge") ||
+            text.contains("calisma cizelge") ||
+            text.contains("çalışma rotası") ||
+            text.contains("calisma rotasi")
 
         if (!mentionsPlanNoun) return false
 
@@ -383,14 +415,7 @@ object PlanProgressAuditor {
             "yaz", "kur", "ekle"
         )
         val hasActionVerb = actionVerbs.any { text.contains(it) }
-        val isWeeklyOrStudyPlanPhrase = text.contains("haftalık plan") ||
-            text.contains("haftalik plan") ||
-            text.contains("çalışma plan") ||
-            text.contains("calisma plan") ||
-            text.contains("çalışma program") ||
-            text.contains("calisma program") ||
-            text.contains("haftalık program") ||
-            text.contains("haftalik program") ||
+        val isWeeklyOrStudyPlanPhrase = hasExplicitStudySchedulePhrase ||
             text.contains("yeni plan") ||
             text.contains("yeni program") ||
             text.contains("planımı yenile") ||

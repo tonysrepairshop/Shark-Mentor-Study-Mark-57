@@ -280,24 +280,27 @@ fun AiSettingsScreen(
                             modifier = Modifier.size(28.dp)
                         )
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            val hasAnyCustomKeyInput = hasCustomGeminiInput ||
+                                deepSeekInput.isNotBlank() ||
+                                kimiInput.isBlank().not() ||
+                                claudeInput.isNotBlank() ||
+                                openAiInput.isNotBlank() ||
+                                grokInput.isNotBlank()
                             Text(
-                                text = "Aktif Model: ${liveActivePair.first.shortLabel} • ${liveActivePair.second}",
+                                text = if (hasAnyCustomKeyInput) {
+                                    "Aktif Model: ${liveActivePair.first.shortLabel} • ${liveActivePair.second}"
+                                } else {
+                                    "Aktif Model: Shark AI"
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
-                            val bannerSub = if (
-                                !hasCustomGeminiInput &&
-                                deepSeekInput.isBlank() &&
-                                kimiInput.isBlank() &&
-                                claudeInput.isBlank() &&
-                                openAiInput.isBlank() &&
-                                grokInput.isBlank()
-                            ) {
-                                "Özel anahtar girilmediğinde varsayılan Gemini (${UserAiPreferences.STANDARD_GEMINI_MODEL}) kullanılır. Dilediğiniz sağlayıcıya API anahtarı ekleyip modellerini listeleyebilir ve test edebilirsiniz."
+                            val bannerSub = if (!hasAnyCustomKeyInput) {
+                                "Özel API anahtarı girilmediğinde tüm modüller yerleşik Shark AI (sabit altyapı) ile çalışır. Kendi API anahtarını ekleyip sohbet ekranından doğrudan model değiştirebilirsin."
                             } else {
-                                "Sağlayıcı tercihiniz: ${selectedProvider.label}. Video Stüdyosu dahil tüm AI modülleri bu seçimi kullanır."
+                                "Sağlayıcı tercihin: ${selectedProvider.label}. Sohbet ekranındaki yazma kutusunun sol altından eklediğin tüm modeller arasında tek dokunuşla geçiş yapabilirsin."
                             }
                             Text(
                                 text = bannerSub,
@@ -307,6 +310,33 @@ fun AiSettingsScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+                }
+
+                // Transparent Built-In Infrastructure Policy Notice (Theme-Synced)
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.42f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.28f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Şeffaf Altyapı Politikası",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Text(
+                            text = "Hız ve kararlılık açısından yalnızca Gerçek Koçluk planlama motoru (/plan) ile YouTube video/oynatma listesi keşfi uygulamanın kendi yerleşik Shark AI sabit anahtarlarını kullanır. Sohbet, uygulama içi Agent işlemleri, Soru Çözücü, Notlar, PDF ve Video İçi AI Asistanı ise girdiğin kendi API anahtarın ve tam olarak seçtiğin modelle çalışır.",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.88f)
+                        )
                     }
                 }
 

@@ -56,7 +56,9 @@ data class DiscoveredYouTubePlaylist(
     val playlistId: String,
     val title: String,
     val channelName: String = "",
-    val videoCount: Int = 0
+    val videoCount: Int = 0,
+    val editionYear: Int = 0,
+    val updatedHint: String = ""
 )
 
 @Immutable
@@ -1459,7 +1461,8 @@ object BookCampManager {
                 userPrompt = prompt,
                 temperature = 0.25f,
                 maxTokens = 2048,
-                timeoutMs = 15_000L
+                timeoutMs = 15_000L,
+                forceBuiltInOnly = true
             )
             resText
                 .lines()
@@ -2330,10 +2333,77 @@ object BookCampManager {
         return false
     }
 
+    internal fun currentCalendarYear(): Int =
+        runCatching { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+            .getOrDefault(2026)
+            .coerceIn(2024, 2035)
+
+    internal fun extractEditionYear(text: String): Int {
+        if (text.isBlank()) return 0
+        return Regex("""\b(20[1-3]\d)\b""")
+            .findAll(text)
+            .mapNotNull { it.groupValues[1].toIntOrNull() }
+            .filter { it in 2018..2035 }
+            .maxOrNull() ?: 0
+    }
+
+    internal fun extractUpdatedFreshnessBonus(updatedHint: String, referenceYear: Int): Int {
+        val norm = normalizeForMatch(updatedHint)
+        if (norm.isBlank()) return 0
+        val recentWords = listOf(
+            "bugun", "dun", "saat once", "gun once", "hafta once", "ay once",
+            "today", "yesterday", "hour ago", "hours ago", "day ago", "days ago",
+            "week ago", "weeks ago", "month ago", "months ago"
+        )
+        if (recentWords.any { norm.contains(it) }) return 12
+        val yearsAgoMatch = Regex("""\b(\d{1,2})\s*(?:yil|year)""").find(norm)
+        if (yearsAgoMatch != null) {
+            val yrs = yearsAgoMatch.groupValues[1].toIntOrNull() ?: 0
+            return when {
+                yrs <= 1 -> 2
+                yrs == 2 -> -8
+                else -> -14
+            }
+        }
+        val hintYear = extractEditionYear(norm)
+        if (hintYear >= referenceYear) return 10
+        return 0
+    }
+
+    internal fun scoreEditionFreshness(
+        pl: DiscoveredYouTubePlaylist,
+        resourceTitle: String,
+        referenceYear: Int = currentCalendarYear()
+    ): Int {
+        val requestedYear = extractEditionYear(resourceTitle)
+        val plYear = if (pl.editionYear > 0) pl.editionYear else extractEditionYear("${pl.title} ${pl.updatedHint}")
+        val updatedBonus = extractUpdatedFreshnessBonus(pl.updatedHint, referenceYear)
+
+        // If student explicitly wrote a specific edition year in their book title (e.g. "2024 Baskı"), honor it!
+        if (requestedYear > 0 && plYear > 0) {
+            return when {
+                plYear == requestedYear -> 26 + updatedBonus
+                kotlin.math.abs(plYear - requestedYear) == 1 -> 10 + updatedBonus
+                else -> -12
+            }
+        }
+
+        val yearScore = when {
+            plYear >= referenceYear + 1 -> 30 // Upcoming / newest edition (e.g. 2027 in 2026)
+            plYear == referenceYear -> 22     // Current year edition (e.g. 2026)
+            plYear == referenceYear - 1 -> 6  // Previous year (e.g. 2025)
+            plYear == referenceYear - 2 -> -10 // 2 years old (e.g. 2024)
+            plYear in 2015..(referenceYear - 3) -> -18 // 3+ years old
+            else -> 0
+        }
+        return yearScore + updatedBonus
+    }
+
     /**
-     * Pure deterministic hybrid ranker (Mark 67):
+     * Pure deterministic hybrid ranker (Mark 69):
      * - Strictly filters out unrelated subjects, wrong exam levels, shorts/junk, and tiny <3 video lists.
      * - Separates direct book playlist matches from subject-appropriate fallback camps.
+     * - Prioritizes newest edition years (e.g. 2027 > 2026 > 2025 > older) and recently updated lists.
      * - Strictly caps output to the **Top 3 most relevant playlists** (marking #1 as `isRecommended = true`).
      */
     fun rankHybridBookCandidates(
@@ -2341,7 +2411,8 @@ object BookCampManager {
         subject: String,
         directRaw: List<DiscoveredYouTubePlaylist>,
         subjectRaw: List<DiscoveredYouTubePlaylist>,
-        maxResults: Int = 3
+        maxResults: Int = 3,
+        referenceYear: Int = currentCalendarYear()
     ): Pair<Boolean, List<BookVideoCandidate>> {
         val normTitle = normalizeForMatch(resourceTitle)
         val normSubj = normalizeForMatch(subject)
@@ -2367,7 +2438,7 @@ object BookCampManager {
             score += subjHits * 14
             if (isCampLike) score += 12
             if (pl.videoCount in 8..160) score += 14 else if (pl.videoCount >= 3) score += 6
-            if (hay.contains("2025") || hay.contains("2026") || hay.contains("2027")) score += 6
+            score += scoreEditionFreshness(pl, resourceTitle, referenceYear)
             if (hay.contains("tanitim") || hay.contains("shorts")) score -= 30
             return score to isDirect
         }
@@ -2400,6 +2471,17 @@ object BookCampManager {
         val cap = maxResults.coerceIn(1, 5)
         val hasDirect = directMatches.isNotEmpty()
         val combined = mutableListOf<BookVideoCandidate>()
+
+        fun buildFreshNote(pl: DiscoveredYouTubePlaylist, baseNote: String): String {
+            val yr = if (pl.editionYear > 0) pl.editionYear else extractEditionYear(pl.title)
+            val prefix = when {
+                yr >= referenceYear -> "$yr güncel • "
+                yr > 0 -> "$yr • "
+                else -> ""
+            }
+            return "$prefix$baseNote"
+        }
+
         // If direct book playlists exist, prioritize them exclusively up to Top 3!
         directMatches.take(cap).forEach { (pl, _) ->
             combined.add(
@@ -2410,7 +2492,7 @@ object BookCampManager {
                     videoCount = pl.videoCount,
                     isDirectBookMatch = true,
                     isRecommended = false,
-                    descriptionNote = "Kitaba doğrudan uyumlu oynatma listesi"
+                    descriptionNote = buildFreshNote(pl, "Kitaba doğrudan uyumlu oynatma listesi")
                 )
             )
         }
@@ -2425,7 +2507,7 @@ object BookCampManager {
                         videoCount = pl.videoCount,
                         isDirectBookMatch = false,
                         isRecommended = false,
-                        descriptionNote = "$subject dersine uygun video kampı"
+                        descriptionNote = buildFreshNote(pl, "$subject dersine uygun video kampı")
                     )
                 )
             }
@@ -2440,8 +2522,8 @@ object BookCampManager {
     /**
      * Lightweight background AI curator: inspects up to 6 pre-filtered YouTube playlist candidates
      * and returns up to 3 ordered 0-based indices of the genuinely relevant matches for [resourceTitle]/[subject].
-     * Strictly bounded to 4.5s so slow/misconfigured custom API keys NEVER stall YouTube discovery.
-     * Returns null cleanly if offline, timed out, or AI key unavailable.
+     * Strictly uses the app's built-in Shark AI keys (`gemini-3.6-flash` / `gemini-3.5-flash-lite`) with a 4.5s timeout
+     * so discovery is always fast and unaffected by custom user keys.
      */
     private suspend fun pickTop3RelevantIndicesWithAiQuietly(
         context: Context,
@@ -2450,6 +2532,7 @@ object BookCampManager {
         candidates: List<BookVideoCandidate>
     ): List<Int>? {
         if (candidates.size <= 1) return null
+        val refYear = currentCalendarYear()
         return kotlinx.coroutines.withTimeoutOrNull(4_500L) {
             runCatching {
                 val listing = candidates.take(6).mapIndexed { idx, c ->
@@ -2458,11 +2541,12 @@ object BookCampManager {
                 }.joinToString("\n")
                 val reply = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
                     context = context,
-                    systemPrompt = "Sen bir eğitim kaynağı oynatma listesi seçicisisin. Alakasız listeleri ele ve en alakalı en fazla 3 listenin 0-tabanlı sıra numaralarını virgülle ayırarak yaz (örn: 0,2,1). Başka açıklama yazma.",
-                    userPrompt = "Kitap: \"$resourceTitle\" | Ders: \"$subject\"\nAday YouTube oynatma listeleri:\n$listing\nEn alakalı en fazla 3 sıra numarasını en iyiden başlayarak döndür:",
+                    systemPrompt = "Sen bir eğitim kaynağı oynatma listesi seçicisisin. Alakasız listeleri ele, aynı hoca/kaynağa ait listeler arasında mutlaka en güncel baskı yılını (${refYear + 1} > $refYear > ${refYear - 1}) öne al ve en alakalı en fazla 3 listenin 0-tabanlı sıra numaralarını virgülle ayırarak yaz (örn: 0,2,1). Başka açıklama yazma.",
+                    userPrompt = "Kitap: \"$resourceTitle\" | Ders: \"$subject\"\nAday YouTube oynatma listeleri:\n$listing\nEn alakalı ve en güncel en fazla 3 sıra numarasını en iyiden başlayarak döndür:",
                     temperature = 0.05f,
                     maxTokens = 24,
-                    timeoutMs = 4_000L
+                    timeoutMs = 4_000L,
+                    forceBuiltInOnly = true
                 )
                 val picks = Regex("""\b([0-5])\b""").findAll(reply.orEmpty())
                     .mapNotNull { it.groupValues[1].toIntOrNull() }
@@ -2568,10 +2652,10 @@ object BookCampManager {
     }
 
     /**
-     * Mark 67 High-Accuracy Top-3 Book Playlist Discovery & Real Absorption Engine:
+     * Mark 69 High-Accuracy Top-3 Book Playlist Discovery & Real Absorption Engine:
      * 1. Respects `videoDisabled` opt-out from [BookCoachingRoleManager].
-     * 2. Searches YouTube with EXACT book title directly FIRST (plus fixed `sp=EgIQAw%3D%3D` playlist filter
-     *    and automatic InnerTube search fallback if desktop HTML is gated).
+     * 2. Searches YouTube with EXACT book title + fresh edition years (`year+1`, `year`) so 2027/2026
+     *    updated camps surface ahead of older 2025/2024 editions.
      * 3. Uses structural Gson `ytInitialData` JSON tree parsing supporting BOTH classic `playlistRenderer`
      *    AND modern 2024-2026 `lockupViewModel` playlist cards regardless of thumbnail size.
      * 4. Strictly filters out irrelevant subjects/exam-levels/shorts/tiny lists and caps candidates to **Top 3**.
@@ -2656,7 +2740,33 @@ object BookCampManager {
             }
         }
 
-        // 1A. Primary search: exact book title + subject with CORRECT playlist filter (sp=EgIQAw%3D%3D)
+        val refYear = currentCalendarYear()
+        val nextYear = refYear + 1
+        val userExplicitYear = extractEditionYear(cleanTitle)
+
+        // 1A. Fresh-edition search FIRST (unless user typed an explicit older year in book title)
+        // Ensures 2027 / 2026 updated playlists from the same teacher/publisher ALWAYS enter the candidate pool!
+        if (userExplicitYear == 0) {
+            val freshQueryNext = "$queryWithSubject $nextYear"
+            val encFreshNext = java.net.URLEncoder.encode(freshQueryNext, "UTF-8")
+            val freshNextHtml = fetchHtmlQuietly(
+                "https://www.youtube.com/results?search_query=$encFreshNext&sp=EgIQAw%3D%3D&hl=tr&gl=TR"
+            )
+            if (!freshNextHtml.isNullOrBlank()) {
+                addUniqueDirect(extractPlaylistsFromSearchHtml(freshNextHtml).take(6))
+            }
+
+            val freshQueryCur = "$queryWithSubject $refYear"
+            val encFreshCur = java.net.URLEncoder.encode(freshQueryCur, "UTF-8")
+            val freshCurHtml = fetchHtmlQuietly(
+                "https://www.youtube.com/results?search_query=$encFreshCur&sp=EgIQAw%3D%3D&hl=tr&gl=TR"
+            )
+            if (!freshCurHtml.isNullOrBlank()) {
+                addUniqueDirect(extractPlaylistsFromSearchHtml(freshCurHtml).take(6))
+            }
+        }
+
+        // 1B. Primary search: exact book title + subject with CORRECT playlist filter (sp=EgIQAw%3D%3D)
         val encPrimary = java.net.URLEncoder.encode(queryWithSubject, "UTF-8")
         val primaryPlHtml = fetchHtmlQuietly(
             "https://www.youtube.com/results?search_query=$encPrimary&sp=EgIQAw%3D%3D&hl=tr&gl=TR"
@@ -2668,7 +2778,7 @@ object BookCampManager {
             addUniqueDirect(searchYouTubePlaylistsViaInnerTube(queryWithSubject, playlistsOnly = true).take(8))
         }
 
-        // 1B. Direct exact book title ONLY (catches playlists when user typed e.g. "Ferrum Kimya" or "Aydın AYT Kimya")
+        // 1C. Direct exact book title ONLY (catches playlists when user typed e.g. "Ferrum Kimya" or "Aydın AYT Kimya")
         if (directRaw.size < 4 && cleanTitle.isNotBlank() && !cleanTitle.equals(queryWithSubject, ignoreCase = true)) {
             val encExactTitle = java.net.URLEncoder.encode(cleanTitle, "UTF-8")
             val exactPlHtml = fetchHtmlQuietly(
@@ -3582,8 +3692,19 @@ object BookCampManager {
                 val countRaw = extractTextFromJsonElement(plRenderer.get("videoCount"))
                     .ifBlank { extractTextFromJsonElement(plRenderer.get("videoCountText")) }
                 val count = Regex("""(\d{1,4})""").find(countRaw)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                val publishedHint = extractTextFromJsonElement(plRenderer.get("publishedTimeText")).trim()
+                val edYear = extractEditionYear("$title $publishedHint")
                 if (title.isNotBlank()) {
-                    out.add(DiscoveredYouTubePlaylist(playlistId = pid, title = title, channelName = channel, videoCount = count))
+                    out.add(
+                        DiscoveredYouTubePlaylist(
+                            playlistId = pid,
+                            title = title,
+                            channelName = channel,
+                            videoCount = count,
+                            editionYear = edYear,
+                            updatedHint = publishedHint
+                        )
+                    )
                 }
             }
         }
@@ -3599,6 +3720,7 @@ object BookCampManager {
                 val metaObj = lockup.getAsJsonObject("metadata")?.getAsJsonObject("lockupMetadataViewModel")
                 val title = extractTextFromJsonElement(metaObj?.get("title")).trim()
                 var channel = ""
+                var updatedHint = ""
                 val rows = metaObj?.getAsJsonObject("metadata")
                     ?.getAsJsonObject("contentMetadataViewModel")
                     ?.getAsJsonArray("metadataRows")
@@ -3607,19 +3729,45 @@ object BookCampManager {
                         val parts = r.takeIf { it.isJsonObject }?.asJsonObject?.getAsJsonArray("metadataParts") ?: continue
                         for (p in parts) {
                             val txt = extractTextFromJsonElement(p.takeIf { it.isJsonObject }?.asJsonObject?.get("text")).trim()
-                            if (txt.isNotBlank() && !txt.contains("oynatma", ignoreCase = true) && !txt.contains("playlist", ignoreCase = true) && !txt.contains("video", ignoreCase = true) && !txt.contains("güncellen", ignoreCase = true)) {
+                            if (txt.isBlank()) continue
+                            val lowerTxt = txt.lowercase(TR_LOCALE)
+                            if (updatedHint.isBlank() && (
+                                    lowerTxt.contains("güncellen") ||
+                                    lowerTxt.contains("updated") ||
+                                    lowerTxt.contains("önce") ||
+                                    lowerTxt.contains("ago") ||
+                                    lowerTxt.contains("bugün") ||
+                                    lowerTxt.contains("today")
+                                )
+                            ) {
+                                updatedHint = txt
+                            } else if (channel.isBlank() &&
+                                !lowerTxt.contains("oynatma") &&
+                                !lowerTxt.contains("playlist") &&
+                                !lowerTxt.contains("video") &&
+                                !lowerTxt.contains("güncellen") &&
+                                !lowerTxt.contains("updated")
+                            ) {
                                 channel = txt
-                                break
                             }
                         }
-                        if (channel.isNotBlank()) break
                     }
                 }
                 val lockupStr = lockup.toString()
                 val count = Regex("""(\d{1,4})\s*(?:video|videos|ders)""", RegexOption.IGNORE_CASE)
                     .find(lockupStr)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                val edYear = extractEditionYear("$title $updatedHint")
                 if (title.isNotBlank()) {
-                    out.add(DiscoveredYouTubePlaylist(playlistId = contentId, title = title, channelName = channel, videoCount = count))
+                    out.add(
+                        DiscoveredYouTubePlaylist(
+                            playlistId = contentId,
+                            title = title,
+                            channelName = channel,
+                            videoCount = count,
+                            editionYear = edYear,
+                            updatedHint = updatedHint
+                        )
+                    )
                 }
             }
         }

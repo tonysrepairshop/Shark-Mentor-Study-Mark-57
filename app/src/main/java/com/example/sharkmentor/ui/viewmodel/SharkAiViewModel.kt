@@ -195,8 +195,34 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     private val _attachmentPreview = MutableStateFlow<SelectedAttachmentPreview?>(null)
     val attachmentPreview: StateFlow<SelectedAttachmentPreview?> = _attachmentPreview.asStateFlow()
 
-    private val _activeModelDisplay = MutableStateFlow(userAiPrefs.getActiveDisplayText())
+    private fun resolveActiveModelDisplayLabel(): String {
+        val ctx = getApplication<Application>()
+        return if (com.example.sharkmentor.core.ai.MultiProviderAiClient.hasAnyCustomUserApiKey(ctx)) {
+            val (prov, model) = userAiPrefs.getActiveProviderAndModel()
+            "${prov.shortLabel} • $model"
+        } else {
+            "Shark AI"
+        }
+    }
+
+    private val _hasAnyCustomApiKey = MutableStateFlow(
+        com.example.sharkmentor.core.ai.MultiProviderAiClient.hasAnyCustomUserApiKey(getApplication())
+    )
+    val hasAnyCustomApiKey: StateFlow<Boolean> = _hasAnyCustomApiKey.asStateFlow()
+
+    private val _customProviderGroups = MutableStateFlow(
+        com.example.sharkmentor.core.ai.MultiProviderAiClient.getConfiguredCustomProviderGroups(getApplication())
+    )
+    val customProviderGroups: StateFlow<List<com.example.sharkmentor.core.ai.MultiProviderAiClient.CustomProviderModelGroup>> =
+        _customProviderGroups.asStateFlow()
+
+    private val _isDiscoveringInlineModels = MutableStateFlow(false)
+    val isDiscoveringInlineModels: StateFlow<Boolean> = _isDiscoveringInlineModels.asStateFlow()
+
+    private val _activeModelDisplay = MutableStateFlow(resolveActiveModelDisplayLabel())
     val activeModelDisplay: StateFlow<String> = _activeModelDisplay.asStateFlow()
+
+    private var draftSaveJob: Job? = null
 
     private val _activeCapability = MutableStateFlow<SharkAiCapability?>(null)
     val activeCapability: StateFlow<SharkAiCapability?> = _activeCapability.asStateFlow()
@@ -431,9 +457,94 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
 
     fun onInputTextChanged(newText: String) {
         _inputText.value = newText
-        val snapshot = SharkAiChatSessionStore.saveDraftState(getApplication(), newText, _lockedEngine.value)
-        _chatSessions.value = snapshot.sessions
-        refreshAutoDetectedEngine()
+        // Debounce draft disk persistence off main thread so typing stays 60 FPS even on low-end phones
+        draftSaveJob?.cancel()
+        val locked = _lockedEngine.value
+        draftSaveJob = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(350L)
+            SharkAiChatSessionStore.saveDraftState(getApplication(), newText, locked)
+        }
+    }
+
+    /**
+     * Switches active provider and model directly from the Antigravity/OpenCode-style inline
+     * model switcher inside Shark AI's input bar (only shown when user has entered custom API keys).
+     */
+    fun selectCustomModelInline(
+        provider: com.example.sharkmentor.core.ai.AiProviderChoice,
+        modelId: String
+    ) {
+        val cleanModel = modelId.trim()
+        if (cleanModel.isBlank()) return
+        userAiPrefs.saveSettings(
+            geminiKeys = userAiPrefs.userGeminiKeys.value,
+            deepSeekKey = userAiPrefs.getUserDeepSeekKey(),
+            kimiKey = userAiPrefs.getUserKimiKey(),
+            claudeKey = userAiPrefs.getUserClaudeKey(),
+            openAiKey = userAiPrefs.getUserOpenAiKey(),
+            provider = provider,
+            selectedGeminiModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.GEMINI) cleanModel else userAiPrefs.getSelectedUserGeminiModel(),
+            selectedDeepSeekModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.DEEPSEEK) cleanModel else userAiPrefs.getSelectedDeepSeekModel(),
+            selectedKimiModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.KIMI) cleanModel else userAiPrefs.getSelectedKimiModel(),
+            selectedClaudeModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.CLAUDE) cleanModel else userAiPrefs.getSelectedClaudeModel(),
+            selectedOpenAiModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.OPENAI) cleanModel else userAiPrefs.getSelectedOpenAiModel(),
+            grokKey = userAiPrefs.getUserGrokKey(),
+            selectedGrokModel = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.GROK) cleanModel else userAiPrefs.getSelectedGrokModel()
+        )
+        refreshInlineCustomModelState()
+    }
+
+    /**
+     * Refreshes the discovered model list for a configured custom provider right inside the inline picker.
+     */
+    fun discoverModelsForCustomProvider(provider: com.example.sharkmentor.core.ai.AiProviderChoice) {
+        if (_isDiscoveringInlineModels.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isDiscoveringInlineModels.value = true
+            try {
+                val rawKey = when (provider) {
+                    com.example.sharkmentor.core.ai.AiProviderChoice.GEMINI -> userAiPrefs.userGeminiKeys.value
+                    com.example.sharkmentor.core.ai.AiProviderChoice.CLAUDE -> userAiPrefs.getUserClaudeKey()
+                    com.example.sharkmentor.core.ai.AiProviderChoice.OPENAI -> userAiPrefs.getUserOpenAiKey()
+                    com.example.sharkmentor.core.ai.AiProviderChoice.GROK -> userAiPrefs.getUserGrokKey()
+                    com.example.sharkmentor.core.ai.AiProviderChoice.DEEPSEEK -> userAiPrefs.getUserDeepSeekKey()
+                    com.example.sharkmentor.core.ai.AiProviderChoice.KIMI -> userAiPrefs.getUserKimiKey()
+                    com.example.sharkmentor.core.ai.AiProviderChoice.AUTO -> ""
+                }
+                if (rawKey.isBlank()) return@launch
+                val res = com.example.sharkmentor.core.ai.MultiProviderAiClient.fetchSupportedModels(
+                    provider = provider,
+                    apiKeyRaw = rawKey
+                )
+                if (res.success && res.models.isNotEmpty()) {
+                    userAiPrefs.saveSettings(
+                        geminiKeys = userAiPrefs.userGeminiKeys.value,
+                        deepSeekKey = userAiPrefs.getUserDeepSeekKey(),
+                        kimiKey = userAiPrefs.getUserKimiKey(),
+                        claudeKey = userAiPrefs.getUserClaudeKey(),
+                        openAiKey = userAiPrefs.getUserOpenAiKey(),
+                        provider = userAiPrefs.getSelectedProvider(),
+                        discoveredGeminiModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.GEMINI) res.models else null,
+                        discoveredDeepSeekModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.DEEPSEEK) res.models else null,
+                        discoveredKimiModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.KIMI) res.models else null,
+                        discoveredClaudeModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.CLAUDE) res.models else null,
+                        discoveredOpenAiModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.OPENAI) res.models else null,
+                        grokKey = userAiPrefs.getUserGrokKey(),
+                        discoveredGrokModels = if (provider == com.example.sharkmentor.core.ai.AiProviderChoice.GROK) res.models else null
+                    )
+                    refreshInlineCustomModelState()
+                }
+            } finally {
+                _isDiscoveringInlineModels.value = false
+            }
+        }
+    }
+
+    private fun refreshInlineCustomModelState() {
+        val ctx = getApplication<Application>()
+        _hasAnyCustomApiKey.value = com.example.sharkmentor.core.ai.MultiProviderAiClient.hasAnyCustomUserApiKey(ctx)
+        _customProviderGroups.value = com.example.sharkmentor.core.ai.MultiProviderAiClient.getConfiguredCustomProviderGroups(ctx)
+        _activeModelDisplay.value = resolveActiveModelDisplayLabel()
     }
 
     fun onAttachmentSelected(uri: Uri?) {
@@ -489,6 +600,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     fun startNewChat() {
         activeAiJob?.cancel()
         activeAiJob = null
+        draftSaveJob?.cancel()
         _selectedAttachmentUri.value = null
         _attachmentPreview.value = null
         _activeCapability.value = null
@@ -512,6 +624,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         if (sessionId == _activeChatSessionId.value && !_uiState.value.isLoading) return
         activeAiJob?.cancel()
         activeAiJob = null
+        draftSaveJob?.cancel()
         _selectedAttachmentUri.value = null
         _attachmentPreview.value = null
         val snapshot = SharkAiChatSessionStore.selectSession(getApplication(), sessionId)
@@ -526,6 +639,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         if (sessionId == _activeChatSessionId.value) {
             activeAiJob?.cancel()
             activeAiJob = null
+            draftSaveJob?.cancel()
             _selectedAttachmentUri.value = null
             _attachmentPreview.value = null
         }
@@ -608,19 +722,25 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             merge(
                 userAiPrefs.userGeminiKeys,
                 userAiPrefs.selectedUserGeminiModel,
+                userAiPrefs.discoveredGeminiModels,
                 userAiPrefs.userDeepSeekKey,
                 userAiPrefs.selectedDeepSeekModel,
+                userAiPrefs.discoveredDeepSeekModels,
                 userAiPrefs.userKimiKey,
                 userAiPrefs.selectedKimiModel,
+                userAiPrefs.discoveredKimiModels,
                 userAiPrefs.userClaudeKey,
                 userAiPrefs.selectedClaudeModel,
+                userAiPrefs.discoveredClaudeModels,
                 userAiPrefs.userOpenAiKey,
                 userAiPrefs.selectedOpenAiModel,
+                userAiPrefs.discoveredOpenAiModels,
                 userAiPrefs.userGrokKey,
                 userAiPrefs.selectedGrokModel,
+                userAiPrefs.discoveredGrokModels,
                 userAiPrefs.selectedAiProvider
             ).collect {
-                _activeModelDisplay.value = userAiPrefs.getActiveDisplayText()
+                refreshInlineCustomModelState()
             }
         }
         val prefs = getApplication<Application>().getSharedPreferences("shark_dopamine_prefs", Context.MODE_PRIVATE)
@@ -718,26 +838,89 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         bypassReadinessCheck: Boolean = false,
         appendUserMessage: Boolean = true
     ) {
-        val text = userInput.trim()
-        if ((text.isBlank() && attachmentUri == null) || _uiState.value.isLoading) return
+        val rawInput = userInput.trim()
+        if ((rawInput.isBlank() && attachmentUri == null) || _uiState.value.isLoading) return
 
-        lastUserPromptText = text
+        draftSaveJob?.cancel()
         val resolvedAttachmentName = attachmentName ?: attachmentUri?.let { resolveDisplayName(it) }
-        val currentPersona = _uiState.value.currentPersona
 
-        // Automatic Mode Detection (`AutoIntentClassifier`) unless manually locked/overridden
-        val resolvedEngine: SharkAiEngine = engineOverride
-            ?: SharkAiEngine.fromCapability(capabilityOverride)
-            ?: if (currentPersona == AiPersona.STUDY_PLANNER) {
-                SharkAiEngine.PLANNER_OR_ORGANIZER
-            } else {
-                AutoIntentClassifier.classify(text, hasAttachment = attachmentUri != null)
+        // Refresh live Dopamine Detox lock state before evaluating slash commands
+        val dopaminePrefs = getApplication<Application>().getSharedPreferences("shark_dopamine_prefs", Context.MODE_PRIVATE)
+        val isDopamineActiveNow = dopaminePrefs.getBoolean("is_active", false)
+        val isInstitutionalNow = _uiState.value.isInstitutional
+        if (_uiState.value.isDopamineActive != isDopamineActiveNow) {
+            _uiState.value = _uiState.value.copy(isDopamineActive = isDopamineActiveNow)
+        }
+
+        val parsedSlash = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.parseLeadingCommand(rawInput)
+        val hasExplicitOverride = engineOverride != null || capabilityOverride != null
+
+        // 1. Handle leading `/` slash sub-runner command (Antigravity-style!)
+        if (parsedSlash != null) {
+            val cmd = parsedSlash.command
+            val (locked, lockReason) = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.isCommandLocked(
+                cmd = cmd,
+                isDopamineActive = isDopamineActiveNow,
+                isInstitutional = isInstitutionalNow
+            )
+            if (locked) {
+                val userMsg = AiChatMessage(
+                    sender = "user",
+                    text = rawInput,
+                    personaTag = _uiState.value.currentPersona.id
+                )
+                val lockMsg = AiChatMessage(
+                    sender = "ai",
+                    text = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.buildSlashRequiredGuidanceMessage(
+                        cmd = cmd,
+                        originalText = parsedSlash.argumentText,
+                        isLocked = true,
+                        lockReason = lockReason
+                    ),
+                    personaTag = _uiState.value.currentPersona.id
+                )
+                _inputText.value = ""
+                SharkAiChatSessionStore.saveDraftState(getApplication(), "", _lockedEngine.value)
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + userMsg + lockMsg,
+                    isLoading = false,
+                    error = null
+                )
+                persistCurrentChatState()
+                return
             }
 
-        _detectedEngine.value = resolvedEngine
+            // If user entered ONLY the slash command (e.g. "/zen" or "/plan") without arguments, activate & lock it cleanly
+            if (parsedSlash.argumentText.isBlank() && attachmentUri == null) {
+                _inputText.value = ""
+                setLockedEngine(cmd.engine.takeUnless { it == SharkAiEngine.CONVERSATIONAL_PEER })
+                _uiState.value = _uiState.value.copy(
+                    currentPersona = cmd.persona,
+                    messages = _uiState.value.messages + AiChatMessage(
+                        sender = "system",
+                        text = "${cmd.title} (${cmd.command}) aktif. ${cmd.subtitle}.",
+                        personaTag = cmd.persona.id
+                    ),
+                    isLoading = false,
+                    error = null
+                )
+                SharkAiChatSessionStore.saveDraftState(getApplication(), "", _lockedEngine.value)
+                persistCurrentChatState()
+                return
+            }
+
+            // Activate the sub-runner persona for this invocation
+            if (_uiState.value.currentPersona != cmd.persona) {
+                _uiState.value = _uiState.value.copy(currentPersona = cmd.persona)
+            }
+        }
+
+        val currentPersona = parsedSlash?.command?.persona ?: _uiState.value.currentPersona
+        val text = parsedSlash?.argumentText ?: rawInput
+        lastUserPromptText = text
 
         val displayMessageText = when {
-            text.isNotBlank() -> text
+            rawInput.isNotBlank() -> rawInput
             resolvedAttachmentName != null -> resolvedAttachmentName
             else -> "Ekli Dosya"
         }
@@ -756,7 +939,6 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         _activeCapability.value = null
         _lockedEngine.value = null
         SharkAiChatSessionStore.saveDraftState(getApplication(), "", null)
-        refreshAutoDetectedEngine()
 
         val nextMessages = if (appendUserMessage) {
             _uiState.value.messages + userMsg
@@ -770,7 +952,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         )
         persistCurrentChatState()
 
-        // Explicit confirmation gate for Student Dossier sync ("öğrenci dosyamı güncelle") or edit commands
+        // 2. Explicit confirmation gate for Student Dossier sync ("öğrenci dosyamı güncelle") or edit commands
+        //    (Full In-App Agent capability — works directly without requiring a `/` command!)
         if (attachmentUri == null && text.isNotBlank()) {
             val isSyncCmd = com.example.sharkmentor.core.coaching.StudentDossierManager.isDossierSyncCommand(text)
             val isEditCmd = !isSyncCmd && com.example.sharkmentor.core.coaching.StudentDossierManager.isDossierEditCommand(text)
@@ -808,20 +991,63 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             }
         }
 
-        // Pre-plan readiness check-in card whenever student requests building/rebuilding a plan in chat
+        // 3. When user writes WITHOUT `/` and WITHOUT an explicit override/handoff (e.g. Error Bank)
+        //    and is in default Shark AI mode:
+        //    - Dedicated sub-runner requests (/plan, /benzer, /zen, /dopamin, /hedef) receive clear guidance
+        //      requiring the exact `/` command instead of silently misfiring tools or unwanted cards.
+        //    - ALL In-App Agent operations (konu takip çizelgesi, konu hakimiyeti, kitap ekleme/güncelleme,
+        //      hata bankası düzenleme/filtreleme, genel sohbet) proceed directly with ZERO interruption!
+        if (parsedSlash == null && !hasExplicitOverride && currentPersona == AiPersona.SHARK_COACH) {
+            val missingCmd = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
+                .detectMissingSlashCommandSuggestion(text, hasAttachment = attachmentUri != null)
+            if (missingCmd != null) {
+                val (locked, lockReason) = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.isCommandLocked(
+                    cmd = missingCmd,
+                    isDopamineActive = isDopamineActiveNow,
+                    isInstitutional = isInstitutionalNow
+                )
+                val guidance = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.buildSlashRequiredGuidanceMessage(
+                    cmd = missingCmd,
+                    originalText = text,
+                    isLocked = locked,
+                    lockReason = lockReason
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + AiChatMessage(
+                        sender = "ai",
+                        text = guidance,
+                        personaTag = currentPersona.id
+                    ),
+                    isLoading = false
+                )
+                persistCurrentChatState()
+                return
+            }
+        }
+
+        // 4. Resolve exact engine (explicit slash command, Error Bank handoff/override, active persona, or Shark AI Agent!)
+        val resolvedEngine: SharkAiEngine = parsedSlash?.command?.engine
+            ?: engineOverride
+            ?: SharkAiEngine.fromCapability(capabilityOverride)
+            ?: when {
+                currentPersona == AiPersona.STUDY_PLANNER -> SharkAiEngine.PLANNER_OR_ORGANIZER
+                attachmentUri != null -> SharkAiEngine.SOLVER_ENGINE
+                else -> SharkAiEngine.CONVERSATIONAL_PEER
+            }
+        _detectedEngine.value = resolvedEngine
+
+        // 5. Pre-plan readiness check-in card ONLY when the dedicated Plan sub-runner (/plan) is explicitly invoked!
         if (!bypassReadinessCheck &&
             attachmentUri == null &&
             text.isNotBlank() &&
-            resolvedEngine != SharkAiEngine.SOLVER_ENGINE &&
-            resolvedEngine != SharkAiEngine.TWIN_QUESTION_ENGINE &&
-            com.example.sharkmentor.core.coaching.PlanProgressAuditor.isPlanRebuildOrCreateIntent(text)
+            resolvedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER
         ) {
             _pendingPlanRebuildRequest.value = PendingPlanRebuildRequest(
                 userInput = text,
                 attachmentUri = attachmentUri,
                 attachmentName = resolvedAttachmentName,
-                capabilityOverride = capabilityOverride,
-                engineOverride = engineOverride
+                capabilityOverride = capabilityOverride ?: SharkAiCapability.ADD_TO_STUDY_PLAN,
+                engineOverride = SharkAiEngine.PLANNER_OR_ORGANIZER
             )
             val readinessPrompt = AiChatMessage(
                 sender = "ai",

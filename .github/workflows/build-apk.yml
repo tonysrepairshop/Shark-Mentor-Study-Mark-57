@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 67 APK
+name: Build SharkMentor Mark 69 APK
 
 on:
   push:
@@ -12,6 +12,7 @@ on:
       - mark-63
       - mark-65
       - mark-67
+      - mark-69
   workflow_dispatch:
 
 permissions:
@@ -265,7 +266,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark67-debug-apk
+          name: SharkMentor-Mark69-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -274,8 +275,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark67-debug.apk
-          gh release delete mark67-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark67-apk SharkMentor-Mark67-debug.apk \
-            --title "Shark Mentor Study Mark 67 (Debug APK)" \
-            --notes "Ders bazlı kitap rolleri ve öncelik sırası (Konu/Video, İlerleme, Tekrar, Deneme, Pasif), 1-3-7 -> Aylık aralıklı tekrar motoru + Hata Bankası çift yönlü senkronizasyonu, kullanıcıya özel şifreli AI Koçluk Dosyası, en alakalı ilk 3 YouTube oynatma listesi seçimi & gerçek liste özümseme ve düşük gecikmeli AI açılınca otomatik duraklayan Video Stüdyosu ile derlenen Mark 67 APK paketi."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark69-debug.apk
+          gh release delete mark69-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark69-apk SharkMentor-Mark69-debug.apk \
+            --title "Shark Mentor Study Mark 69 (Debug APK)" \
+            --notes "Antigravity/OpenCode tarzı tek isim Shark AI arayüzü, / slash alt çalıştırıcı menüsü (/plan, /hedef, /soru, /benzer, /zen, /dopamin + kilit rozeti), yalnızca özel API anahtarı girildiğinde satır içi marka-gruplu model seçici, tam yetkili uygulama içi Agent akışı, YouTube güncel yıl (2027/2026) önceliklendirmesi ve Gerçek Koçluk/Video keşfinde şeffaf yerleşik sabit Shark AI (gemini-3.6-flash / gemini-3.5-flash-lite) altyapısı ile derlenen Mark 69 APK."

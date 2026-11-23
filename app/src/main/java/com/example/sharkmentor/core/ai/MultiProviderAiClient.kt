@@ -474,13 +474,119 @@ object MultiProviderAiClient {
         accumulated.toString()
     }
 
+    data class CustomProviderModelGroup(
+        val provider: AiProviderChoice,
+        val companyName: String,
+        val selectedModelId: String,
+        val models: List<GeminiModelOption>
+    )
+
+    /**
+     * Returns true ONLY when the user explicitly entered at least one custom API key in Settings.
+     * Used to decide whether the inline Antigravity/OpenCode model switcher should appear in Shark AI.
+     */
+    fun hasAnyCustomUserApiKey(context: Context): Boolean {
+        val prefs = UserAiPreferences.initialize(context)
+        return prefs.hasCustomUserGeminiKeys(context) ||
+            prefs.getUserClaudeKey().isNotBlank() ||
+            prefs.getUserOpenAiKey().isNotBlank() ||
+            prefs.getUserGrokKey().isNotBlank() ||
+            prefs.getUserDeepSeekKey().isNotBlank() ||
+            prefs.getUserKimiKey().isNotBlank()
+    }
+
+    /**
+     * Returns ONLY the AI companies for which the user has actually saved a custom API key,
+     * grouped by brand with their discovered/available models listed directly underneath.
+     */
+    fun getConfiguredCustomProviderGroups(context: Context): List<CustomProviderModelGroup> {
+        val prefs = UserAiPreferences.initialize(context)
+        val groups = mutableListOf<CustomProviderModelGroup>()
+
+        fun buildOptions(selectedId: String, discovered: List<GeminiModelOption>): List<GeminiModelOption> {
+            val list = discovered.toMutableList()
+            if (selectedId.isNotBlank() && list.none { it.id.equals(selectedId, ignoreCase = true) }) {
+                list.add(0, GeminiModelOption(id = selectedId, displayName = selectedId))
+            }
+            return list
+        }
+
+        if (prefs.getUserClaudeKey().isNotBlank()) {
+            val sel = prefs.getSelectedClaudeModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.CLAUDE,
+                    companyName = "Anthropic (Claude)",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredClaudeModels.value)
+                )
+            )
+        }
+        if (prefs.hasCustomUserGeminiKeys(context)) {
+            val sel = prefs.getSelectedUserGeminiModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.GEMINI,
+                    companyName = "Google (Gemini)",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredGeminiModels.value)
+                )
+            )
+        }
+        if (prefs.getUserOpenAiKey().isNotBlank()) {
+            val sel = prefs.getSelectedOpenAiModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.OPENAI,
+                    companyName = "OpenAI (GPT)",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredOpenAiModels.value)
+                )
+            )
+        }
+        if (prefs.getUserGrokKey().isNotBlank()) {
+            val sel = prefs.getSelectedGrokModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.GROK,
+                    companyName = "xAI (Grok)",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredGrokModels.value)
+                )
+            )
+        }
+        if (prefs.getUserDeepSeekKey().isNotBlank()) {
+            val sel = prefs.getSelectedDeepSeekModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.DEEPSEEK,
+                    companyName = "DeepSeek",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredDeepSeekModels.value)
+                )
+            )
+        }
+        if (prefs.getUserKimiKey().isNotBlank()) {
+            val sel = prefs.getSelectedKimiModel()
+            groups.add(
+                CustomProviderModelGroup(
+                    provider = AiProviderChoice.KIMI,
+                    companyName = "Moonshot (Kimi)",
+                    selectedModelId = sel,
+                    models = buildOptions(sel, prefs.discoveredKimiModels.value)
+                )
+            )
+        }
+        return groups
+    }
+
     /**
      * Unified single-turn text completion router used across Real Coaching, Study Planner,
      * Video Study Studio, Zen Coach, Dopamine Coach, and Book Camp AI:
-     * - Supports ALL 6 providers (Claude, OpenAI GPT, DeepSeek, Kimi, Grok, and Custom/Built-in Gemini).
-     * - Guards external providers with [timeoutMs] so a slow/broken key NEVER hangs the UI.
-     * - Routes Gemini through [GeminiAiFactory.generateContentWithFailover] / [streamContentWithFailover]
-     *   with `context`, custom-key 404 smart model recovery, built-in key rotation, and Firebase proxy safety net.
+     * - When [forceBuiltInOnly] is true (Real Coaching infrastructure & YouTube video discovery ONLY),
+     *   bypasses ALL user custom keys and strictly runs on the app's built-in Shark AI keys
+     *   (`gemini-3.6-flash` + single fallback `gemini-3.5-flash-lite`).
+     * - Otherwise honors the user's exact selected provider & model across all 6 providers.
      */
     suspend fun executeUnifiedTextPrompt(
         context: Context,
@@ -490,8 +596,39 @@ object MultiProviderAiClient {
         maxTokens: Int = 4096,
         responseJson: Boolean = false,
         timeoutMs: Long = 45_000L,
+        forceBuiltInOnly: Boolean = false,
         onPartialText: ((String) -> Unit)? = null
     ): String = withContext(Dispatchers.IO) {
+        if (forceBuiltInOnly) {
+            val builtInResult = if (onPartialText != null) {
+                GeminiAiFactory.streamContentWithFailover(
+                    context = context,
+                    systemInstruction = systemPrompt,
+                    userPrompt = userPrompt,
+                    responseJson = responseJson,
+                    temperature = temperature,
+                    maxOutputTokens = maxTokens,
+                    topP = 0.85f,
+                    timeoutMs = timeoutMs,
+                    forceBuiltInOnly = true,
+                    onPartialText = onPartialText
+                )
+            } else {
+                GeminiAiFactory.generateContentWithFailover(
+                    context = context,
+                    systemInstruction = systemPrompt,
+                    userPrompt = userPrompt,
+                    responseJson = responseJson,
+                    temperature = temperature,
+                    maxOutputTokens = maxTokens,
+                    topP = 0.85f,
+                    timeoutMs = timeoutMs,
+                    forceBuiltInOnly = true
+                )
+            }
+            return@withContext builtInResult.getOrThrow().text
+        }
+
         val prefs = UserAiPreferences.initialize(context)
         val selectedProvider = prefs.getSelectedProvider()
         val hasCustomGemini = prefs.hasCustomUserGeminiKeys(context)
@@ -536,7 +673,7 @@ object MultiProviderAiClient {
             Log.w(TAG, "External provider $resolvedExternalProvider failed/timed out; falling back to Gemini pipeline: ${err?.message}")
         }
 
-        // Gemini path: custom Gemini key(s) with smart 404 model recovery -> built-in keys -> Firebase proxy safety net
+        // Gemini path: user's exact selected Gemini model (or built-in keys + Firebase proxy when no custom key)
         val result = if (onPartialText != null) {
             GeminiAiFactory.streamContentWithFailover(
                 context = context,
@@ -547,6 +684,7 @@ object MultiProviderAiClient {
                 maxOutputTokens = maxTokens,
                 topP = 0.85f,
                 timeoutMs = timeoutMs,
+                forceBuiltInOnly = false,
                 onPartialText = onPartialText
             )
         } else {
@@ -558,7 +696,8 @@ object MultiProviderAiClient {
                 temperature = temperature,
                 maxOutputTokens = maxTokens,
                 topP = 0.85f,
-                timeoutMs = timeoutMs
+                timeoutMs = timeoutMs,
+                forceBuiltInOnly = false
             )
         }
         result.getOrThrow().text

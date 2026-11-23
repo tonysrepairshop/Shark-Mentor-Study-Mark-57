@@ -541,34 +541,26 @@ class Mark67BookRolesRepetitionAndLedgerTest {
     }
 
     @Test
-    fun testCustomGeminiKeySmart404FallbackAndModelCacheRespectsSettingsChanges() {
-        com.example.sharkmentor.core.ai.GeminiAiFactory.clearCustomKeyModelCacheForTesting()
+    fun testCustomGeminiKeyUsesExactSelectedModelAndBuiltInOnlyExcludesCustomKeys() {
         com.example.sharkmentor.core.ai.UserAiPreferences.clearCustomGeminiConfig()
         try {
-            val fallbacks = com.example.sharkmentor.core.ai.GeminiAiFactory.resolveCustomKeyFallbackModels("gemini-3.6-flash")
-            assertEquals(listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"), fallbacks)
+            assertEquals(
+                listOf("gemini-3.6-flash", "gemini-3.5-flash-lite"),
+                com.example.sharkmentor.core.ai.GeminiAiFactory.STANDARD_ALLOWED_MODELS
+            )
 
-            // When user enters a Google AI Studio key with default gemini-3.6-flash and 404 recovery discovers gemini-2.5-flash
+            // Custom Gemini keys strictly use the EXACT model selected by the user (zero silent downgrade!)
             val testKey = "AIzaSyTestCustomKey1234567890"
-            com.example.sharkmentor.core.ai.UserAiPreferences.setCustomGeminiConfig(testKey, "gemini-3.6-flash")
-            assertEquals(
-                "gemini-3.6-flash",
-                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
-            )
-            com.example.sharkmentor.core.ai.GeminiAiFactory.rememberWorkingCustomKeyModel(testKey, "gemini-2.5-flash", "gemini-3.6-flash")
-            assertEquals(
-                "gemini-2.5-flash",
-                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
-            )
-
-            // If user explicitly changes their model in Settings to gemini-2.5-pro, cache MUST respect the new model!
-            com.example.sharkmentor.core.ai.UserAiPreferences.setSelectedUserGeminiModel("gemini-2.5-pro")
+            com.example.sharkmentor.core.ai.UserAiPreferences.setCustomGeminiConfig(testKey, "gemini-2.5-pro")
             assertEquals(
                 "gemini-2.5-pro",
-                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
+                com.example.sharkmentor.core.ai.UserAiPreferences.resolveEffectiveGeminiModel(testKey)
             )
+
+            // Built-in-only key pool (Real Coaching & Video Discovery) NEVER includes the user's custom key!
+            val builtInOnly = com.example.sharkmentor.core.ai.GeminiAiFactory.resolveBuiltInOnlyKeys()
+            assertFalse("Built-in-only pool must NEVER contain user custom keys", builtInOnly.contains(testKey))
         } finally {
-            com.example.sharkmentor.core.ai.GeminiAiFactory.clearCustomKeyModelCacheForTesting()
             com.example.sharkmentor.core.ai.UserAiPreferences.clearCustomGeminiConfig()
         }
     }

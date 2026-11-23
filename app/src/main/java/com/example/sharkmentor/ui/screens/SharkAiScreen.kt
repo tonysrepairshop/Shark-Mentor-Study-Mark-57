@@ -172,8 +172,11 @@ fun SharkAiScreen(
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val selectedAttachmentUri by viewModel.selectedAttachmentUri.collectAsStateWithLifecycle()
     val attachmentPreview by viewModel.attachmentPreview.collectAsStateWithLifecycle()
-    val detectedEngine by viewModel.detectedEngine.collectAsStateWithLifecycle()
     val lockedEngine by viewModel.lockedEngine.collectAsStateWithLifecycle()
+    val hasAnyCustomApiKey by viewModel.hasAnyCustomApiKey.collectAsStateWithLifecycle()
+    val customProviderGroups by viewModel.customProviderGroups.collectAsStateWithLifecycle()
+    val activeModelDisplay by viewModel.activeModelDisplay.collectAsStateWithLifecycle()
+    val isDiscoveringInlineModels by viewModel.isDiscoveringInlineModels.collectAsStateWithLifecycle()
     val pendingHandoff by SharkAiHandoffManager.pendingHandoff.collectAsStateWithLifecycle()
     val pendingDossierAction by viewModel.pendingDossierAction.collectAsStateWithLifecycle()
     val pendingPlanRebuildRequest by viewModel.pendingPlanRebuildRequest.collectAsStateWithLifecycle()
@@ -200,7 +203,7 @@ fun SharkAiScreen(
         }
     }
 
-    var showPersonaSheet by remember { mutableStateOf(false) }
+    var showCustomModelSheet by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showChatHistorySheet by rememberSaveable { mutableStateOf(false) }
     var showMathSymbolPanel by rememberSaveable { mutableStateOf(false) }
@@ -293,91 +296,67 @@ fun SharkAiScreen(
                 tonalElevation = 1.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val activeModeTitle = when {
-                    lockedEngine == SharkAiEngine.SOLVER_ENGINE -> "Soru Çözümü"
-                    lockedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE -> "Benzer Soru"
-                    lockedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER -> "Planlayıcı"
-                    uiState.currentPersona != AiPersona.SHARK_COACH -> uiState.currentPersona.title
-                    else -> "Sınav Koçu"
+                val activeSubRunnerCmd = when {
+                    lockedEngine == SharkAiEngine.SOLVER_ENGINE -> "/soru"
+                    lockedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE -> "/benzer"
+                    lockedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER ||
+                        uiState.currentPersona == AiPersona.STUDY_PLANNER -> "/plan"
+                    uiState.currentPersona == AiPersona.GOAL_SETTER -> "/hedef"
+                    uiState.currentPersona == AiPersona.ZEN_CALM -> "/zen"
+                    uiState.currentPersona == AiPersona.DOPAMINE_COACH -> "/dopamin"
+                    else -> null
                 }
-                val activeModeIcon = when {
-                    lockedEngine == SharkAiEngine.SOLVER_ENGINE -> Icons.Default.AutoAwesome
-                    lockedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE -> Icons.AutoMirrored.Filled.MenuBook
-                    lockedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER -> Icons.Default.DateRange
-                    else -> uiState.currentPersona.iconRes
-                }
-                val hasNonDefaultMode = uiState.currentPersona != AiPersona.SHARK_COACH || lockedEngine != null
 
                 Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            .padding(horizontal = 14.dp, vertical = 7.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(
+                        Row(
                             modifier = Modifier.weight(1f),
-                            contentAlignment = Alignment.CenterStart
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Surface(
-                                color = if (hasNonDefaultMode) {
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-                                },
-                                shape = RoundedCornerShape(16.dp),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (hasNonDefaultMode) {
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                                    } else {
-                                        MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)
-                                    }
-                                ),
-                                modifier = Modifier
-                                    .heightIn(min = 32.dp)
-                                    .clickable { showPersonaSheet = true }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "Shark AI",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Shark AI",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (activeSubRunnerCmd != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                                    modifier = Modifier.clickable { viewModel.resetToDefaultPersona() }
                                 ) {
-                                    Icon(
-                                        imageVector = activeModeIcon,
-                                        contentDescription = activeModeTitle,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = activeModeTitle,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (hasNonDefaultMode) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurface
-                                        },
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false)
-                                    )
-                                    if (hasNonDefaultMode) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = activeSubRunnerCmd,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                        )
                                         Icon(
                                             imageVector = Icons.Default.Close,
-                                            contentDescription = "Sıfırla",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier
-                                                .size(14.dp)
-                                                .clickable { viewModel.resetToDefaultPersona() }
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.KeyboardArrowDown,
-                                            contentDescription = "Mod Seç",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(15.dp)
+                                            contentDescription = "Alt çalıştırıcıyı kapat",
+                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.size(12.dp)
                                         )
                                     }
                                 }
@@ -795,7 +774,11 @@ fun SharkAiScreen(
                                             tonalElevation = 2.dp
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp)) {
-                                                // Header: Persona badge & quick actions
+                                                val (cleanBubbleText, slashQuickFillPayload) = remember(msg.text) {
+                                                    com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
+                                                        .extractQuickFillPayload(msg.text)
+                                                }
+                                                // Header: Unified Shark AI brand & copy button
                                                 Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
@@ -811,7 +794,7 @@ fun SharkAiScreen(
                                                     )
                                                     IconButton(
                                                         onClick = {
-                                                            clipboardManager.setText(AnnotatedString(msg.text))
+                                                            clipboardManager.setText(AnnotatedString(cleanBubbleText))
                                                             Toast.makeText(context, "Kopyalandı", Toast.LENGTH_SHORT).show()
                                                         },
                                                         modifier = Modifier.size(24.dp)
@@ -846,7 +829,7 @@ fun SharkAiScreen(
                                                             )
                                                             Spacer(modifier = Modifier.height(4.dp))
                                                             Text(
-                                                                msg.text,
+                                                                cleanBubbleText,
                                                                 fontSize = 11.sp,
                                                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
                                                             )
@@ -867,10 +850,22 @@ fun SharkAiScreen(
                                                     }
                                                 } else {
                                                     RichSolutionContent(
-                                                        text = msg.text,
+                                                        text = cleanBubbleText,
                                                         textColor = MaterialTheme.colorScheme.onSurface,
                                                         fontSize = 15.sp,
                                                         lineHeight = 23.sp
+                                                    )
+                                                }
+
+                                                if (!slashQuickFillPayload.isNullOrBlank()) {
+                                                    val cmdToken = slashQuickFillPayload.substringBefore(' ')
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    ActionChip(
+                                                        icon = Icons.Default.AutoAwesome,
+                                                        label = "$cmdToken ile doldur",
+                                                        onClick = {
+                                                            viewModel.onInputTextChanged(slashQuickFillPayload)
+                                                        }
                                                     )
                                                 }
 
@@ -1094,69 +1089,144 @@ fun SharkAiScreen(
                 }
             }
 
-            // Subtle Animated Badge Chip above the input bar showing Auto-Detected or Manually Locked Specialist Engine
-            val showEngineBadge = lockedEngine != null ||
-                inputText.isNotBlank() ||
-                selectedAttachmentUri != null ||
-                detectedEngine != SharkAiEngine.CONVERSATIONAL_PEER
-
+            // Antigravity-style `/` Slash Sub-Runner Autocomplete Menu (100% Theme-Synced & Low-End Smooth)
+            val slashSuggestions = remember(inputText) {
+                com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.filterSuggestions(inputText)
+            }
             AnimatedVisibility(
-                visible = showEngineBadge,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+                visible = slashSuggestions.isNotEmpty(),
+                enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(110)) +
+                    expandVertically(animationSpec = androidx.compose.animation.core.tween(130)),
+                exit = fadeOut(animationSpec = androidx.compose.animation.core.tween(90)) +
+                    shrinkVertically(animationSpec = androidx.compose.animation.core.tween(110))
             ) {
-                val activeEngine = lockedEngine ?: detectedEngine
-                val badgeLabel = lockedEngine?.lockedBadgeText ?: detectedEngine.autoBadgeText
-
-                Row(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                    tonalElevation = 2.dp
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (lockedEngine != null) {
-                            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f)
-                        },
-                        border = BorderStroke(
-                            1.dp,
-                            if (lockedEngine != null) {
-                                MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                            } else {
-                                MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
-                            }
-                        ),
-                        modifier = Modifier.clickable { showPersonaSheet = true }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = badgeLabel,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 11.sp
-                                ),
-                                color = if (lockedEngine != null || activeEngine != SharkAiEngine.CONVERSATIONAL_PEER) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
+                        Text(
+                            text = "ALT ÇALIŞTIRICILAR (/)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                        )
+                        slashSuggestions.forEachIndexed { idx, cmd ->
+                            val (isLocked, lockReason) = remember(cmd, uiState.isDopamineActive, uiState.isInstitutional) {
+                                com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.isCommandLocked(
+                                    cmd = cmd,
+                                    isDopamineActive = uiState.isDopamineActive,
+                                    isInstitutional = uiState.isInstitutional
+                                )
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isLocked) {
+                                            Toast.makeText(
+                                                context,
+                                                lockReason ?: "${cmd.title} şu an kilitli.",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            viewModel.onInputTextChanged("${cmd.command} ")
+                                        }
+                                    }
+                                    .alpha(if (isLocked) 0.58f else 1f)
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isLocked) {
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = if (isLocked) Icons.Default.Lock else cmd.icon,
+                                            contentDescription = cmd.title,
+                                            tint = if (isLocked) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            } else {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            },
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
-                            )
-                            if (lockedEngine != null) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Otomatik Algılamaya Dön",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier
-                                        .size(13.dp)
-                                        .clickable { viewModel.setLockedEngine(null) }
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = cmd.command,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isLocked) {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            } else {
+                                                MaterialTheme.colorScheme.primary
+                                            }
+                                        )
+                                        Text(
+                                            text = cmd.title,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (isLocked) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f)
+                                            ) {
+                                                Text(
+                                                    text = "Kilitli",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = if (isLocked && !lockReason.isNullOrBlank()) lockReason else cmd.subtitle,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            if (idx < slashSuggestions.lastIndex) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    modifier = Modifier.padding(horizontal = 12.dp)
                                 )
                             }
                         }
@@ -1176,75 +1246,45 @@ fun SharkAiScreen(
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             )
 
-            // Modern Multimodal Input Bar with Direct SAF Clip, Math Symbol Panel & AI Actions Menu
+            // Antigravity / Claude Code / OpenCode Style Unified Composer (No + button, No Auto-Detect chip!)
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(
-                        start = 16.dp,
-                        end = 16.dp,
+                        start = 14.dp,
+                        end = 14.dp,
                         top = 4.dp,
                         bottom = if (isImeOpen) 4.dp else 8.dp
                     ),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+                shape = RoundedCornerShape(22.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Attachment Icon (Clip): Opens multi-option sheet (Camera, Gallery, PDF)
-                    IconButton(
-                        onClick = {
-                            showAttachmentSheet = true
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AttachFile,
-                            contentDescription = "Dosya / Görsel / PDF Ekle",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    // AI Modes & Assistants Selector Button
-                    IconButton(
-                        onClick = { showPersonaSheet = true },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Shark AI Modları ve Uzmanlar",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-
-                    // Mathematics & Formula Symbol Panel Toggle (∑)
-                    MathSymbolToggleButton(
-                        expanded = showMathSymbolPanel,
-                        onClick = { showMathSymbolPanel = !showMathSymbolPanel },
-                        modifier = Modifier.padding(end = 2.dp)
-                    )
-
+                    // Row 1: Clean multi-line prompt field with `/` discovery hint
                     BasicTextField(
                         value = inputText,
                         onValueChange = { viewModel.onInputTextChanged(it) },
+                        maxLines = 5,
                         modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
                         textStyle = TextStyle(
                             color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = 15.sp
+                            fontSize = 15.sp,
+                            lineHeight = 21.sp
                         ),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         decorationBox = { innerTextField ->
                             if (inputText.isEmpty()) {
                                 Text(
-                                    text = "Soru sor veya dosya ekle...",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    text = "Mesaj yaz veya araçlar için / kullan...",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.58f),
                                     fontSize = 14.sp
                                 )
                             }
@@ -1252,45 +1292,114 @@ fun SharkAiScreen(
                         }
                     )
 
-                    val canSend = inputText.isNotBlank() || selectedAttachmentUri != null
-                    IconButton(
-                        onClick = {
-                            if (uiState.isLoading) {
-                                viewModel.stopGeneration()
-                            } else if (canSend) {
-                                viewModel.sendMessage(
-                                    userInput = inputText,
-                                    attachmentUri = selectedAttachmentUri,
-                                    attachmentName = attachmentPreview?.displayName
+                    // Row 2: Subtle inner composer toolbar (Left: Clip + ∑ + Optional Custom Model Switcher | Right: Send)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            // Attachment Icon (Clip): Camera, Gallery, PDF
+                            IconButton(
+                                onClick = { showAttachmentSheet = true },
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AttachFile,
+                                    contentDescription = "Dosya / Görsel / PDF Ekle",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(19.dp)
                                 )
                             }
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (uiState.isLoading) {
-                                MaterialTheme.colorScheme.errorContainer
-                            } else if (canSend) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHighest
+
+                            // Math & Formula Symbol Panel Toggle (∑)
+                            MathSymbolToggleButton(
+                                expanded = showMathSymbolPanel,
+                                onClick = { showMathSymbolPanel = !showMathSymbolPanel }
+                            )
+
+                            // Antigravity / OpenCode Inline Custom Model Switcher
+                            // Shown ONLY when user has configured at least one custom API key in Settings!
+                            if (hasAnyCustomApiKey) {
+                                Surface(
+                                    onClick = { showCustomModelSheet = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                                    border = BorderStroke(
+                                        0.75.dp,
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                                    ),
+                                    modifier = Modifier.padding(start = 4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Text(
+                                            text = activeModelDisplay,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 175.dp)
+                                        )
+                                        Icon(
+                                            imageVector = Icons.Default.KeyboardArrowDown,
+                                            contentDescription = "Model Değiştir",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        val canSend = inputText.isNotBlank() || selectedAttachmentUri != null
+                        IconButton(
+                            onClick = {
+                                if (uiState.isLoading) {
+                                    viewModel.stopGeneration()
+                                } else if (canSend) {
+                                    viewModel.sendMessage(
+                                        userInput = inputText,
+                                        attachmentUri = selectedAttachmentUri,
+                                        attachmentName = attachmentPreview?.displayName
+                                    )
+                                }
                             },
-                            modifier = Modifier.size(34.dp)
+                            modifier = Modifier.size(36.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = if (uiState.isLoading) Icons.Default.Close else Icons.AutoMirrored.Filled.Send,
-                                    contentDescription = "Gönder",
-                                    tint = if (uiState.isLoading) {
-                                        MaterialTheme.colorScheme.onErrorContainer
-                                    } else if (canSend) {
-                                        MaterialTheme.colorScheme.onPrimary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    modifier = Modifier.size(16.dp)
-                                )
+                            Surface(
+                                shape = CircleShape,
+                                color = if (uiState.isLoading) {
+                                    MaterialTheme.colorScheme.errorContainer
+                                } else if (canSend) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHighest
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (uiState.isLoading) Icons.Default.Close else Icons.AutoMirrored.Filled.Send,
+                                        contentDescription = "Gönder",
+                                        tint = if (uiState.isLoading) {
+                                            MaterialTheme.colorScheme.onErrorContainer
+                                        } else if (canSend) {
+                                            MaterialTheme.colorScheme.onPrimary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1298,9 +1407,13 @@ fun SharkAiScreen(
             }
         }
 
-        if (showPersonaSheet) {
+        // OpenCode / Antigravity Brand-Grouped Custom Model Switcher Sheet (ONLY for user-added API keys!)
+        if (showCustomModelSheet && hasAnyCustomApiKey) {
+            val (currentActiveProv, currentActiveModelId) = remember(activeModelDisplay, customProviderGroups) {
+                UserAiPreferences.getActiveProviderAndModel()
+            }
             ModalBottomSheet(
-                onDismissRequest = { showPersonaSheet = false },
+                onDismissRequest = { showCustomModelSheet = false },
                 containerColor = MaterialTheme.colorScheme.surface,
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
@@ -1311,151 +1424,139 @@ fun SharkAiScreen(
                         .padding(horizontal = 20.dp)
                         .padding(bottom = 32.dp)
                         .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Shark AI Modları",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    // SECTION 1: Akademik Araçlar
-                    Text(
-                        text = "AKADEMİK ARAÇLAR",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
-                        ),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-
-                    // 1. Soru Çözümü
-                    val isSolverSelected = lockedEngine == SharkAiEngine.SOLVER_ENGINE
-                    ModeSelectorCard(
-                        title = "Soru Çözümü",
-                        subtitle = "Adım adım çözüm",
-                        icon = Icons.Default.AutoAwesome,
-                        isSelected = isSolverSelected,
-                        onClick = {
-                            viewModel.selectUnifiedMode(AiPersona.SHARK_COACH, SharkAiEngine.SOLVER_ENGINE)
-                            showPersonaSheet = false
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = "Model Seç",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Yalnızca API anahtarı eklediğin sağlayıcılar listelenir",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    )
-
-                    // 2. Benzer (İkiz) Soru
-                    val isTwinSelected = lockedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE
-                    ModeSelectorCard(
-                        title = "Benzer (İkiz) Soru",
-                        subtitle = "Özgün ikiz soru",
-                        icon = Icons.AutoMirrored.Filled.MenuBook,
-                        isSelected = isTwinSelected,
-                        onClick = {
-                            viewModel.selectUnifiedMode(AiPersona.SHARK_COACH, SharkAiEngine.TWIN_QUESTION_ENGINE)
-                            showPersonaSheet = false
+                        if (isDiscoveringInlineModels) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
-                    )
+                    }
 
-                    // 3. Akıllı Planlayıcı
-                    val (isPlannerAvail, plannerReason) = isPersonaAvailable(
-                        AiPersona.STUDY_PLANNER,
-                        uiState.isDopamineActive,
-                        uiState.isInstitutional
-                    )
-                    val isPlannerSelected = lockedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER ||
-                        uiState.currentPersona == AiPersona.STUDY_PLANNER
-                    ModeSelectorCard(
-                        title = "Akıllı Planlayıcı",
-                        subtitle = plannerReason ?: "Haftalık ders programı",
-                        icon = Icons.Default.DateRange,
-                        isSelected = isPlannerSelected,
-                        isAvailable = isPlannerAvail,
-                        restrictionReason = plannerReason,
-                        onClick = {
-                            if (isPlannerAvail) {
-                                viewModel.selectUnifiedMode(AiPersona.STUDY_PLANNER, SharkAiEngine.PLANNER_OR_ORGANIZER)
-                                showPersonaSheet = false
-                            } else {
-                                Toast.makeText(context, plannerReason ?: "Mod kilitli", Toast.LENGTH_SHORT).show()
+                    customProviderGroups.forEach { group ->
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = group.companyName,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    IconButton(
+                                        onClick = { viewModel.discoverModelsForCustomProvider(group.provider) },
+                                        enabled = !isDiscoveringInlineModels,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Refresh,
+                                            contentDescription = "Modelleri Yenile",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+
+                                group.models.forEach { option ->
+                                    val isSelectedModel = currentActiveProv == group.provider &&
+                                        currentActiveModelId.equals(option.id, ignoreCase = true)
+                                    Surface(
+                                        onClick = {
+                                            viewModel.selectCustomModelInline(group.provider, option.id)
+                                            showCustomModelSheet = false
+                                        },
+                                        shape = RoundedCornerShape(11.dp),
+                                        color = if (isSelectedModel) {
+                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                                        } else {
+                                            MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)
+                                        },
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isSelectedModel) {
+                                                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                                            } else {
+                                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                            }
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = option.displayName.ifBlank { option.id },
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isSelectedModel) FontWeight.Bold else FontWeight.Medium,
+                                                    color = if (isSelectedModel) {
+                                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurface
+                                                    },
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (option.displayName.isNotBlank() && !option.displayName.equals(option.id, ignoreCase = true)) {
+                                                    Text(
+                                                        text = option.id,
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
+                                            if (isSelectedModel) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Seçili",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // SECTION 2: Rehberlik
-                    Text(
-                        text = "REHBERLİK",
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp
-                        ),
-                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.85f),
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-
-                    // 4. Shark Sınav Koçu (Otomatik & Standart)
-                    val isCoachSelected = lockedEngine == null && uiState.currentPersona == AiPersona.SHARK_COACH
-                    ModeSelectorCard(
-                        title = "Shark Sınav Koçu",
-                        subtitle = "Strateji ve sohbet",
-                        icon = Icons.Default.Psychology,
-                        isSelected = isCoachSelected,
-                        onClick = {
-                            viewModel.selectUnifiedMode(AiPersona.SHARK_COACH, null)
-                            showPersonaSheet = false
-                        }
-                    )
-
-                    // 5. Hedef Analizi
-                    val isGoalSelected = uiState.currentPersona == AiPersona.GOAL_SETTER
-                    ModeSelectorCard(
-                        title = "Hedef & Net Analizi",
-                        subtitle = "Net ve sıralama analizi",
-                        icon = Icons.AutoMirrored.Filled.TrendingUp,
-                        isSelected = isGoalSelected,
-                        onClick = {
-                            viewModel.selectUnifiedMode(AiPersona.GOAL_SETTER, null)
-                            showPersonaSheet = false
-                        }
-                    )
-
-                    // 6. Alışkanlık Yönetimi (Dopamin)
-                    val (isDopamineAvail, dopamineReason) = isPersonaAvailable(
-                        AiPersona.DOPAMINE_COACH,
-                        uiState.isDopamineActive,
-                        uiState.isInstitutional
-                    )
-                    val isDopamineSelected = uiState.currentPersona == AiPersona.DOPAMINE_COACH
-                    ModeSelectorCard(
-                        title = "Alışkanlık & Odak",
-                        subtitle = dopamineReason ?: "Odak ve motivasyon",
-                        icon = Icons.Default.Bolt,
-                        isSelected = isDopamineSelected,
-                        isAvailable = isDopamineAvail,
-                        restrictionReason = dopamineReason,
-                        onClick = {
-                            if (isDopamineAvail) {
-                                viewModel.selectUnifiedMode(AiPersona.DOPAMINE_COACH, null)
-                                showPersonaSheet = false
-                            } else {
-                                Toast.makeText(context, dopamineReason ?: "Mod kilitli", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    )
-
-                    // 7. Odak & Stres (Zen)
-                    val isZenSelected = uiState.currentPersona == AiPersona.ZEN_CALM
-                    ModeSelectorCard(
-                        title = "Odak & Stres (Zen)",
-                        subtitle = "Nefes ve sakinleşme",
-                        icon = Icons.Default.SelfImprovement,
-                        isSelected = isZenSelected,
-                        onClick = {
-                            viewModel.selectUnifiedMode(AiPersona.ZEN_CALM, null)
-                            showPersonaSheet = false
-                        }
-                    )
+                    }
                 }
             }
         }

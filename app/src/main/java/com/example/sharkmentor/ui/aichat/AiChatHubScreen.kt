@@ -136,6 +136,15 @@ fun PersonalizedGreetingHeader(
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
             textAlign = TextAlign.Center
         )
+        if (selectedMode == AiPersona.SHARK_COACH) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "Özel araçlar için / yaz (/plan, /soru, /benzer, /hedef, /zen) • Konu, kitap ve hata bankası düzenlemelerini doğrudan isteyebilirsin.",
+                style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 

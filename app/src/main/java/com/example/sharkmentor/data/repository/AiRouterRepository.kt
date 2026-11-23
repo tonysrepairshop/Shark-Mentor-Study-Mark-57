@@ -948,6 +948,21 @@ $MANDATORY_PERSONA_RULES
             }
         }
 
+        // Dedicated Real Coaching Planner (/plan) strictly uses built-in Shark AI keys (gemini-3.6-flash / 3.5-flash-lite)
+        // for reliability and low latency; all other chat, Agent, Solver, Twin, Zen & Dopamine flows honor the user's custom key.
+        if (activeEngine == SharkAiEngine.PLANNER_OR_ORGANIZER) {
+            return@withContext streamGeminiTextFallback(
+                activeEngine = activeEngine,
+                prompt = prompt,
+                systemInstruction = enrichedSystemInstruction,
+                chatHistory = geminiHistory,
+                overrideMaxTokens = 6144,
+                forceInlineActionMode = true,
+                forceBuiltInOnly = true,
+                onPartialText = onPartialText
+            )
+        }
+
         when (selectedProvider) {
             AiProviderChoice.GEMINI -> {
                 return@withContext streamGeminiTextFallback(
@@ -1150,6 +1165,7 @@ $MANDATORY_PERSONA_RULES
         chatHistory: List<GeminiChatTurn> = emptyList(),
         overrideMaxTokens: Int? = null,
         forceInlineActionMode: Boolean = false,
+        forceBuiltInOnly: Boolean = false,
         onPartialText: (String) -> Unit = {}
     ): Result<AiRouterResult> = withContext(Dispatchers.IO) {
         val shouldAttachTools = !forceInlineActionMode && activeEngine == SharkAiEngine.PLANNER_OR_ORGANIZER
@@ -1171,6 +1187,7 @@ $MANDATORY_PERSONA_RULES
             maxOutputTokens = effectiveMaxTokens,
             topP = 0.85f,
             timeoutMs = 75_000L,
+            forceBuiltInOnly = forceBuiltInOnly,
             onPartialText = trackedPartialCallback
         )
 
@@ -1197,6 +1214,7 @@ $MANDATORY_PERSONA_RULES
                 maxOutputTokens = effectiveMaxTokens,
                 topP = 0.85f,
                 timeoutMs = 75_000L,
+                forceBuiltInOnly = forceBuiltInOnly,
                 onPartialText = trackedPartialCallback
             )
         }
