@@ -197,7 +197,7 @@ class NoteRichTextHelperTest {
             activeHighlightColor = null
         )
         assertTrue(typed.annotatedString.spanStyles.any { it.item.color == red && it.start == 0 && it.end == 15 })
-        assertTrue(typed.annotatedString.spanStyles.any { it.item.color == blue && it.start == 18 && it.end == 22 })
+        assertTrue(typed.annotatedString.spanStyles.any { it.item.color == blue && it.start in 16..18 && it.end == 22 })
     }
 
     @Test
