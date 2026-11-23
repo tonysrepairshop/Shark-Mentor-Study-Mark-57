@@ -67,12 +67,19 @@ class WeeklyMasteryCheckInWorker(
         val audit = runCatching { PlanProgressAuditor.captureFromDatabase(appCtx, todayIsoDay = 7) }
             .getOrDefault(PlanAuditSnapshot())
 
-        // Keep encrypted Student Dossier synced with Sunday's exact plan audit before sending notification
+        // Keep encrypted Student Dossier & hidden AI Coaching Ledger synced with Sunday's exact plan audit
         runCatching {
             StudentDossierManager.ensureLoaded(appCtx)
             if (StudentDossierManager.dossier.value.consentAccepted || StudentDossierManager.dossier.value.isCompleted) {
                 StudentDossierManager.syncFromDatabase(appCtx, force = true)
             }
+        }
+        runCatching {
+            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordWeeklySnapshotAndRollup(
+                context = appCtx,
+                audit = audit,
+                summaryNote = "Pazar günü otomatik haftalık değerlendirme ve aylık arşiv güncellemesi."
+            )
         }
 
         val (title, body) = buildSundayNotificationCopy(audit)

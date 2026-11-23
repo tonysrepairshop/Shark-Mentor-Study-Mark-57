@@ -94,8 +94,8 @@ fun FirstTimeTutorialOverlay(
     val steps = remember {
         listOf(
             TutorialStep(
-                title = "Kapsamlı Destek: Kronometre ve Koçluk Yolu",
-                description = "Ayarlar > Kapsamlı Destek bölümünden bu özelliği açarak ana ekrana Kronometre ve adım adım ilerleyen Koçluk Yolu geçiş barını ekleyebilirsin.",
+                title = "Gerçek Koçluk, Kitap Rolleri ve 1-3-7 Tekrar",
+                description = "Ayarlar > Kapsamlı Destek'ten Koçluk Yolu'nu açabilir; Kitaplar sekmesinden her kitabın Konu/Video, İlerleme, Tekrar veya Pasif rolünü belirleyip 1-3-7 tekrar takvimiyle ilerleyebilirsin.",
                 icon = Icons.Default.Route
             ),
             TutorialStep(
@@ -105,7 +105,7 @@ fun FirstTimeTutorialOverlay(
             ),
             TutorialStep(
                 title = "Video Stüdyosu, Zaman Damgalı AI ve Matematik Paneli",
-                description = "Kamp videoları doğrudan oynatılır; izlediğin dakikaya göre AI'ya soru sorabilir, reklam engelleyiciyi Ayarlar'dan yönetebilir ve ∑ paneliyle formül yazabilirsin.",
+                description = "En alakalı 3 oynatma listesinden seçtiğin kamp doğrudan oynatılır; AI kutusunu açtığında video otomatik duraklar ve izlediğin dakikaya göre soru sorabilirsin.",
                 icon = Icons.Default.PlayCircleOutline
             ),
             TutorialStep(

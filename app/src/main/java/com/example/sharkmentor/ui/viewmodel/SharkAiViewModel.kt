@@ -926,41 +926,73 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     channel = dossierChannel,
                     userMessage = text
                 )
-                val dossierAndAuditBlock = if (shouldAttachDossier) {
-                    val baseDossier = com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.value
-                    val liveDossier = if (planAudit.hasAnyTasks) {
-                        baseDossier.copy(
-                            activePlanTitle = planAudit.folderTitle,
-                            completedPlanTasks = planAudit.completedTasks.take(60).map { item ->
-                                com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
-                                    dayOfWeek = item.dayOfWeek,
-                                    subject = item.subject,
-                                    topic = item.topic,
-                                    targetQuestions = item.targetQuestions,
-                                    isCompleted = true
-                                )
-                            },
-                            incompletePlanTasks = planAudit.incompleteTasks.take(60).map { item ->
-                                com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
-                                    dayOfWeek = item.dayOfWeek,
-                                    subject = item.subject,
-                                    topic = item.topic,
-                                    targetQuestions = item.targetQuestions,
-                                    isCompleted = false
-                                )
-                            }
+                val dossierAndAuditBlock = buildString {
+                    if (shouldAttachDossier) {
+                        val baseDossier = com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.value
+                        val liveDossier = if (planAudit.hasAnyTasks) {
+                            baseDossier.copy(
+                                activePlanTitle = planAudit.folderTitle,
+                                completedPlanTasks = planAudit.completedTasks.take(60).map { item ->
+                                    com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                        dayOfWeek = item.dayOfWeek,
+                                        subject = item.subject,
+                                        topic = item.topic,
+                                        targetQuestions = item.targetQuestions,
+                                        isCompleted = true
+                                    )
+                                },
+                                incompletePlanTasks = planAudit.incompleteTasks.take(60).map { item ->
+                                    com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                        dayOfWeek = item.dayOfWeek,
+                                        subject = item.subject,
+                                        topic = item.topic,
+                                        targetQuestions = item.targetQuestions,
+                                        isCompleted = false
+                                    )
+                                }
+                            )
+                        } else baseDossier
+                        append("\n\n")
+                        append(com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt(liveDossier))
+                    } else if (
+                        dossierChannel != com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING &&
+                        planAudit.hasAnyTasks &&
+                        (dossierChannel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
+                            com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(text))
+                    ) {
+                        append("\n\n")
+                        append(com.example.sharkmentor.core.coaching.PlanProgressAuditor.buildAiPlanAuditPrompt(planAudit))
+                    }
+
+                    // Mark 67: Inject Subject Book Roles + Hidden Per-UID AI Coaching Ledger (1-3-7 + Error Bank + Monthly Archive)
+                    if (dossierChannel != com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING) {
+                        com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(appCtx)
+                        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.ensureLoaded(appCtx)
+                        com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ensureLoaded(appCtx)
+                        val verifiedIds = com.example.sharkmentor.core.coaching.BookCampManager.bindingsByResourceId.value
+                            .filterValues { it.hasVerifiedVideoSupport }.keys
+                        val bookRolesPrompt = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.buildAiBookRolesPrompt(
+                            resources = allResources,
+                            assignments = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.assignmentsByResourceId.value,
+                            verifiedVideoResourceIds = verifiedIds
                         )
-                    } else baseDossier
-                    "\n\n" + com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt(liveDossier)
-                } else if (
-                    dossierChannel != com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING &&
-                    planAudit.hasAnyTasks &&
-                    (dossierChannel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
-                        com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(text))
-                ) {
-                    "\n\n" + com.example.sharkmentor.core.coaching.PlanProgressAuditor.buildAiPlanAuditPrompt(planAudit)
-                } else {
-                    ""
+                        if (bookRolesPrompt.isNotBlank()) {
+                            append("\n\n")
+                            append(bookRolesPrompt)
+                        }
+                        if (shouldAttachDossier || dossierChannel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
+                            com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(text)
+                        ) {
+                            val syncedLedger = runCatching {
+                                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.syncWithErrorBank(appCtx)
+                            }.getOrDefault(com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ledger.value)
+                            val ledgerPrompt = com.example.sharkmentor.core.coaching.AiCoachLedgerManager.buildAiLedgerPrompt(syncedLedger)
+                            if (ledgerPrompt.isNotBlank()) {
+                                append("\n\n")
+                                append(ledgerPrompt)
+                            }
+                        }
+                    }
                 }
 
                 val projectionReport = if (currentPersona == AiPersona.GOAL_SETTER) {
@@ -1471,10 +1503,21 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                     }
                                 }
                                 SyncWorker.enqueueImmediateSync(getApplication())
+                                runCatching {
+                                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordWeeklySnapshotAndRollup(
+                                        context = getApplication(),
+                                        summaryNote = "Shark AI haftalık planı oluşturdu: $title (${parsedTasks.size} görev)."
+                                    )
+                                }
                                 savedFolderId
                             }
                             createdFolderId = newFolderId
                             isPlan = true
+                            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordChatTakeawayInBackground(
+                                context = getApplication(),
+                                category = "PLAN",
+                                digest = "Haftalık plan oluşturuldu: $title (${parsedTasks.size} görev)."
+                            )
                             memoryRepository.recordInsight(
                                 persona = persona,
                                 memoryType = "DECISION",
@@ -1894,9 +1937,23 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                             ?: 0).coerceAtLeast(0)
                         val explicitUnitType = (actionMap["unitType"] as? String)?.trim()?.takeIf { it.isNotBlank() }
                         val unitType = explicitUnitType ?: inferUnitTypeFromText("$title $lastUserPromptText")
+                        val rawRoleStr = (actionMap["role"] as? String ?: actionMap["coachingRole"] as? String)?.trim()
+                        val parsedRole = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parseRoleFromNaturalLanguage(rawRoleStr)
+                            ?: com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parseRoleFromNaturalLanguage(lastUserPromptText)
+                        val explicitPriority = (actionMap["priorityOrder"] as? Number)?.toInt()
+                            ?: (actionMap["priority"] as? Number)?.toInt()
+                        val parsedPriority = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parsePriorityFromNaturalLanguage(
+                            rawText = "$rawRoleStr $lastUserPromptText",
+                            explicitPriority = explicitPriority
+                        )
+                        val videoDisabledFlag = (actionMap["videoDisabled"] as? Boolean)
+                            ?: (lastUserPromptText.contains("videosuz", ignoreCase = true) ||
+                                lastUserPromptText.contains("video olmasın", ignoreCase = true) ||
+                                lastUserPromptText.contains("sadece kitap", ignoreCase = true))
 
                         var savedCompleted = completedUnits
                         var savedTotal = totalInput ?: 0
+                        var persistedResourceForRole: ResourceEntity? = null
 
                         withContext(Dispatchers.IO) {
                             val allResources = database.goalsDao().getAllResourcesRaw()
@@ -1931,6 +1988,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 )
                                 database.goalsDao().updateResource(updated)
                                 database.goalsDao().setProgress(existing.id, updated.completedUnits, now)
+                                persistedResourceForRole = updated
                                 runCatching {
                                     val firestore = GoogleServicesHelper.getFirebaseFirestore(getApplication())
                                     val uid = GoogleServicesHelper.getCurrentUser(context = getApplication())?.uid
@@ -1976,6 +2034,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 )
                                 val insertedId = database.goalsDao().insertResource(resEntity)
                                 val finalId = if (insertedId > 0L) insertedId else resEntity.id
+                                persistedResourceForRole = resEntity.copy(id = finalId)
                                 runCatching {
                                     val firestore = GoogleServicesHelper.getFirebaseFirestore(getApplication())
                                     val uid = GoogleServicesHelper.getCurrentUser(context = getApplication())?.uid
@@ -2004,6 +2063,28 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 }
                                 SyncWorker.enqueueImmediateSync(getApplication())
                             }
+
+                            persistedResourceForRole?.let { targetRes ->
+                                if (parsedRole != null || videoDisabledFlag) {
+                                    val effectiveRole = parsedRole
+                                        ?: com.example.sharkmentor.core.coaching.BookCoachingRoleManager.resolveAssignment(
+                                            targetRes,
+                                            com.example.sharkmentor.core.coaching.BookCoachingRoleManager.assignmentsByResourceId.value
+                                        ).role
+                                    com.example.sharkmentor.core.coaching.BookCoachingRoleManager.setAssignment(
+                                        context = getApplication(),
+                                        resource = targetRes,
+                                        role = effectiveRole,
+                                        priorityOrder = parsedPriority,
+                                        videoDisabled = videoDisabledFlag
+                                    )
+                                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordChatTakeawayInBackground(
+                                        context = getApplication(),
+                                        category = "BOOK",
+                                        digest = "${targetRes.subject} - ${targetRes.title}: ${effectiveRole.shortBadge} #$parsedPriority${if (videoDisabledFlag) " (Videosuz)" else ""} olarak ayarlandı."
+                                    )
+                                }
+                            }
                         }
                         val progressDesc = if (savedTotal > 0) "$savedCompleted/$savedTotal $unitType" else "$savedCompleted $unitType"
                         memoryRepository.recordInsight(
@@ -2011,6 +2092,77 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                             memoryType = "DECISION",
                             content = "Kaynak Kaydedildi/Güncellendi: $title ($resolvedSubject - $progressDesc)"
                         )
+                        if (!cleanText.contains("#ACTION:NAV_RESOURCES")) {
+                            cleanText += "\n\n#ACTION:NAV_RESOURCES"
+                        }
+                    }
+
+                    "SET_BOOK_ROLE", "ASSIGN_BOOK_ROLE", "UPDATE_BOOK_ROLE" -> {
+                        val resourceIdInput = (actionMap["resourceId"] as? Number)?.toLong()?.takeIf { it > 0L }
+                        val title = (actionMap["title"] as? String ?: actionMap["book"] as? String ?: "").trim()
+                        val rawSubject = (actionMap["subject"] as? String ?: "").trim()
+                        val resolvedSubject = inferSubjectFromResourceTitle(title, rawSubject)
+                        val rawRoleStr = (actionMap["role"] as? String ?: actionMap["coachingRole"] as? String)?.trim()
+                        val parsedRole = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parseRoleFromNaturalLanguage(rawRoleStr)
+                            ?: com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parseRoleFromNaturalLanguage(lastUserPromptText)
+                            ?: com.example.sharkmentor.core.coaching.BookCoachingRole.PRIMARY_PRACTICE
+                        val explicitPriority = (actionMap["priorityOrder"] as? Number)?.toInt()
+                            ?: (actionMap["priority"] as? Number)?.toInt()
+                        val parsedPriority = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.parsePriorityFromNaturalLanguage(
+                            rawText = "$rawRoleStr $lastUserPromptText",
+                            explicitPriority = explicitPriority
+                        )
+                        val videoDisabledFlag = (actionMap["videoDisabled"] as? Boolean)
+                            ?: (parsedRole == com.example.sharkmentor.core.coaching.BookCoachingRole.PASSIVE ||
+                                lastUserPromptText.contains("videosuz", ignoreCase = true) ||
+                                lastUserPromptText.contains("video olmasın", ignoreCase = true) ||
+                                lastUserPromptText.contains("sadece kitap", ignoreCase = true))
+
+                        withContext(Dispatchers.IO) {
+                            val allResources = database.goalsDao().getAllResourcesRaw()
+                            var target = resourceIdInput?.let { id -> allResources.firstOrNull { it.id == id } }
+                                ?: if (title.isNotBlank()) findMatchingResource(allResources, title, resolvedSubject) else null
+
+                            // If student asked to assign a book not yet in library, create it cleanly with totalUnits = 0!
+                            if (target == null && title.length >= 2) {
+                                val now = System.currentTimeMillis()
+                                val institutionId = com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(getApplication()).institutionId ?: "INDIVIDUAL"
+                                val created = ResourceEntity(
+                                    title = title,
+                                    subject = resolvedSubject,
+                                    totalUnits = 0,
+                                    completedUnits = 0,
+                                    unitType = inferUnitTypeFromText("$title $lastUserPromptText"),
+                                    institutionId = institutionId,
+                                    updatedAtMillis = now,
+                                    lastModifiedMillis = now,
+                                    isSynced = false
+                                )
+                                val insertedId = database.goalsDao().insertResource(created)
+                                target = created.copy(id = if (insertedId > 0L) insertedId else created.id)
+                                SyncWorker.enqueueImmediateSync(getApplication())
+                            }
+
+                            target?.let { book ->
+                                com.example.sharkmentor.core.coaching.BookCoachingRoleManager.setAssignment(
+                                    context = getApplication(),
+                                    resource = book,
+                                    role = parsedRole,
+                                    priorityOrder = parsedPriority,
+                                    videoDisabled = videoDisabledFlag
+                                )
+                                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordChatTakeawayInBackground(
+                                    context = getApplication(),
+                                    category = "BOOK",
+                                    digest = "${book.subject} - ${book.title}: ${parsedRole.shortBadge} #$parsedPriority${if (videoDisabledFlag) " (Videosuz)" else ""} rolüne atandı."
+                                )
+                                memoryRepository.recordInsight(
+                                    persona = persona,
+                                    memoryType = "DECISION",
+                                    content = "Kitap Rolü Güncellendi: ${book.title} (${book.subject}) -> ${parsedRole.shortBadge} #$parsedPriority"
+                                )
+                            }
+                        }
                         if (!cleanText.contains("#ACTION:NAV_RESOURCES")) {
                             cleanText += "\n\n#ACTION:NAV_RESOURCES"
                         }
@@ -2921,16 +3073,18 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val actionInstruction = if (includeActionInstructions) """
 
             AKSİYON VE EYLEM TALİMATLARI (HEM METİN HEM GÖRSEL ANALİZİNDE GEÇERLİDİR):
-            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa 7 güne ve çoklu derse dengeli, katı saat aralığı olmadan esnek sürelerle (`"Esnek • 90 dk"`) mesajının EN SONUNA plan eylemini ekle. KRİTİK KURAL: Önceki plandan EKSİK/TAMAMLANMAMIŞ görevleri mutlaka yeni planın ilk günlerine devret; TAMAMLANMIŞ görevleri (konu hakimiyeti ≤ 2/5 değilse) tekrar tekrar yazma:
-            #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Haftalık odak stratejisi","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
+            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa 7 güne ve çoklu derse dengeli, katı saat aralığı olmadan esnek sürelerle (`"Esnek • 90 dk"`) mesajının EN SONUNA plan eylemini ekle. KRİTİK KURAL: (1) Önceki plandan EKSİK/TAMAMLANMAMIŞ görevleri yeni planın ilk günlerine devret; (2) [ÖĞRENCİNİN DERS BAZLI KİTAP ROLLERİ VE ÖNCELİK SIRASI]'na uy (yeni konuyu #1 Konu/Video kaynağından öğret, AYNI HAFTA #1 İlerleme/Soru kaynağından soru çözdür, 1-3-7 ve Aylık tekrarları Tekrar Kaynağı + Hata Bankası ile planla, PASİF kitapları plana koyma); (3) Öğrenilmiş/tamamlanmış konuları asla sıfırdan konu anlatımı gibi tekrar tekrar yazma:
+            #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Haftalık odak stratejisi","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"AYT Kimya","topic":"Ferrum AYT Kimya: Modern Atom Teorisi [Konu Anlatım]","targetQuestions":25}]}#
             - Eğer öğrenci "TYT tüm konular", "AYT tüm konular" veya bir dersin tüm konularını/müfredatını eklemek istiyorsa ASLA ders başına tek boş klasör açma; INSERT_TOPICS_BATCH kullan:
             #ACTION:{"type":"INSERT_TOPICS_BATCH","exam":"TYT","preset":"TYT_ALL","topics":[{"subject":"TYT Türkçe","topic":"Sözcükte Anlam","targetLevel":5},{"subject":"TYT Matematik","topic":"Temel Kavramlar","targetLevel":5}]}#
             - Eğer öğrenci tek bir konu hedefi eklemek veya seviyesini güncellemek istiyorsa, doğru ders adını (TYT/AYT ayrımıyla, örn. Türev için AYT Matematik) ve konuyu seç:
             #ACTION:{"type":"INSERT_TOPIC","subject":"Ders Adı","topic":"Konu Adı","currentLevel":1,"targetLevel":5}#
             - Eğer öğrenci mevcut kütüphanesindeki bir kitabı ("X kitabını 45. sayfaya/teste kadar çözdüm işaretle") güncellemek istiyorsa YENİ KİTAP EKLEME, [MEVCUT KÜTÜPHANE KAYNAKLARI] listesindeki doğru `resourceId`, tam kitap adı ve dersiyle UPDATE_RESOURCE_PROGRESS kullan:
             #ACTION:{"type":"UPDATE_RESOURCE_PROGRESS","resourceId":0,"title":"Kitap Adı","subject":"Ders Adı","completedUnits":45,"unitType":"Sayfa","isIncremental":false}#
-            - Eğer öğrenci kütüphanede henüz olmayan YENİ bir kaynak/kitap eklemek istiyorsa (öğrenci toplam sayfa/test sayısını belirtmediyse `totalUnits`: 0 yaz, ASLA tahmini sayı uydurma):
-            #ACTION:{"type":"INSERT_RESOURCE","title":"Kitap Adı","subject":"Ders Adı","totalUnits":0,"completedUnits":0,"unitType":"Test"}#
+            - Eğer öğrenci bir kitabın koçluk rolünü, öncelik sırasını veya videosuz/pasif durumunu belirliyorsa (örn: "Aydın'ı kimyanın 1. ilerleme kitabı yap", "Orbital'ı 1. tekrar kaynağı yap", "Bu kitabı pasif yap plana koyma", "Bu kitapta video olmasın"), `role` değerini `CONCEPT_VIDEO`, `PRIMARY_PRACTICE`, `REVISION_BOOK`, `MOCK_EXAM` veya `PASSIVE` olarak SET_BOOK_ROLE ile kaydet:
+            #ACTION:{"type":"SET_BOOK_ROLE","resourceId":0,"title":"Kitap Adı","subject":"Ders Adı","role":"REVISION_BOOK","priorityOrder":1,"videoDisabled":false}#
+            - Eğer öğrenci kütüphanede henüz olmayan YENİ bir kaynak/kitap eklemek istiyorsa (toplam sayfa/test belirtilmediyse `totalUnits`: 0 yaz, ASLA tahmini sayı uydurma; öğrenci rol/öncelik de söylediyse `role` ve `priorityOrder` alanlarını doldur):
+            #ACTION:{"type":"INSERT_RESOURCE","title":"Kitap Adı","subject":"Ders Adı","totalUnits":0,"completedUnits":0,"unitType":"Test","role":"PRIMARY_PRACTICE","priorityOrder":1,"videoDisabled":false}#
             - Eğer öğrenci tekil veya toplu hedef belirlemek ya da mevcut hedef ilerlemesini güncellemek istiyorsa:
             #ACTION:{"type":"INSERT_TARGET","title":"Hedef Başlığı","description":"Açıklama","type":"SHORT_TERM","period":"WEEKLY","targetQuestions":100,"priority":"HIGH"}#
             #ACTION:{"type":"INSERT_TARGETS_BATCH","targets":[{"title":"Hedef Başlığı","description":"Açıklama","type":"SHORT_TERM","period":"WEEKLY","targetQuestions":100,"priority":"HIGH"}]}#
@@ -2970,18 +3124,18 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             AiPersona.STUDY_PLANNER -> if (includeActionInstructions) {
                 """
                     Sen SharkMentor Otonom Çalışma Planlayıcısısın.
-                    GÖREV: Öğrencinin talebine ve [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ] kaydına dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
-                    KÜMÜLATİF KURAL: Önceki plandan tamamlanmayan/eksik kalan görevleri mutlaka öncelikli olarak yeni plana devret; halihazırda tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) gereksiz yere tekrar ettirme.
-                    1. Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini nasıl toparlayacağını açıkla.
+                    GÖREV: Öğrencinin talebine, [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ]'ne, [ÖĞRENCİNİN DERS BAZLI KİTAP ROLLERİ VE ÖNCELİK SIRASI]'na ve [SİSTEM YAPAY ZEKA KOÇLUK DOSYASI]'ndaki 1-3-7/Aylık tekrar takvimine dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
+                    KÜMÜLATİF & KİTAP ROLÜ KURALI: Önceki plandan eksik kalan görevleri ilk günlere devret; yeni konuyu Konu/Video kaynağından verip AYNI HAFTA İlerleme/Soru kaynağından soru çözdür; vadesi gelen 1-3-7/Aylık tekrarları Tekrar Kaynağı + Hata Bankası ile ekle; PASİF kitapları plana alma ve öğrenilmiş konuyu sıfırdan tekrar tekrar yazma.
+                    1. Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini ve 1-3-7 tekrarlarını nasıl dengelediğini açıkla.
                     2. Ardından mesajın en sonuna çalışma programını aşağıdaki sistem eylem formatında ekle:
-                    #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Bu haftaki stratejik yönelim özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40,"focusStrategy":"Konu Pekiştirme"}]}#$rulesBlock
+                    #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Bu haftaki stratejik yönelim özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"AYT Kimya","topic":"Ferrum AYT Kimya: Modern Atom Teorisi [Konu Anlatım]","targetQuestions":25,"focusStrategy":"Konu Anlatım ve Aynı Hafta Pekiştirme"}]}#$rulesBlock
                 """.trimIndent()
             } else {
                 """
                     Sen SharkMentor Otonom Çalışma Planlayıcısısın.
-                    GÖREV: Öğrencinin talebine ve [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ] kaydına dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
-                    KÜMÜLATİF KURAL: Önceki plandan tamamlanmayan/eksik kalan görevleri mutlaka öncelikli olarak yeni plana devret; halihazırda tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) tekrar ettirme.
-                    Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini nasıl toparlayacağını açıkla.$rulesBlock
+                    GÖREV: Öğrencinin talebine, [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ]'ne, [ÖĞRENCİNİN DERS BAZLI KİTAP ROLLERİ VE ÖNCELİK SIRASI]'na ve 1-3-7/Aylık tekrar takvimine dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
+                    KÜMÜLATİF & KİTAP ROLÜ KURALI: Eksik görevleri devret; yeni konuyu Konu/Video kaynağından verip AYNI HAFTA İlerleme/Soru kaynağından çözdür; 1-3-7 tekrarlarını Tekrar Kaynağı + Hata Bankası ile ekle; PASİF kitapları dahil etme.
+                    Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini açıkla.$rulesBlock
                 """.trimIndent()
             }
         }

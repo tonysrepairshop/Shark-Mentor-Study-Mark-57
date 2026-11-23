@@ -98,8 +98,13 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.core.ai.MultiProviderAiClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
+import com.example.sharkmentor.core.coaching.AiCoachLedger
+import com.example.sharkmentor.core.coaching.AiCoachLedgerManager
 import com.example.sharkmentor.core.coaching.AppStudyMode
 import com.example.sharkmentor.core.coaching.BookCampManager
+import com.example.sharkmentor.core.coaching.BookCoachingAssignment
+import com.example.sharkmentor.core.coaching.BookCoachingRole
+import com.example.sharkmentor.core.coaching.BookCoachingRoleManager
 import com.example.sharkmentor.core.coaching.CampDayEpisode
 import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.coaching.DailyGoalLedgerEntry
@@ -108,10 +113,13 @@ import com.example.sharkmentor.core.coaching.DossierAiChannel
 import com.example.sharkmentor.core.coaching.PlanProgressAuditor
 import com.example.sharkmentor.core.coaching.PlanReadinessNavBus
 import com.example.sharkmentor.core.coaching.PlanTaskAuditItem
+import com.example.sharkmentor.core.coaching.ResourceCampBinding
 import com.example.sharkmentor.core.coaching.StudentDossier
 import com.example.sharkmentor.core.coaching.StudentDossierManager
 import com.example.sharkmentor.core.coaching.StudentDossierNavBus
 import com.example.sharkmentor.core.coaching.StudentTargetContext
+import com.example.sharkmentor.core.coaching.TopicLifecycleRecord
+import com.example.sharkmentor.core.coaching.TopicStudyActionKind
 import com.example.sharkmentor.core.coaching.WeeklyVarianceAdvice
 import com.example.sharkmentor.core.service.FocusTimerService
 import com.example.sharkmentor.core.timer.TimerMode
@@ -128,6 +136,7 @@ import com.example.sharkmentor.data.repository.PlanRepositoryImpl
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
 import com.example.sharkmentor.service.sync.SyncWorker
 import com.example.sharkmentor.ui.components.RichSolutionContent
+import java.time.LocalDate
 import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
@@ -1499,11 +1508,14 @@ fun DuolingoCoachingPathView(
     val libraryResources by db.goalsDao().getAllResourcesFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     val topicGoals by db.goalsDao().getAllTopicGoalsFlow().collectAsStateWithLifecycle(initialValue = emptyList())
     val campBindings by BookCampManager.bindingsByResourceId.collectAsStateWithLifecycle()
+    val bookAssignments by BookCoachingRoleManager.assignmentsByResourceId.collectAsStateWithLifecycle()
+    val coachLedger by AiCoachLedgerManager.ledger.collectAsStateWithLifecycle()
 
-    // Single-resource focus filter so books are NOT interleaved/mixed together
-    var selectedResourceId by remember { mutableStateOf<Long?>(null) }
-    val activeSelectedResource = remember(libraryResources, selectedResourceId) {
-        libraryResources.firstOrNull { it.id == selectedResourceId } ?: libraryResources.firstOrNull()
+    LaunchedEffect(Unit) {
+        BookCampManager.ensureLoaded(context)
+        BookCoachingRoleManager.ensureLoaded(context)
+        AiCoachLedgerManager.ensureLoaded(context)
+        AiCoachLedgerManager.syncWithErrorBank(context)
     }
 
     var completedNodeIds by remember { mutableStateOf(loadCompletedNodeIds(context)) }
@@ -1523,7 +1535,7 @@ fun DuolingoCoachingPathView(
                     context = context,
                     db = db,
                     libraryResources = libraryResources,
-                    activeResource = activeSelectedResource,
+                    activeResource = null,
                     topicGoals = topicGoals,
                     targetContext = targetContext
                 )
@@ -1533,22 +1545,27 @@ fun DuolingoCoachingPathView(
                 showSundayBanner = false
                 Toast.makeText(
                     context,
-                    "Haftalık program eksik görevleri devredip güncel verilere göre kurgulandı ($count görev)",
+                    "Haftalık program kitap rollerine ve 1-3-7 tekrar takvimine göre kurgulandı ($count görev)",
                     Toast.LENGTH_SHORT
                 ).show()
             }
         }
     }
 
-    LaunchedEffect(activeSelectedResource?.id, activeSelectedResource?.title, activeSelectedResource?.subject) {
-        val res = activeSelectedResource ?: return@LaunchedEffect
-        val currentBinding = BookCampManager.resolveCampForResource(context, res)
-        if (!currentBinding.videoCheckCompleted) {
-            BookCampManager.discoverAndSyncRealCampForResource(context, res)
-        }
+    // Quietly verify YouTube playlist ONLY for active CONCEPT_VIDEO resources that have NOT opted out of video
+    LaunchedEffect(libraryResources, bookAssignments) {
+        libraryResources
+            .filter { !it.isDeleted }
+            .forEach { res ->
+                val binding = BookCampManager.resolveCampForResource(context, res)
+                val assign = BookCoachingRoleManager.resolveAssignment(res, bookAssignments, binding.hasVerifiedVideoSupport)
+                if (assign.role == BookCoachingRole.CONCEPT_VIDEO && !assign.videoDisabled && !binding.videoCheckCompleted) {
+                    BookCampManager.discoverAndSyncRealCampForResource(context, res)
+                }
+            }
     }
 
-    // Build daily Duolingo path nodes (shows Video step ONLY when real verified video exists)
+    // Build daily Duolingo path nodes (shows Video step ONLY for verified video-enabled concept books)
     val dayTasks = remember(allFolderTasks, selectedDayIso) {
         allFolderTasks.filter { it.dayOfWeek == selectedDayIso }
     }
@@ -1556,7 +1573,8 @@ fun DuolingoCoachingPathView(
     val pathNodes = remember(
         dayTasks,
         libraryResources,
-        activeSelectedResource,
+        bookAssignments,
+        coachLedger,
         topicGoals,
         campBindings,
         selectedDayIso,
@@ -1568,7 +1586,8 @@ fun DuolingoCoachingPathView(
             dayIso = selectedDayIso,
             dayTasks = dayTasks,
             libraryResources = libraryResources,
-            activeResource = activeSelectedResource,
+            bookAssignments = bookAssignments,
+            coachLedger = coachLedger,
             topicGoals = topicGoals,
             targetContext = targetContext,
             completedNodeIds = completedNodeIds
@@ -1621,6 +1640,18 @@ fun DuolingoCoachingPathView(
                 node.linkedResource?.let { res ->
                     BookCampManager.advanceCampDay(context, res, targetDay = completedEp.dayNumber + 1)
                 }
+                AiCoachLedgerManager.recordTopicStudyInBackground(
+                    context = context,
+                    subject = node.subject,
+                    topic = completedEp.mappedTopic.ifBlank { node.topic },
+                    actionKind = if (completedEp.isQuestionSolvingVideo) {
+                        TopicStudyActionKind.PRIMARY_PRACTICE
+                    } else {
+                        TopicStudyActionKind.CONCEPT_STUDY
+                    },
+                    bookTitle = node.linkedResource?.title.orEmpty(),
+                    completedVideoId = completedEp.videoId
+                )
                 activeStudioNode = null
             },
             onDismiss = { activeStudioNode = null }
@@ -1651,6 +1682,21 @@ fun DuolingoCoachingPathView(
                         val planRepo = PlanRepositoryImpl(db.planDao(), db.pendingDeletionDao())
                         planRepo.updateTaskCompletion(node.linkedPlanTask.id, true)
                     }
+                    val rawTitle = "${node.linkedPlanTask?.topic.orEmpty()} ${node.topic} ${node.subtitle}"
+                    val studyActionKind = when {
+                        rawTitle.contains("1-3-7", ignoreCase = true) ||
+                            rawTitle.contains("Tekrar", ignoreCase = true) ||
+                            rawTitle.contains("Aylık", ignoreCase = true) ->
+                            TopicStudyActionKind.REVIEW_SESSION
+                        else -> TopicStudyActionKind.PRIMARY_PRACTICE
+                    }
+                    AiCoachLedgerManager.recordTopicStudyInBackground(
+                        context = context,
+                        subject = node.subject,
+                        topic = node.topic,
+                        actionKind = studyActionKind,
+                        bookTitle = node.linkedResource?.title.orEmpty()
+                    )
                     SyncWorker.enqueueImmediateSync(context)
                     StudentDossierManager.syncInBackground(context)
                     withContext(Dispatchers.Main) {
@@ -1682,6 +1728,15 @@ fun DuolingoCoachingPathView(
                 val updated = completedNodeIds + node.id
                 completedNodeIds = updated
                 saveCompletedNodeIds(context, updated)
+                if (node.topic.contains("Tekrar", ignoreCase = true) || node.topic.contains("1-3-7")) {
+                    AiCoachLedgerManager.recordTopicStudyInBackground(
+                        context = context,
+                        subject = node.subject,
+                        topic = node.topic,
+                        actionKind = TopicStudyActionKind.REVIEW_SESSION,
+                        bookTitle = node.linkedResource?.title.orEmpty()
+                    )
+                }
                 activeMiniCheckNode = null
             },
             onDismiss = { activeMiniCheckNode = null }
@@ -2090,130 +2145,7 @@ fun DuolingoCoachingPathView(
             }
         }
 
-        // 5b. Active Book Banner & Selector (ALWAYS clearly displays which book is being progressed!)
-        if (activeSelectedResource != null) {
-            val activeBinding = remember(activeSelectedResource, campBindings) {
-                BookCampManager.resolveCampForResource(context, activeSelectedResource)
-            }
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 13.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(9.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = colorScheme.primary.copy(alpha = 0.14f),
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Default.Book,
-                                        contentDescription = null,
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "İlerlenen Kitap • ${activeSelectedResource.subject}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.primary
-                                )
-                                Text(
-                                    text = activeSelectedResource.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                val bookModeSubtitle = when {
-                                    activeBinding.hasVerifiedVideoSupport ->
-                                        "Video Destekli • ${activeBinding.currentDay}/${activeBinding.totalDays}. Ders"
-                                    !activeBinding.videoCheckCompleted ->
-                                        "Video desteği kontrol ediliyor..."
-                                    else ->
-                                        "Kitap & Soru Odaklı İlerleme"
-                                }
-                                Text(
-                                    text = bookModeSubtitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-
-                        if (activeSelectedResource.totalUnits > 0) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = colorScheme.primaryContainer
-                            ) {
-                                Text(
-                                    text = "${activeSelectedResource.completedUnits}/${activeSelectedResource.totalUnits} ${activeSelectedResource.unitType}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    if (libraryResources.size > 1) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            libraryResources.forEach { res ->
-                                val isSelected = activeSelectedResource.id == res.id
-                                Surface(
-                                    onClick = { selectedResourceId = res.id },
-                                    shape = RoundedCornerShape(9.dp),
-                                    color = if (isSelected) colorScheme.primary else colorScheme.surface,
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                    )
-                                ) {
-                                    Text(
-                                        text = "${res.title} (${res.subject})",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
-                                        maxLines = 1,
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 5b. Book coaching roles & priorities are managed in the Books tab & Shark AI (removed single-book Home hijack)
 
         // 6. 7-Day Selector Strip for Duolingo Path
         val shortDays = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
@@ -2321,12 +2253,11 @@ fun DuolingoCoachingPathView(
                             fontWeight = FontWeight.ExtraBold,
                             color = colorScheme.onSurface
                         )
-                        val bookTag = activeSelectedResource?.title?.takeIf { it.isNotBlank() }?.let { "$it • " }.orEmpty()
                         Text(
                             text = if (hasVerifiedVideoStep) {
-                                "${bookTag}Ders Videosu • Soru & Odak • Mini Kontrol"
+                                "Konu & Video • Soru Pekiştirme • 1-3-7 Tekrar"
                             } else {
-                                "${bookTag}Soru & Odak • Mini Kontrol"
+                                "Soru & Odak • 1-3-7 Tekrar • Mini Kontrol"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant,
@@ -2919,12 +2850,56 @@ private fun MiniTopicMasteryCheckDialog(
     )
 }
 
+private fun resolveBookForTask(
+    subject: String,
+    rawTopic: String,
+    taskTitle: String,
+    libraryResources: List<ResourceEntity>,
+    bookAssignments: Map<Long, BookCoachingAssignment>,
+    verifiedVideoIds: Set<Long>
+): Pair<ResourceEntity, BookCoachingAssignment>? {
+    val activeForSubject = BookCoachingRoleManager.getActiveBooksForSubject(
+        subject = subject,
+        resources = libraryResources,
+        assignments = bookAssignments,
+        verifiedVideoResourceIds = verifiedVideoIds
+    )
+    if (activeForSubject.isEmpty()) return null
+
+    // 1. Exact title prefix match (e.g. "Aydın AYT Kimya: Modern Atom Teorisi" or "Ferrum AYT Kimya: ...")
+    val combinedText = "$rawTopic $taskTitle".trim()
+    val prefixBeforeColon = rawTopic.substringBefore(":").trim()
+    val directMatch = activeForSubject.firstOrNull { (res, _) ->
+        (prefixBeforeColon.length >= 3 && res.title.equals(prefixBeforeColon, ignoreCase = true)) ||
+            (res.title.length >= 4 && combinedText.contains(res.title, ignoreCase = true))
+    }
+    if (directMatch != null) return directMatch
+
+    // 2. Role tag match
+    val lower = combinedText.lowercase(Locale("tr"))
+    val desiredRole = when {
+        lower.contains("1-3-7") || lower.contains("tekrar") || lower.contains("aylık") || lower.contains("aylik") ->
+            BookCoachingRole.REVISION_BOOK
+        lower.contains("deneme") || lower.contains("branş") || lower.contains("brans") ->
+            BookCoachingRole.MOCK_EXAM
+        lower.contains("soru pekiştirme") || lower.contains("soru pekistirme") || lower.contains("[ilerleme]") ->
+            BookCoachingRole.PRIMARY_PRACTICE
+        lower.contains("konu anlat") || lower.contains("video") || lower.contains("kamp") ->
+            BookCoachingRole.CONCEPT_VIDEO
+        else -> BookCoachingRole.PRIMARY_PRACTICE
+    }
+    return activeForSubject.firstOrNull { (_, a) -> a.role == desiredRole }
+        ?: activeForSubject.firstOrNull { (_, a) -> a.role == BookCoachingRole.PRIMARY_PRACTICE }
+        ?: activeForSubject.firstOrNull()
+}
+
 private fun buildDuolingoDayNodes(
     context: Context,
     dayIso: Int,
     dayTasks: List<PlanEntity>,
     libraryResources: List<ResourceEntity>,
-    activeResource: ResourceEntity?,
+    bookAssignments: Map<Long, BookCoachingAssignment>,
+    coachLedger: AiCoachLedger,
     topicGoals: List<TopicGoalEntity>,
     targetContext: StudentTargetContext,
     completedNodeIds: Set<String>
@@ -2932,124 +2907,154 @@ private fun buildDuolingoDayNodes(
     val nodes = mutableListOf<DuolingoPathNode>()
     val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
     val dayOffsetFromToday = (dayIso - todayIso).coerceAtLeast(0)
+    val allBindings = BookCampManager.bindingsByResourceId.value
+    val verifiedIds = allBindings.filterValues { it.hasVerifiedVideoSupport }.keys
 
-    // 1. Build day's raw blocks without interleaving multiple library books together
+    // 1. Build day's blocks (from active weekly plan first; otherwise balanced fallback from 1-3-7 due reviews + active non-passive books)
     val rawBlocks: List<Triple<String, String, PlanEntity?>> = when {
         dayTasks.isNotEmpty() -> {
             dayTasks
-                .sortedBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic.ifBlank { it.title }) }
+                .sortedBy { it.orderIndex }
                 .map { task ->
                     Triple(task.subject, task.topic.ifBlank { task.title }, task)
                 }
         }
-        activeResource != null -> {
-            val binding = BookCampManager.resolveCampForResource(context, activeResource, topicGoals)
-            if (binding.hasVerifiedVideoSupport && binding.episodes.isNotEmpty()) {
-                val epDay = (binding.currentDay + dayOffsetFromToday).coerceIn(1, binding.episodes.size)
-                val ep = binding.episodes.firstOrNull { it.dayNumber == epDay } ?: binding.currentEpisode()
-                listOf(Triple(activeResource.subject, ep.topicTitle, null))
-            } else {
-                // Honest non-video book progression: pick real topic from student's goals or canonical subject sequence
-                val subjectGoalTopics = topicGoals
-                    .filter {
-                        !it.isDeleted && (
-                            it.subject.contains(activeResource.subject, ignoreCase = true) ||
-                                activeResource.subject.contains(it.subject, ignoreCase = true)
-                            )
-                    }
-                    .sortedWith(
-                        compareBy<TopicGoalEntity> { it.currentLevel }
-                            .thenBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
-                    )
-                    .map { it.topic }
-                val baseTopics = subjectGoalTopics.ifEmpty {
-                    BookCampManager.canonicalCurriculumForSubject(activeResource.subject, activeResource.title)
-                }
-                val unitIndex = (activeResource.completedUnits + dayOffsetFromToday).coerceAtLeast(0)
-                val topicName = if (baseTopics.isNotEmpty()) {
-                    baseTopics[unitIndex % baseTopics.size]
-                } else {
-                    "${activeResource.title} • ${unitIndex + 1}. ${activeResource.unitType}"
-                }
-                listOf(Triple(activeResource.subject, topicName, null))
-            }
-        }
         else -> {
-            val defaultSubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
-            val canonical = BookCampManager.canonicalCurriculumForSubject(defaultSubject)
-            val topicForDay = if (canonical.isNotEmpty()) {
-                canonical[(dayIso - 1).coerceAtLeast(0) % canonical.size]
-            } else {
-                "$defaultSubject Soru & Konu Çalışması"
+            val dueReviews = AiCoachLedgerManager.getDueReviewTopics(
+                ledger = coachLedger,
+                horizonEndEpochDay = LocalDate.now().plusDays(dayOffsetFromToday.toLong()).toEpochDay()
+            )
+            val fallbackList = mutableListOf<Triple<String, String, PlanEntity?>>()
+            dueReviews.firstOrNull()?.let { rev ->
+                val revBook = BookCoachingRoleManager.getRevisionBooksForSubject(
+                    rev.subject, libraryResources, bookAssignments, verifiedIds
+                ).firstOrNull()?.first
+                val errTag = if (rev.linkedErrorCount > 0) " • Hata Bankası: ${rev.linkedErrorCount} soru" else ""
+                val title = if (revBook != null) {
+                    "${revBook.title}: ${rev.topic} [${rev.currentIntervalLabel()}$errTag]"
+                } else {
+                    "${rev.topic} [${rev.currentIntervalLabel()}$errTag]"
+                }
+                fallbackList.add(Triple(rev.subject, title, null))
             }
-            listOf(Triple(defaultSubject, topicForDay, null))
+
+            val activeBooks = libraryResources
+                .filter { !it.isDeleted }
+                .map { res -> res to BookCoachingRoleManager.resolveAssignment(res, bookAssignments, res.id in verifiedIds) }
+                .filter { (_, a) -> a.role != BookCoachingRole.PASSIVE }
+                .sortedWith(compareBy<Pair<ResourceEntity, BookCoachingAssignment>> { it.second.role.ordinal }.thenBy { it.second.priorityOrder })
+
+            if (activeBooks.isNotEmpty()) {
+                val chosenPair = activeBooks[(dayIso - 1).coerceAtLeast(0) % activeBooks.size]
+                val res = chosenPair.first
+                val assign = chosenPair.second
+                val binding = BookCampManager.resolveCampForResource(context, res, topicGoals)
+                if (assign.role == BookCoachingRole.CONCEPT_VIDEO && !assign.videoDisabled && binding.hasVerifiedVideoSupport && binding.episodes.isNotEmpty()) {
+                    val epDay = (binding.currentDay + dayOffsetFromToday).coerceIn(1, binding.episodes.size)
+                    val ep = binding.episodes.firstOrNull { it.dayNumber == epDay } ?: binding.currentEpisode()
+                    fallbackList.add(Triple(res.subject, "${res.title}: ${ep.topicTitle} [Konu Anlatım]", null))
+                } else {
+                    val subjectGoalTopics = topicGoals
+                        .filter { !it.isDeleted && it.subject.equals(res.subject, ignoreCase = true) }
+                        .sortedWith(compareBy<TopicGoalEntity> { it.currentLevel }.thenBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) })
+                        .map { it.topic }
+                    val baseTopics = subjectGoalTopics.ifEmpty {
+                        BookCampManager.canonicalCurriculumForSubject(res.subject, res.title)
+                    }
+                    val unitIndex = (res.completedUnits + dayOffsetFromToday).coerceAtLeast(0)
+                    val topicName = if (baseTopics.isNotEmpty()) {
+                        baseTopics[unitIndex % baseTopics.size]
+                    } else {
+                        "${unitIndex + 1}. ${res.unitType}"
+                    }
+                    fallbackList.add(Triple(res.subject, "${res.title}: $topicName [${assign.role.shortBadge}]", null))
+                }
+            } else if (fallbackList.isEmpty()) {
+                val defaultSubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
+                val canonical = BookCampManager.canonicalCurriculumForSubject(defaultSubject)
+                val topicForDay = if (canonical.isNotEmpty()) {
+                    canonical[(dayIso - 1).coerceAtLeast(0) % canonical.size]
+                } else {
+                    "$defaultSubject Soru & Konu Çalışması"
+                }
+                fallbackList.add(Triple(defaultSubject, topicForDay, null))
+            }
+            fallbackList
         }
     }
 
     var stepCounter = 1
     rawBlocks.forEachIndexed { blockIdx, (subject, rawTopic, planTask) ->
-        val matchedResource = if (activeResource != null &&
-            (activeResource.subject.contains(subject, ignoreCase = true) || subject.contains(activeResource.subject, ignoreCase = true))
-        ) {
-            activeResource
-        } else {
-            libraryResources.firstOrNull {
-                it.subject.contains(subject, ignoreCase = true) || subject.contains(it.subject, ignoreCase = true)
-            }
-        }
+        val matchedPair = resolveBookForTask(
+            subject = subject,
+            rawTopic = rawTopic,
+            taskTitle = planTask?.title.orEmpty(),
+            libraryResources = libraryResources,
+            bookAssignments = bookAssignments,
+            verifiedVideoIds = verifiedIds
+        )
+        val matchedResource = matchedPair?.first
+        val matchedAssignment = matchedPair?.second
+        val lowerTask = "$rawTopic ${planTask?.title.orEmpty()}".lowercase(Locale("tr"))
+        val isExplicitPracticeOrReview = lowerTask.contains("soru pekiştirme") ||
+            lowerTask.contains("soru pekistirme") ||
+            lowerTask.contains("1-3-7") ||
+            lowerTask.contains("tekrar") ||
+            lowerTask.contains("deneme") ||
+            matchedAssignment?.role == BookCoachingRole.PRIMARY_PRACTICE ||
+            matchedAssignment?.role == BookCoachingRole.REVISION_BOOK ||
+            matchedAssignment?.role == BookCoachingRole.MOCK_EXAM
 
-        val matchedBinding = matchedResource?.let { BookCampManager.resolveCampForResource(context, it, topicGoals) }
-        val verifiedVideo: Pair<String, CampDayEpisode>? = when {
-            matchedBinding != null && matchedBinding.hasVerifiedVideoSupport -> {
-                val targetDay = if (planTask == null && matchedBinding.episodes.isNotEmpty()) {
-                    (matchedBinding.currentDay + dayOffsetFromToday).coerceIn(1, matchedBinding.episodes.size)
-                } else null
-                val ep = if (targetDay != null) {
-                    matchedBinding.episodes.firstOrNull { it.dayNumber == targetDay } ?: matchedBinding.currentEpisode()
-                } else {
-                    BookCampManager.resolveVerifiedCampEpisodeForTask(
-                        context = context,
-                        subject = subject,
-                        topic = rawTopic,
-                        taskTitle = planTask?.title.orEmpty(),
-                        dayHint = dayIso,
-                        libraryResources = libraryResources,
-                        preferredResource = matchedResource,
-                        studentTopicGoals = topicGoals
-                    )?.second ?: matchedBinding.currentEpisode()
-                }
-                if (ep.videoId.length == 11 || ep.playlistId.isNotBlank()) {
-                    matchedBinding.campTitle to ep
-                } else null
-            }
-            else -> BookCampManager.resolveVerifiedCampEpisodeForTask(
+        val isVideoAllowedForNode = matchedResource != null &&
+            matchedAssignment != null &&
+            !matchedAssignment.videoDisabled &&
+            matchedAssignment.role != BookCoachingRole.PASSIVE &&
+            !isExplicitPracticeOrReview
+
+        val matchedBinding = if (isVideoAllowedForNode && matchedResource != null) {
+            BookCampManager.resolveCampForResource(context, matchedResource, topicGoals)
+        } else null
+
+        val verifiedVideo: Pair<String, CampDayEpisode>? = if (
+            isVideoAllowedForNode &&
+            matchedBinding != null &&
+            matchedBinding.hasVerifiedVideoSupport
+        ) {
+            val coreTopicForMatch = PlanProgressAuditor.extractCoreTopicName(rawTopic)
+            val resolved = BookCampManager.resolveVerifiedCampEpisodeForTask(
                 context = context,
                 subject = subject,
-                topic = rawTopic,
+                topic = coreTopicForMatch,
                 taskTitle = planTask?.title.orEmpty(),
                 dayHint = dayIso,
-                libraryResources = libraryResources,
+                libraryResources = listOfNotNull(matchedResource),
                 preferredResource = matchedResource,
                 studentTopicGoals = topicGoals
             )
-        }
+            val ep = resolved?.second ?: matchedBinding.currentEpisode()
+            if (ep.videoId.length == 11 || ep.playlistId.isNotBlank()) {
+                matchedBinding.campTitle to ep
+            } else null
+        } else null
 
-        // Preserve exact real playlist topic when coming from a real playlist; otherwise apply mastery gatekeeping
         val topic = if (matchedBinding?.isFromRealPlaylist == true && verifiedVideo != null) {
             verifiedVideo.second.topicTitle.ifBlank { rawTopic }
         } else {
-            BookCampManager.enforcePrerequisiteFoundationGate(
-                subject = subject,
-                requestedTopic = rawTopic,
-                studentTopicGoals = topicGoals
-            ).effectiveTopic
+            val coreOnly = PlanProgressAuditor.extractCoreTopicName(rawTopic)
+            if (rawTopic.contains("[") || rawTopic.contains(":")) rawTopic else {
+                BookCampManager.enforcePrerequisiteFoundationGate(
+                    subject = subject,
+                    requestedTopic = coreOnly,
+                    studentTopicGoals = topicGoals
+                ).effectiveTopic
+            }
         }
 
         val baseKey = planTask?.id ?: "day_${dayIso}_block_${blockIdx}_${subject}"
         val fallbackEpisode = verifiedVideo?.second ?: CampDayEpisode(dayNumber = dayIso, topicTitle = topic)
         val effectiveCampTitle = verifiedVideo?.first ?: matchedResource?.title?.ifBlank { subject } ?: subject
 
-        // Node 1 (ONLY when verified real video support exists for this book/task!)
+        // Node 1 (ONLY when this is a video-enabled concept book with a real verified YouTube playlist!)
         if (verifiedVideo != null) {
             val (campTitle, episode) = verifiedVideo
             val videoNodeId = "${baseKey}_video"
@@ -3073,14 +3078,15 @@ private fun buildDuolingoDayNodes(
             )
         }
 
-        // Practice Focus & Active Book Unit Step (ALWAYS clearly displays the book title!)
+        // Node 2: Practice / Revision / Focus Step (ALWAYS displays the exact assigned book & role!)
         val practiceNodeId = "${baseKey}_practice"
         val qCount = planTask?.targetQuestions ?: 35
+        val roleTag = matchedAssignment?.formattedBadge()?.let { "[$it] " }.orEmpty()
         val resourceSubtitle = if (matchedResource != null) {
             val progressStr = if (matchedResource.totalUnits > 0) {
                 " (${matchedResource.completedUnits}/${matchedResource.totalUnits} ${matchedResource.unitType})"
             } else ""
-            "Kitap: ${matchedResource.title} • $qCount Soru$progressStr"
+            "$roleTag${matchedResource.title} • $qCount Soru$progressStr"
         } else {
             "$qCount Soru Çözümü & Odak Oturumu"
         }
@@ -3101,12 +3107,12 @@ private fun buildDuolingoDayNodes(
             )
         )
 
-        // Mini Control / Error Review Step
+        // Node 3: Mini Control / Error Consolidation Step
         val reviewNodeId = "${baseKey}_review"
         val reviewSubtitle = if (matchedResource != null) {
             "${matchedResource.title} • Püf Noktaları & Hata Kontrolü"
         } else {
-            "ÖSYM Püf Noktaları & Hata Pekiştirme"
+            "Püf Noktaları & Hata Bankası Kontrolü"
         }
         nodes.add(
             DuolingoPathNode(
@@ -3137,14 +3143,23 @@ data class BalancedPlanTaskSpec(
     val isCarryOver: Boolean = false
 )
 
+private data class PendingSameWeekPractice(
+    val subject: String,
+    val topic: String,
+    val bookTitle: String,
+    val minDayPosition: Int
+)
+
 /**
- * Pure deterministic balanced 7-day multi-subject plan builder:
- * - Spreads blocks evenly across ALL 7 days (1..7) — never dumps onto Sunday.
- * - Strictly respects weekday/weekend target minutes (e.g. 12h weekday = 8x90m, 15h weekend = 10x90m).
- * - Carries forward ALL [incompleteCarryOverTasks] FIRST so cumulative learning foundations are never skipped.
- * - Excludes already [completedTasks] (unless mastery is still weak <= 2/5) so completed work is never mindlessly repeated.
- * - Rotates across all available books/topics/exam subjects so no single subject floods a day/week.
- * - Uses ONLY flexible duration labels ("Esnek • 90 dk") — zero rigid clock ranges!
+ * Mark 67 Pedagogical Multi-Role 7-Day Plan Builder:
+ * 1. STRICTLY EXCLUDES `PASSIVE` books from planning.
+ * 2. Priority 1: Carries forward incomplete tasks from previous week FIRST (cumulative foundation protection).
+ * 3. Priority 2: Schedules due `1-3-7` & `Aylık` spaced repetition reviews from [coachLedger] paired with
+ *    each subject's `REVISION_BOOK` (#1, #2, #3...) and noting linked Error Bank question counts.
+ * 4. Priority 3: Schedules pending same-week `PRIMARY_PRACTICE` reinforcement for topics already learned via concept/video.
+ * 5. Priority 4: Teaches new unlearned topics using `#1 CONCEPT_VIDEO` AND automatically pairs a SAME-WEEK
+ *    reinforcement block from `#1 PRIMARY_PRACTICE` 1–2 days later — never letting a video book flood the week!
+ * 6. Uses ONLY flexible duration labels ("Esnek • 90 dk") — zero rigid clock ranges!
  */
 fun buildBalancedMultiDayPlanSpecs(
     weekdayMinutes: Int,
@@ -3154,15 +3169,33 @@ fun buildBalancedMultiDayPlanSpecs(
     examType: String,
     completedTasks: List<PlanTaskAuditItem> = emptyList(),
     incompleteCarryOverTasks: List<PlanTaskAuditItem> = emptyList(),
-    startDayIso: Int = 1
+    startDayIso: Int = 1,
+    bookAssignments: Map<Long, BookCoachingAssignment> = emptyMap(),
+    coachLedger: AiCoachLedger = AiCoachLedger(),
+    todayEpochDay: Long = LocalDate.now().toEpochDay(),
+    verifiedVideoBindings: Map<Long, ResourceCampBinding> = emptyMap()
 ): List<BalancedPlanTaskSpec> {
     val safeWd = weekdayMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
     val safeWe = weekendMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
+    val verifiedVideoIds = verifiedVideoBindings.filterValues { it.hasVerifiedVideoSupport }.keys
 
-    // Collect distinct subjects from incomplete carry-over tasks + student's books + weak topics + exam defaults
+    // Filter out deleted and PASSIVE books completely!
+    val activeBookPairs = libraryResources
+        .filter { !it.isDeleted }
+        .map { res ->
+            res to BookCoachingRoleManager.resolveAssignment(res, bookAssignments, res.id in verifiedVideoIds)
+        }
+        .filter { (_, assign) -> assign.role != BookCoachingRole.PASSIVE }
+    val activeResources = activeBookPairs.map { it.first }
+
+    // Collect distinct subjects from incomplete carry-overs + due 1-3-7 reviews + active (non-passive) books + weak topics
     val subjectPool = LinkedHashSet<String>()
     incompleteCarryOverTasks.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
-    libraryResources.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
+    val dueReviews = AiCoachLedgerManager.getDueReviewTopics(coachLedger, horizonEndEpochDay = todayEpochDay + 6L)
+    dueReviews.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
+    val pendingPracticeFromLedger = AiCoachLedgerManager.getTopicsNeedingSameWeekPractice(coachLedger)
+    pendingPracticeFromLedger.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
+    activeResources.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
     topicGoals
         .sortedBy { it.currentLevel }
         .forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
@@ -3178,7 +3211,7 @@ fun buildBalancedMultiDayPlanSpecs(
     }
     val subjects = subjectPool.toList()
 
-    // Interleave incomplete carry-over tasks across subjects (canonical order inside each subject)
+    // Priority 1: Interleave incomplete carry-over tasks across subjects (canonical order inside each subject)
     val carryOverBuckets = incompleteCarryOverTasks
         .distinctBy { "${PlanProgressAuditor.normalizeTrKey(it.subject)}_${PlanProgressAuditor.normalizeTrKey(PlanProgressAuditor.extractCoreTopicName(it.topic))}" }
         .groupBy { it.subject.trim() }
@@ -3203,7 +3236,34 @@ fun buildBalancedMultiDayPlanSpecs(
         "${PlanProgressAuditor.normalizeTrKey(it.subject)}_${PlanProgressAuditor.normalizeTrKey(PlanProgressAuditor.extractCoreTopicName(it.topic))}"
     }.toHashSet()
 
-    // Prepare topic queues per subject (weak topics first, ordered canonically, excluding already completed tasks!)
+    // Priority 2: Due 1-3-7 & Monthly Review Queue (assigned to target day position 0..6)
+    val dueReviewByDayPos = HashMap<Int, ArrayDeque<TopicLifecycleRecord>>()
+    val scheduledReviewKeys = HashSet<String>()
+    dueReviews.forEach { rec ->
+        val key = "${PlanProgressAuditor.normalizeTrKey(rec.subject)}_${PlanProgressAuditor.normalizeTrKey(rec.topic)}"
+        if (!carryOverKeys.contains(key) && scheduledReviewKeys.add(key)) {
+            val dayPos = (rec.nextReviewEpochDay - todayEpochDay).toInt().coerceIn(0, 6)
+            dueReviewByDayPos.getOrPut(dayPos) { ArrayDeque() }.addLast(rec)
+        }
+    }
+
+    // Priority 3: Same-Week Primary Practice Queue (seeded from ledger topics already learned via concept/video)
+    val sameWeekPracticeQueue = mutableListOf<PendingSameWeekPractice>()
+    pendingPracticeFromLedger.forEach { rec ->
+        val primaryBook = BookCoachingRoleManager.getPrimaryPracticeBooksForSubject(
+            rec.subject, activeResources, bookAssignments, verifiedVideoIds
+        ).firstOrNull()?.first
+        sameWeekPracticeQueue.add(
+            PendingSameWeekPractice(
+                subject = rec.subject,
+                topic = rec.topic,
+                bookTitle = primaryBook?.title.orEmpty(),
+                minDayPosition = 0
+            )
+        )
+    }
+
+    // Priority 4: Fresh topic queues per subject (excluding carry-overs, due reviews, completed strong topics, AND already concept-learned topics in ledger!)
     val topicQueueBySubject = subjects.associateWith { subj ->
         val weakForSubj = topicGoals
             .filter { !it.isDeleted && it.subject.equals(subj, ignoreCase = true) && it.currentLevel <= 3 }
@@ -3217,6 +3277,8 @@ fun buildBalancedMultiDayPlanSpecs(
         val nonRepeated = mergedAll.filter { candidate ->
             val key = "${PlanProgressAuditor.normalizeTrKey(subj)}_${PlanProgressAuditor.normalizeTrKey(candidate)}"
             !carryOverKeys.contains(key) &&
+                !scheduledReviewKeys.contains(key) &&
+                !AiCoachLedgerManager.isTopicAlreadyConceptLearned(subj, candidate, coachLedger) &&
                 !PlanProgressAuditor.isTopicAlreadyCompletedInPlan(
                     subject = subj,
                     topic = candidate,
@@ -3224,21 +3286,23 @@ fun buildBalancedMultiDayPlanSpecs(
                     topicGoals = topicGoals
                 )
         }
-        val effectiveList = when {
+        when {
             nonRepeated.isNotEmpty() -> nonRepeated
-            mergedAll.isNotEmpty() -> mergedAll
+            mergedAll.isNotEmpty() -> mergedAll.filterNot { candidate ->
+                PlanProgressAuditor.isTopicAlreadyCompletedInPlan(subj, candidate, completedTasks, topicGoals)
+            }.ifEmpty { mergedAll }
             else -> listOf("$subj Yeni Adım & Soru Çözümü", "$subj Pekiştirme", "$subj Genel Deneme")
         }
-        effectiveList
     }
 
     val cursorBySubject = HashMap<String, Int>()
+    val conceptBlocksThisWeekBySubj = HashMap<String, Int>()
     val result = mutableListOf<BalancedPlanTaskSpec>()
     var globalSlot = 0
     val safeStartDay = startDayIso.coerceIn(1, 7)
     val orderedDays = (0..6).map { offset -> ((safeStartDay - 1 + offset) % 7) + 1 }
 
-    for (day in orderedDays) {
+    for ((dayPos, day) in orderedDays.withIndex()) {
         val isWeekend = day == 6 || day == 7
         val dayTargetMins = if (isWeekend) safeWe else safeWd
         val blockCount = (dayTargetMins / 90).coerceIn(2, 11)
@@ -3246,6 +3310,7 @@ fun buildBalancedMultiDayPlanSpecs(
         val flexLabel = "Esnek • $minsPerBlock dk"
 
         for (slotIdx in 0 until blockCount) {
+            // Tier 1: Incomplete carry-over tasks FIRST
             if (carryOverQueue.isNotEmpty()) {
                 val missed = carryOverQueue.removeFirst()
                 val rawCoreTopic = PlanProgressAuditor.extractCoreTopicName(missed.topic)
@@ -3254,10 +3319,12 @@ fun buildBalancedMultiDayPlanSpecs(
                     requestedTopic = rawCoreTopic,
                     studentTopicGoals = topicGoals
                 ).effectiveTopic
-                val matchingBook = libraryResources.firstOrNull {
-                    it.subject.equals(missed.subject, ignoreCase = true) ||
-                        it.subject.contains(missed.subject.substringAfterLast(' '), ignoreCase = true)
-                }
+                val matchingBook = BookCoachingRoleManager.getPrimaryPracticeBooksForSubject(
+                    missed.subject, activeResources, bookAssignments, verifiedVideoIds
+                ).firstOrNull()?.first
+                    ?: BookCoachingRoleManager.getActiveBooksForSubject(
+                        missed.subject, activeResources, bookAssignments, verifiedVideoIds
+                    ).firstOrNull()?.first
                 val label = when {
                     missed.topic.contains(":") -> missed.topic.trim()
                     matchingBook != null -> "${matchingBook.title}: $gatedTopic"
@@ -3278,6 +3345,71 @@ fun buildBalancedMultiDayPlanSpecs(
                 continue
             }
 
+            // Tier 2: Due 1-3-7 & Monthly Reviews scheduled for today (or carried forward from earlier dayPos if full)
+            val readyReviewBucket = (0..dayPos).firstOrNull { pos -> dueReviewByDayPos[pos]?.isNotEmpty() == true }
+            if (readyReviewBucket != null) {
+                val rev = dueReviewByDayPos[readyReviewBucket]!!.removeFirst()
+                val revisionBooks = BookCoachingRoleManager.getRevisionBooksForSubject(
+                    rev.subject, activeResources, bookAssignments, verifiedVideoIds
+                )
+                val primaryBooks = BookCoachingRoleManager.getPrimaryPracticeBooksForSubject(
+                    rev.subject, activeResources, bookAssignments, verifiedVideoIds
+                )
+                val chosenRevBook = when {
+                    revisionBooks.isNotEmpty() -> {
+                        val idx = (rev.repetitionCycle - 1).coerceAtLeast(0) % revisionBooks.size
+                        revisionBooks[idx].first
+                    }
+                    primaryBooks.isNotEmpty() -> primaryBooks.first().first
+                    else -> null
+                }
+                val errNote = if (rev.linkedErrorCount > 0) " • Hata Bankası: ${rev.linkedErrorCount} soru" else ""
+                val tag = "[${rev.currentIntervalLabel()}$errNote]"
+                val label = if (chosenRevBook != null) {
+                    "${chosenRevBook.title}: ${rev.topic} $tag"
+                } else {
+                    "${rev.subject}: ${rev.topic} $tag"
+                }
+                val qCount = (25 + rev.linkedErrorCount).coerceIn(25, 45)
+                result.add(
+                    BalancedPlanTaskSpec(
+                        dayOfWeek = day,
+                        subject = rev.subject,
+                        topicLabel = label,
+                        flexibleTimeLabel = flexLabel,
+                        targetQuestions = qCount,
+                        isCarryOver = false
+                    )
+                )
+                globalSlot++
+                continue
+            }
+
+            // Tier 3: Same-Week Primary Practice Reinforcement (pairs concept learned earlier this week with #1 PRIMARY_PRACTICE book!)
+            val readyPracticeIdx = sameWeekPracticeQueue.indexOfFirst { it.minDayPosition <= dayPos }
+            if (readyPracticeIdx >= 0) {
+                val pending = sameWeekPracticeQueue.removeAt(readyPracticeIdx)
+                val label = if (pending.bookTitle.isNotBlank()) {
+                    "${pending.bookTitle}: ${pending.topic} [Soru Pekiştirme]"
+                } else {
+                    "${pending.subject}: ${pending.topic} [Soru Pekiştirme]"
+                }
+                val qCount = if (minsPerBlock >= 90) 40 else 30
+                result.add(
+                    BalancedPlanTaskSpec(
+                        dayOfWeek = day,
+                        subject = pending.subject,
+                        topicLabel = label,
+                        flexibleTimeLabel = flexLabel,
+                        targetQuestions = qCount,
+                        isCarryOver = false
+                    )
+                )
+                globalSlot++
+                continue
+            }
+
+            // Tier 4: Balanced New Topic Progression across subjects using assigned Book Roles
             val subj = subjects[(globalSlot + day - 1) % subjects.size]
             globalSlot++
             val topicList = topicQueueBySubject[subj].orEmpty()
@@ -3290,16 +3422,64 @@ fun buildBalancedMultiDayPlanSpecs(
                 studentTopicGoals = topicGoals
             ).effectiveTopic
 
-            val matchingBook = libraryResources.firstOrNull {
-                it.subject.equals(subj, ignoreCase = true) ||
-                    it.subject.contains(subj.substringAfterLast(' '), ignoreCase = true)
+            val conceptBook = BookCoachingRoleManager.getConceptBookForSubject(
+                subj, activeResources, bookAssignments, verifiedVideoIds
+            )?.first
+            val primaryBooks = BookCoachingRoleManager.getPrimaryPracticeBooksForSubject(
+                subj, activeResources, bookAssignments, verifiedVideoIds
+            ).map { it.first }
+            val mockBooks = BookCoachingRoleManager.getBooksByRoleForSubject(
+                subj, BookCoachingRole.MOCK_EXAM, activeResources, bookAssignments, verifiedVideoIds
+            ).map { it.first }
+
+            val conceptUsedCount = conceptBlocksThisWeekBySubj[subj] ?: 0
+            val shouldScheduleWeekendMock = isWeekend && mockBooks.isNotEmpty() && slotIdx == blockCount - 1
+            val shouldTeachNewConcept = conceptBook != null &&
+                !shouldScheduleWeekendMock &&
+                dayPos < 6 && // leave day 7 free for reinforcement/review so every concept gets same-week practice!
+                (primaryBooks.isEmpty() || conceptUsedCount < 2)
+
+            val label: String
+            val qCount: Int
+            when {
+                shouldScheduleWeekendMock -> {
+                    val mockBook = mockBooks[curIdx % mockBooks.size]
+                    label = "${mockBook.title}: $subj Branş Denemesi [Deneme]"
+                    qCount = 40
+                }
+                shouldTeachNewConcept && conceptBook != null -> {
+                    conceptBlocksThisWeekBySubj[subj] = conceptUsedCount + 1
+                    label = "${conceptBook.title}: $gatedTopic [Konu Anlatım]"
+                    qCount = if (minsPerBlock >= 90) 25 else 20
+                    // AUTOMATICALLY pair SAME-WEEK reinforcement questions from #1 PRIMARY_PRACTICE book 1-2 days later!
+                    if (primaryBooks.isNotEmpty()) {
+                        sameWeekPracticeQueue.add(
+                            PendingSameWeekPractice(
+                                subject = subj,
+                                topic = gatedTopic,
+                                bookTitle = primaryBooks.first().title,
+                                minDayPosition = (dayPos + 1).coerceAtMost(6)
+                            )
+                        )
+                    }
+                }
+                primaryBooks.isNotEmpty() -> {
+                    val chosenPrimary = primaryBooks[curIdx % primaryBooks.size]
+                    label = "${chosenPrimary.title}: $gatedTopic"
+                    qCount = if (minsPerBlock >= 90) 40 else 30
+                }
+                else -> {
+                    val fallbackBook = BookCoachingRoleManager.getActiveBooksForSubject(
+                        subj, activeResources, bookAssignments, verifiedVideoIds
+                    ).firstOrNull()?.first
+                    label = if (fallbackBook != null) {
+                        "${fallbackBook.title}: $gatedTopic"
+                    } else {
+                        "$subj: $gatedTopic"
+                    }
+                    qCount = if (minsPerBlock >= 90) 40 else 30
+                }
             }
-            val label = if (matchingBook != null) {
-                "${matchingBook.title}: $gatedTopic"
-            } else {
-                "$subj: $gatedTopic"
-            }
-            val qCount = if (minsPerBlock >= 90) 40 else 30
 
             result.add(
                 BalancedPlanTaskSpec(
@@ -3319,8 +3499,9 @@ fun buildBalancedMultiDayPlanSpecs(
 /**
  * Rebuilds/rebalances the student's flexible 7-day study plan using the FRESHEST Room data:
  * - Audits all completed vs. incomplete tasks via [PlanProgressAuditor].
- * - Carries forward ALL incomplete/missed tasks first (protecting cumulative prerequisites).
- * - Excludes already completed tasks from mindless repetition.
+ * - Syncs Error Bank & updates the hidden per-UID [AiCoachLedgerManager] (weekly snapshot + monthly rollup).
+ * - Applies each book's explicit [BookCoachingRole] & priority (`CONCEPT_VIDEO`, `PRIMARY_PRACTICE`, `REVISION_BOOK`, `MOCK_EXAM`, excluding `PASSIVE`).
+ * - Weaves due `1-3-7` & `Aylık` spaced repetition reviews + same-week practice pairs automatically.
  * - Syncs atomically to `planDao`, `studyPlanDao`, Firestore (`PlanRepositoryImpl`), and encrypted `StudentDossierManager`.
  */
 suspend fun rebalanceWeeklyPlanWithAiCoach(
@@ -3332,6 +3513,10 @@ suspend fun rebalanceWeeklyPlanWithAiCoach(
     targetContext: StudentTargetContext = CoachingEngine.targetContext.value
 ): Int = withContext(Dispatchers.IO) {
     CoachingEngine.ensureInitialized(context)
+    BookCampManager.ensureLoaded(context)
+    BookCoachingRoleManager.ensureLoaded(context)
+    AiCoachLedgerManager.ensureLoaded(context)
+
     val planDao = db.planDao()
     val planRepo = PlanRepositoryImpl(planDao, db.pendingDeletionDao())
 
@@ -3344,6 +3529,20 @@ suspend fun rebalanceWeeklyPlanWithAiCoach(
         .ifEmpty { topicGoals }
     val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
     val audit = PlanProgressAuditor.captureFromDatabase(context, todayIsoDay = todayIso)
+
+    // Sync Error Bank & record weekly coaching snapshot + monthly archive rollup into hidden AI Coaching Ledger
+    val assignments = BookCoachingRoleManager.assignmentsByResourceId.value
+    val verifiedBindings = BookCampManager.bindingsByResourceId.value
+    val verifiedIds = verifiedBindings.filterValues { it.hasVerifiedVideoSupport }.keys
+    val activeBookTitles = freshResources
+        .filter { !it.isDeleted }
+        .filter { BookCoachingRoleManager.resolveAssignment(it, assignments, it.id in verifiedIds).role != BookCoachingRole.PASSIVE }
+        .map { it.title }
+    val updatedLedger = AiCoachLedgerManager.recordWeeklySnapshotAndRollup(
+        context = context,
+        audit = audit,
+        booksUsed = activeBookTitles
+    )
 
     val folders = planDao.getAllFoldersSync()
     val activeFolder = folders.firstOrNull() ?: PlanFolderEntity(
@@ -3368,7 +3567,11 @@ suspend fun rebalanceWeeklyPlanWithAiCoach(
         examType = effectiveExamType,
         completedTasks = audit.completedTasks,
         incompleteCarryOverTasks = audit.incompleteTasks,
-        startDayIso = startDay
+        startDayIso = startDay,
+        bookAssignments = assignments,
+        coachLedger = updatedLedger,
+        todayEpochDay = LocalDate.now().toEpochDay(),
+        verifiedVideoBindings = verifiedBindings
     )
 
     val generated = specs.mapIndexed { idx, spec ->
@@ -3395,9 +3598,9 @@ suspend fun rebalanceWeeklyPlanWithAiCoach(
         id = "CURRENT_ACTIVE_PLAN",
         title = activeFolder.title,
         strategyNote = if (audit.incompleteCount > 0) {
-            "${audit.incompleteCount} eksik görev öncelikli devredildi, tamamlananlar tekrar edilmeden esnek 7 günlük plan kurgulandı."
+            "${audit.incompleteCount} eksik görev devredildi; kitap rolleri ve 1-3-7 tekrar takvimine göre esnek 7 günlük plan kurgulandı."
         } else {
-            "Güncel konu hakimiyeti ve kitap ilerlemesine göre esnek 7 günlük plan kurgulandı."
+            "Kitap rolleri, güncel konu hakimiyeti ve 1-3-7 tekrar takvimine göre esnek 7 günlük plan kurgulandı."
         },
         totalTargetQuestions = generated.sumOf { it.targetQuestions },
         updatedAtTimestamp = System.currentTimeMillis()

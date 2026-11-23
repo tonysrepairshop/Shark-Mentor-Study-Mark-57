@@ -364,6 +364,23 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     }
                 }.getOrDefault("")
 
+                val mark67CoachingContext = runCatching {
+                    com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(appCtx)
+                    com.example.sharkmentor.core.coaching.BookCoachingRoleManager.ensureLoaded(appCtx)
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ensureLoaded(appCtx)
+                    val allResources = database.goalsDao().getAllResourcesRaw()
+                    val verifiedIds = com.example.sharkmentor.core.coaching.BookCampManager.bindingsByResourceId.value
+                        .filterValues { it.hasVerifiedVideoSupport }.keys
+                    val rolesPrompt = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.buildAiBookRolesPrompt(
+                        resources = allResources,
+                        assignments = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.assignmentsByResourceId.value,
+                        verifiedVideoResourceIds = verifiedIds
+                    )
+                    val syncedLedger = com.example.sharkmentor.core.coaching.AiCoachLedgerManager.syncWithErrorBank(appCtx)
+                    val ledgerPrompt = com.example.sharkmentor.core.coaching.AiCoachLedgerManager.buildAiLedgerPrompt(syncedLedger)
+                    listOf(rolesPrompt, ledgerPrompt).filter { it.isNotBlank() }.joinToString("\n\n")
+                }.getOrDefault("")
+
                 val wdGoalMins = com.example.sharkmentor.core.coaching.CoachingEngine.weekdayGoalMinutes.value
                 val weGoalMins = com.example.sharkmentor.core.coaching.CoachingEngine.weekendGoalMinutes.value
                 val wdBlocksTarget = (wdGoalMins / 90).coerceIn(2, 10)
@@ -372,9 +389,11 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 // 2. System Instruction
                 val systemPrompt = """
                     Sen SharkMentor'un kıdemli pedagojik planlama motorusun.
-                    GÖREV: Öğrencinin konu yetkinliklerine, anonim öğrenci dosyasına, mevcut plan tamamlama/eksik denetimine, hedef üniversite/bölüm/sıralama pusulasına ve seçtiği günlük çalışma saatine dayanarak 7 günlük (Pazartesi=1 .. Pazar=7) dengeli ve esnek çalışma planı hazırla.
+                    GÖREV: Öğrencinin konu yetkinliklerine, anonim öğrenci dosyasına, ders bazlı kitap rollerine, 1-3-7/Aylık tekrar takvimine, mevcut plan tamamlama/eksik denetimine, hedef üniversite/bölüm/sıralama pusulasına ve seçtiği günlük çalışma saatine dayanarak 7 günlük (Pazartesi=1 .. Pazar=7) dengeli ve esnek çalışma planı hazırla.
 
                     $targetCompassPrompt
+
+                    $mark67CoachingContext
 
                     ÖĞRENCİNİN KİLİTLİ OKUL/DERS SAATLERİ (Yalnızca yoğunluk dengelemesi için referans):
                     $scheduleConstraintsPrompt
@@ -383,15 +402,17 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     1. ESNEK SÜRE ZORUNLULUĞU: 'timeSlot' alanına ASLA '09:00 - 10:30' veya '10:00 - 11:30' gibi katı saat aralığı YAZMA! Her görev için yalnızca esnek süre etiketi yaz: örn. "Esnek • 90 dk", "Esnek • 60 dk", "Esnek • 75 dk". Öğrenci gün içinde kendi müsait anında esnek olarak tamamlayabilsin.
                     2. SEÇİLEN HEDEF SAATİNE MUTLAK SAYGI: Öğrencinin günlük hedefi hafta içi ${wdGoalMins / 60} saat (~$wdBlocksTarget etüt bloğu), hafta sonu ${weGoalMins / 60} saat (~$weBlocksTarget etüt bloğu). Bu saat hedefini ASLA sessizce 4-5 saate düşürme!
                     3. 7 GÜN & ÇOKLU DERS DENGESİ: Görevleri Pazartesi'den Pazar'a (1..7) tüm haftaya dengeli dağıt. Görevleri ASLA tek güne (örn. sadece Pazar) veya tek derse (örn. sadece Kimya) yığma! Her gün en az 2-3 farklı ders dengesi kur.
-                    4. KÜMÜLATİF EKSİK DEVRİ VE TEKRAR YASAĞI:
-                       - 'incompleteCarryOverTasks' listesindeki tamamlanmamış/eksik görevleri ASLA yapılmış varsayma; temel eksiklik kalmaması için yeni haftanın ilk günlerine (Gün 1-3) öncelikli olarak devret.
-                       - 'completedPlanTasks' listesindeki tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) yeni plana tekrar tekrar yazma; ilerleyen konulara geç.
+                    4. KÜMÜLATİF EKSİK DEVRİ, KİTAP ROLLERİ VE 1-3-7 TEKRAR DİSİPLİNİ:
+                       - 'incompleteCarryOverTasks' listesindeki tamamlanmamış/eksik görevleri yeni haftanın ilk günlerine (Gün 1-3) öncelikli devret.
+                       - Yeni bir konuyu o dersin #1 Konu/Video kaynağından verip AYNI HAFTA içinde #1 İlerleme/Soru kaynağından soru pekiştirmesi ekle (asla tüm haftayı tek video kitabıyla sorusuz doldurma).
+                       - Vadesi gelen 1-3-7 ve Aylık tekrarları o dersin Tekrar Kaynakları (#1, #2, #3...) ve Hata Bankası soruları ile plana yerleştir.
+                       - PASİF kitapları plana ASLA yazma; daha önce öğrenilmiş/tamamlanmış konuları (hakimiyet > 2/5) sıfırdan konu anlatımı gibi tekrar tekrar yazma.
 
                     EK KURALLAR (Müfredat Bütünlüğü, Ön Koşul Zemini ve Eksik Konu Takibi):
                     - MÜFREDAT SIRALAMASI VE DERS BÜTÜNLÜĞÜ: Konuları ders içindeki pedagojik sırasına göre diz. Asla ilk güne Fonksiyonlar veya Limit'ten önce Türev/İntegral yazma.
                     - EKSİK KONUNUN PEŞİNİ BIRAKMA: Konu hakimiyetinde seviyesi 1 veya 2 olan zayıf konulara hafta içinde birden fazla etüt bloğu vererek ağırlık tanı.
                     - ZEMİN OTURTMADAN GEÇİRTME: Temel ön koşul konunun hakimiyeti düşükse ileri konuyu yazma, önce ön koşulu sağlamlaştır.
-                    - Her çalışma bloğunda net konu başlığı ve minimum 30 soru hedefi belirt.
+                    - Her çalışma bloğunda kitap adı + net konu başlığı ve uygun soru hedefi belirt.
 
                     ÇIKTI FORMATI:
                     Yalnızca belirtilen JSON şemasında çıktı ver. Fazlalık metin ekleme.
@@ -402,22 +423,34 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                         {
                           "dayOfWeek": 1,
                           "timeSlot": "Esnek • 90 dk",
-                          "subject": "Matematik",
-                          "topic": "Fonksiyonlar",
-                          "targetQuestions": 40,
-                          "focusStrategy": "Konu Pekiştirme ve Hata Çözümü"
+                          "subject": "AYT Kimya",
+                          "topic": "Ferrum AYT Kimya: Modern Atom Teorisi [Konu Anlatım]",
+                          "targetQuestions": 25,
+                          "focusStrategy": "Konu Anlatım ve Aynı Hafta Pekiştirme"
                         }
                       ]
                     }
                 """.trimIndent()
 
-                // 3. Prepare payload context with FULL structured completed vs incomplete carry-over lists
+                val dueReviewsPayload = com.example.sharkmentor.core.coaching.AiCoachLedgerManager.getDueReviewTopics(
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ledger.value
+                ).take(16).map { rec ->
+                    mapOf(
+                        "subject" to rec.subject,
+                        "topic" to rec.topic,
+                        "interval" to rec.currentIntervalLabel(),
+                        "linkedErrorCount" to rec.linkedErrorCount
+                    )
+                }
+
+                // 3. Prepare payload context with FULL structured completed vs incomplete carry-over + 1-3-7 due reviews
                 val promptPayload = mapOf(
                     "userGoal" to activeGoal,
                     "weekdayTargetMinutes" to wdGoalMins,
                     "weekendTargetMinutes" to weGoalMins,
                     "competencies" to prunedCompetencies,
                     "planCompletionPercent" to effectivePlanAudit.completionPercent,
+                    "dueSpacedRepetitionReviews" to dueReviewsPayload,
                     "incompleteCarryOverTasks" to effectivePlanAudit.incompleteTasks.take(40).map {
                         mapOf(
                             "dayOfWeek" to it.dayOfWeek,
@@ -582,6 +615,13 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 _activePlans.value = newlyCreatedPlanItems
                 batch.commit().await()
 
+                runCatching {
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.recordWeeklySnapshotAndRollup(
+                        context = appCtx,
+                        audit = effectivePlanAudit,
+                        summaryNote = parsedResponse.weeklyFocusSummary
+                    )
+                }
                 com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(appCtx)
                 com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(appCtx)
                 com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(appCtx)

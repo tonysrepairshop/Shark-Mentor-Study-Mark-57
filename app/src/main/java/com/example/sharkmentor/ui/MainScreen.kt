@@ -239,6 +239,8 @@ fun MainScreen(
             com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).clearSessionProfile()
             com.example.sharkmentor.data.repository.StreakRepository(context).clearLocalForLogout()
             com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context).clearLocalForLogout()
+            com.example.sharkmentor.core.coaching.BookCoachingRoleManager.clearInMemoryForLogout()
+            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.clearInMemoryForLogout()
             com.example.sharkmentor.core.util.SessionManager.setLinkedToInstitution(context, false)
             com.example.sharkmentor.core.util.SessionManager.setUserMode(context, "study")
             navController.navigate(Screen.Login.route) {
@@ -575,6 +577,10 @@ fun MainScreen(
                                         runCatching {
                                             com.example.sharkmentor.data.repository.CountdownRepository.getInstance(context)
                                                 .pullAndMergeFromCloud()
+                                        }
+                                        runCatching {
+                                            com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pullFromCloudIfNewer(context)
+                                            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pullFromCloudIfNewer(context)
                                         }
                                         runCatching {
                                             com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(context)

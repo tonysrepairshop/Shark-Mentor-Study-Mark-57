@@ -40,11 +40,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.sharkmentor.ui.viewmodel.GoalsViewModel
 import com.example.sharkmentor.ui.viewmodel.SubjectFolderUiModel
 import com.example.sharkmentor.ui.components.AddConcreteTargetDialog
+import com.example.sharkmentor.core.coaching.AiCoachLedgerManager
 import com.example.sharkmentor.core.coaching.BookCampManager
+import com.example.sharkmentor.core.coaching.BookCoachingAssignment
+import com.example.sharkmentor.core.coaching.BookCoachingRole
+import com.example.sharkmentor.core.coaching.BookCoachingRoleManager
 import com.example.sharkmentor.core.coaching.CoachingEngine
+import com.example.sharkmentor.core.coaching.TopicStudyActionKind
 import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
 import com.example.sharkmentor.ui.coaching.ResourceCampConfigDialog
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.AutoGraph
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayCircleOutline
@@ -52,6 +59,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.ui.text.style.TextOverflow
 
 @Composable
@@ -81,6 +90,7 @@ fun GoalsScreen(
 
     LaunchedEffect(target) {
         CoachingEngine.refreshTargetAndLedgerAsync(context)
+        BookCoachingRoleManager.ensureLoaded(context)
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -333,6 +343,36 @@ fun GoalsScreen(
             }
         }
         if (currentModule == NavModule.LIBRARY) {
+            if (resources.isNotEmpty()) {
+                item(key = "library_role_guide_banner") {
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Tune,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Kitaba dokunarak Konu/Video, İlerleme #1, Tekrar #1 veya Pasif rolünü belirleyebilirsin.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
             items(
                 items = resources,
                 key = { "resource_${it.id}" },
@@ -527,27 +567,78 @@ fun ResourceCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    LaunchedEffect(resource.id, resource.title, resource.subject) {
-        BookCampManager.ensureLoaded(context)
-        val current = BookCampManager.resolveCampForResource(context, resource)
-        if (!current.videoCheckCompleted) {
-            BookCampManager.discoverAndSyncRealCampForResource(context, resource)
-        }
-    }
     val allBindings by BookCampManager.bindingsByResourceId.collectAsStateWithLifecycle()
+    val allAssignments by BookCoachingRoleManager.assignmentsByResourceId.collectAsStateWithLifecycle()
+
     val campBinding = remember(resource, allBindings) {
         BookCampManager.resolveCampForResource(context, resource)
+    }
+    val roleAssignment = remember(resource, allAssignments, campBinding.hasVerifiedVideoSupport) {
+        BookCoachingRoleManager.resolveAssignment(
+            resource = resource,
+            assignments = allAssignments,
+            hasVerifiedVideo = campBinding.hasVerifiedVideoSupport
+        )
+    }
+    val isPassive = roleAssignment.role == BookCoachingRole.PASSIVE
+    val isVideoBlocked = roleAssignment.videoDisabled || isPassive
+
+    LaunchedEffect(resource.id, resource.title, resource.subject, isVideoBlocked) {
+        BookCampManager.ensureLoaded(context)
+        BookCoachingRoleManager.ensureLoaded(context)
+        if (!isVideoBlocked) {
+            val current = BookCampManager.resolveCampForResource(context, resource)
+            if (!current.videoCheckCompleted) {
+                BookCampManager.discoverAndSyncRealCampForResource(context, resource)
+            }
+        }
     }
 
     var inputText by remember(resource.completedUnits) { mutableStateOf(resource.completedUnits.toString()) }
     var showEditDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showRoleDialog by remember { mutableStateOf(false) }
     var showCampConfigDialog by remember { mutableStateOf(false) }
     var showCampStudioDialog by remember { mutableStateOf(false) }
 
     val progressFraction = if (resource.totalUnits > 0) {
         (resource.completedUnits.toFloat() / resource.totalUnits.toFloat()).coerceIn(0f, 1f)
     } else 0f
+
+    if (showRoleDialog) {
+        BookRoleAssignmentDialog(
+            resource = resource,
+            initialAssignment = roleAssignment,
+            hasVerifiedVideo = campBinding.hasVerifiedVideoSupport,
+            onSave = { selectedRole, selectedPriority, videoOff ->
+                BookCoachingRoleManager.setAssignment(
+                    context = context,
+                    resource = resource,
+                    role = selectedRole,
+                    priorityOrder = selectedPriority,
+                    videoDisabled = videoOff
+                )
+                AiCoachLedgerManager.recordChatTakeawayInBackground(
+                    context = context,
+                    category = "BOOK",
+                    digest = "${resource.subject} - ${resource.title}: ${selectedRole.shortBadge} #$selectedPriority${if (videoOff) " (Videosuz)" else ""} olarak ayarlandı."
+                )
+                showRoleDialog = false
+            },
+            onOpenVideoConfig = { selectedRole, selectedPriority ->
+                BookCoachingRoleManager.setAssignment(
+                    context = context,
+                    resource = resource,
+                    role = selectedRole,
+                    priorityOrder = selectedPriority,
+                    videoDisabled = false
+                )
+                showRoleDialog = false
+                showCampConfigDialog = true
+            },
+            onDismiss = { showRoleDialog = false }
+        )
+    }
 
     if (showCampConfigDialog) {
         ResourceCampConfigDialog(
@@ -562,7 +653,7 @@ fun ResourceCard(
         )
     }
 
-    if (showCampStudioDialog && campBinding.hasVerifiedVideoSupport) {
+    if (showCampStudioDialog && campBinding.hasVerifiedVideoSupport && !isVideoBlocked) {
         val currentEp = campBinding.currentEpisode()
         CampVideoStudyStudioDialog(
             campTitle = campBinding.campTitle,
@@ -574,13 +665,25 @@ fun ResourceCard(
             },
             onMarkCompleted = { completedEp ->
                 BookCampManager.advanceCampDay(context, resource, targetDay = completedEp.dayNumber + 1)
+                AiCoachLedgerManager.recordTopicStudyInBackground(
+                    context = context,
+                    subject = resource.subject,
+                    topic = completedEp.mappedTopic.ifBlank { completedEp.topicTitle },
+                    actionKind = if (completedEp.isQuestionSolvingVideo) {
+                        TopicStudyActionKind.PRIMARY_PRACTICE
+                    } else {
+                        TopicStudyActionKind.CONCEPT_STUDY
+                    },
+                    bookTitle = resource.title,
+                    completedVideoId = completedEp.videoId
+                )
                 onIncrement()
                 showCampStudioDialog = false
             },
             onDismiss = { showCampStudioDialog = false }
         )
     }
-    
+
     if (showEditDialog) {
         AlertDialog(
             onDismissRequest = { showEditDialog = false },
@@ -640,6 +743,7 @@ fun ResourceCard(
                 TextButton(
                     onClick = {
                         showDeleteConfirm = false
+                        BookCoachingRoleManager.removeAssignment(context, resource.id)
                         onDelete()
                     }
                 ) {
@@ -655,35 +759,119 @@ fun ResourceCard(
     }
 
     Card(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        )
+            containerColor = if (isPassive) {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            } else {
+                MaterialTheme.colorScheme.surfaceContainer
+            }
+        ),
+        border = if (isPassive) {
+            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        } else null
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // Header: Title & Subject & Delete Action
+            // Header: Clickable to assign Book Role & Priority + Delete Action
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { showRoleDialog = true }
+                        .padding(end = 6.dp, bottom = 2.dp)
+                ) {
                     Text(
                         text = resource.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = if (isPassive) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                     )
                     Text(
                         text = resource.subject,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (isPassive) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val badgeContainer = when (roleAssignment.role) {
+                            BookCoachingRole.CONCEPT_VIDEO -> MaterialTheme.colorScheme.primaryContainer
+                            BookCoachingRole.PRIMARY_PRACTICE -> MaterialTheme.colorScheme.secondaryContainer
+                            BookCoachingRole.REVISION_BOOK -> MaterialTheme.colorScheme.tertiaryContainer
+                            BookCoachingRole.MOCK_EXAM -> MaterialTheme.colorScheme.surfaceContainerHighest
+                            BookCoachingRole.PASSIVE -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                        val badgeContent = when (roleAssignment.role) {
+                            BookCoachingRole.CONCEPT_VIDEO -> MaterialTheme.colorScheme.onPrimaryContainer
+                            BookCoachingRole.PRIMARY_PRACTICE -> MaterialTheme.colorScheme.onSecondaryContainer
+                            BookCoachingRole.REVISION_BOOK -> MaterialTheme.colorScheme.onTertiaryContainer
+                            BookCoachingRole.MOCK_EXAM -> MaterialTheme.colorScheme.onSurface
+                            BookCoachingRole.PASSIVE -> MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                        Surface(
+                            onClick = { showRoleDialog = true },
+                            shape = RoundedCornerShape(8.dp),
+                            color = badgeContainer,
+                            contentColor = badgeContent
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Tune,
+                                    contentDescription = "Kitap Rolünü Ayarla",
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = roleAssignment.formattedBadge(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+
+                        if (roleAssignment.videoDisabled && !isPassive) {
+                            Surface(
+                                onClick = { showRoleDialog = true },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.VideocamOff,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                    Text(
+                                        text = "Sadece Kitap",
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     if (resource.isAssignedByCoach) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Box(
@@ -692,8 +880,8 @@ fun ResourceCard(
                                 .background(
                                     androidx.compose.ui.graphics.Brush.horizontalGradient(
                                         listOf(
-                                            androidx.compose.ui.graphics.Color(0xFFFFCA28), // Amber 400
-                                            androidx.compose.ui.graphics.Color(0xFFFF9800)  // Orange 500
+                                            androidx.compose.ui.graphics.Color(0xFFFFCA28),
+                                            androidx.compose.ui.graphics.Color(0xFFFF9800)
                                         )
                                     ),
                                     RoundedCornerShape(4.dp)
@@ -725,14 +913,13 @@ fun ResourceCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (resource.totalUnits > 0) {
-                // Progress Bar
                 LinearProgressIndicator(
                     progress = { progressFraction },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp)
                         .clip(RoundedCornerShape(3.dp)),
-                    color = MaterialTheme.colorScheme.primary,
+                    color = if (isPassive) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
                     trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
                 )
 
@@ -764,13 +951,13 @@ fun ResourceCard(
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = if (isPassive) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Sayıyı Düzenle",
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = if (isPassive) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -793,9 +980,9 @@ fun ResourceCard(
                         Icon(
                             imageVector = Icons.Default.Remove,
                             contentDescription = "Azalt",
-                            tint = if (resource.completedUnits > 0) 
-                                MaterialTheme.colorScheme.onSurface 
-                            else 
+                            tint = if (resource.completedUnits > 0)
+                                MaterialTheme.colorScheme.onSurface
+                            else
                                 MaterialTheme.colorScheme.outline
                         )
                     }
@@ -824,8 +1011,8 @@ fun ResourceCard(
                 }
             }
 
-            // ── Mark 62 Verified-Only Book Video Support Bar ──
-            if (campBinding.hasVerifiedVideoSupport) {
+            // ── Mark 67 Verified-Only Book Video Support Bar (Respects Video Opt-Out & Passive Role) ──
+            if (!isVideoBlocked && campBinding.hasVerifiedVideoSupport) {
                 Spacer(modifier = Modifier.height(10.dp))
                 val currentEp = campBinding.currentEpisode()
                 val headerLabel = if (
@@ -923,13 +1110,23 @@ fun ResourceCard(
                         }
                     }
                 }
-            } else {
+            } else if (!isVideoBlocked) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    TextButton(
+                        onClick = { showRoleDialog = true },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Rol & Sıra Ayarla",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     TextButton(
                         onClick = { showCampConfigDialog = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -944,11 +1141,11 @@ fun ResourceCard(
                         Text(
                             text = when {
                                 campBinding.candidatePlaylists.isNotEmpty() ->
-                                    "${campBinding.candidatePlaylists.size} Kamp Önerisi • Seç"
+                                    "${campBinding.candidatePlaylists.take(3).size} Liste Önerisi • Seç"
                                 campBinding.videoCheckCompleted ->
-                                    "Video Kampı Bul / Bağla"
+                                    "Video Listesi Bağla"
                                 else ->
-                                    "Video Kampı Aranıyor..."
+                                    "Liste Aranıyor..."
                             },
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = if (campBinding.candidatePlaylists.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
@@ -959,6 +1156,210 @@ fun ResourceCard(
             }
         }
     }
+}
+
+@Composable
+fun BookRoleAssignmentDialog(
+    resource: ResourceEntity,
+    initialAssignment: BookCoachingAssignment,
+    hasVerifiedVideo: Boolean,
+    onSave: (role: BookCoachingRole, priorityOrder: Int, videoDisabled: Boolean) -> Unit,
+    onOpenVideoConfig: (role: BookCoachingRole, priorityOrder: Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedRole by remember(resource.id, initialAssignment.role) { mutableStateOf(initialAssignment.role) }
+    var selectedPriority by remember(resource.id, initialAssignment.priorityOrder) {
+        mutableStateOf(initialAssignment.priorityOrder.coerceIn(1, 5))
+    }
+    var videoDisabled by remember(resource.id, initialAssignment.videoDisabled) {
+        mutableStateOf(initialAssignment.videoDisabled)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Kitap Koçluk Rolü",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "${resource.title} • ${resource.subject}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "Yapay zeka koçunun bu kitabı haftalık planda nasıl kullanacağını seç:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                BookCoachingRole.entries.forEach { role ->
+                    val isSelected = selectedRole == role
+                    Surface(
+                        onClick = {
+                            selectedRole = role
+                            if (role == BookCoachingRole.PASSIVE) {
+                                videoDisabled = true
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        border = BorderStroke(
+                            width = if (isSelected) 1.5.dp else 1.dp,
+                            color = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                            }
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = role.displayTitle,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                            Text(
+                                text = role.description,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (selectedRole != BookCoachingRole.PASSIVE) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Öncelik Sırası (${selectedRole.shortBadge})",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        (1..5).forEach { order ->
+                            val picked = selectedPriority == order
+                            Surface(
+                                onClick = { selectedPriority = order },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (picked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = if (picked) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "$order.",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "Video Desteği Olmasın",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Sadece kitap olarak ilerle, YouTube videosu önerme.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = videoDisabled,
+                            onCheckedChange = { videoDisabled = it }
+                        )
+                    }
+
+                    if (!videoDisabled) {
+                        OutlinedButton(
+                            onClick = { onOpenVideoConfig(selectedRole, selectedPriority) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayCircleOutline,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (hasVerifiedVideo) "YouTube Oynatma Listesini Değiştir" else "YouTube Oynatma Listesi Seç (İlk 3)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        selectedRole,
+                        selectedPriority,
+                        videoDisabled || selectedRole == BookCoachingRole.PASSIVE
+                    )
+                }
+            ) {
+                Text("Kaydet")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("İptal")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -338,13 +338,22 @@ class SyncWorker(
                 Log.d(syncTag, "Inbound remote pull skipped (quota cooldown active; uploaded=$uploadedCount).")
             }
 
-            // Propagate freshly pulled/pushed data into CoachingEngine & StudentDossier
+            // Propagate freshly pulled/pushed data into CoachingEngine, StudentDossier, BookRoles & AI Coaching Ledger
             if (shouldPullRemote || uploadedCount > 0) {
                 runCatching {
                     com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(context)
                 }
                 runCatching {
                     com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
+                }
+                runCatching {
+                    com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pullFromCloudIfNewer(context)
+                    com.example.sharkmentor.core.coaching.BookCoachingRoleManager.pushToCloudIfSignedIn(context)
+                }
+                runCatching {
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pullFromCloudIfNewer(context)
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.syncWithErrorBank(context)
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.pushToCloudIfSignedIn(context)
                 }
             }
 

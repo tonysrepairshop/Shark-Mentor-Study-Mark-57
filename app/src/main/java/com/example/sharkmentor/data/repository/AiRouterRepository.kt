@@ -359,8 +359,8 @@ KRİTİK DOĞRULUK VE ATAMA KURALLARI (KESİNLİKLE UYULACAK):
 3. Sohbet metninde öğrenciye hitaben 2-4 cümlelik net bir Türkçe açıklama/özet yaz ve mesajının EN SONUNA ilgili JSON eylem bloğunu (#ACTION:{...}#) ekle:
 
 HAFTALIK 7 GÜNLÜK PLAN OLUŞTURMA (ESNEK SÜRELİ, 7 GÜNE VE ÇOKLU DERSE DENGELİ; ASLA '09:00 - 10:30' GİBİ KATI SAAT YAZMA):
-• KÜMÜLATİF TEMEL & TEKRARSIZLIK KURALI: Bağlamdaki `[MEVCUT PLAN & GÖREV DENETİMİ]` bölümünü mutlaka incele. Önceki plandan EKSİK / TAMAMLANMAYAN görevleri yeni haftanın ilk günlerine öncelikli devret (kazanım zinciri kırılmasın). TAMAMLANAN görevleri ise öğrenciye tekrar tekrar yazma; üstüne bir sonraki konu/kitap adımını inşa et (yalnızca konu hakimiyeti 0-2/5 ise kısa pekiştirme ekle).
-#ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Strateji özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
+• KÜMÜLATİF TEMEL, KİTAP ROLLERİ & 1-3-7 TEKRAR KURALI: Bağlamdaki `[MEVCUT PLAN & GÖREV DENETİMİ]`, `[ÖĞRENCİNİN DERS BAZLI KİTAP ROLLERİ VE ÖNCELİK SIRASI]` ve `[SİSTEM YAPAY ZEKA KOÇLUK DOSYASI]` bölümlerini mutlaka incele. Önceki plandan EKSİK görevleri ilk günlere devret. Yeni konuyu #1 Konu/Video kaynağından verip AYNI HAFTA #1 İlerleme/Soru kaynağından soru çözdür. Vadesi gelen 1-3-7/Aylık tekrarları Tekrar Kaynağı + Hata Bankası ile ekle. PASİF kitapları plana ASLA alma; tamamlanan/öğrenilmiş konuları sıfırdan konu anlatımı gibi tekrar tekrar yazma.
+#ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Strateji özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"AYT Kimya","topic":"Ferrum AYT Kimya: Modern Atom Teorisi [Konu Anlatım]","targetQuestions":25}]}#
 
 TEKİL GÖREV EKLEME:
 #ACTION:{"type":"INSERT_PLAN_TASK","day":1,"time":"Esnek • 90 dk","subject":"Fizik","topic":"Kuvvet ve Hareket","questions":30}#
@@ -375,8 +375,11 @@ TEKİL KONU HEDEFİ EKLEME / GÜNCELLEME (Önce mevcut konu listesini kontrol et
 MEVCUT KAYNAK / KİTAP İLERLEMESİ GÜNCELLEME (YENİ KİTAP AÇMA, listedeki resourceId/title/subject ile eşleşen mevcut kitabı güncelle; öğrenci toplam sayfa/test belirtmediyse totalUnits ekleme!):
 #ACTION:{"type":"UPDATE_RESOURCE_PROGRESS","resourceId":0,"title":"Kitap Adı","subject":"Ders","completedUnits":45,"unitType":"Sayfa","isIncremental":false}#
 
-YENİ KAYNAK / KİTAP EKLEME (Yalnızca kütüphanede henüz yoksa; toplam test/sayfa söylenmediyse mutlaka "totalUnits":0 yaz!):
-#ACTION:{"type":"INSERT_RESOURCE","title":"3D AYT Matematik Soru Bankası","subject":"AYT Matematik","totalUnits":0,"completedUnits":0,"unitType":"Test"}#
+KİTAP KOÇLUK ROLÜ & ÖNCELİK SIRASI ATAMA (role: CONCEPT_VIDEO | PRIMARY_PRACTICE | REVISION_BOOK | MOCK_EXAM | PASSIVE):
+#ACTION:{"type":"SET_BOOK_ROLE","resourceId":0,"title":"Orbital AYT Kimya","subject":"AYT Kimya","role":"REVISION_BOOK","priorityOrder":1,"videoDisabled":false}#
+
+YENİ KAYNAK / KİTAP EKLEME (Yalnızca kütüphanede henüz yoksa; toplam test/sayfa söylenmediyse mutlaka "totalUnits":0 yaz; rol/öncelik belirtildiyse role & priorityOrder ekle!):
+#ACTION:{"type":"INSERT_RESOURCE","title":"3D AYT Matematik Soru Bankası","subject":"AYT Matematik","totalUnits":0,"completedUnits":0,"unitType":"Test","role":"PRIMARY_PRACTICE","priorityOrder":1,"videoDisabled":false}#
 
 TEKİL VEYA TOPLU HEDEF EKLEME:
 #ACTION:{"type":"INSERT_TARGET","title":"TYT Türkçe 35+ Net","description":"Haftalık deneme ve paragraf rutini","type":"SHORT_TERM","period":"WEEKLY","targetQuestions":150,"priority":"HIGH"}#
@@ -1077,12 +1080,44 @@ $MANDATORY_PERSONA_RULES
                 ""
             }
         }.getOrDefault("")
-        val enrichedInstruction = if (
-            dossierHeader.isNotBlank() &&
-            !systemInstruction.contains("[ANONİM ÖĞRENCİ DOSYASI") &&
-            !systemInstruction.contains("[ÖĞRENCİ HEDEF PUSULASI")
+        val ledgerAndRolesHeader = if (
+            channel != com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING &&
+            !systemInstruction.contains("[SİSTEM YAPAY ZEKA KOÇLUK DOSYASI")
         ) {
-            "$dossierHeader\n\n$systemInstruction"
+            runCatching {
+                com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(context)
+                com.example.sharkmentor.core.coaching.BookCoachingRoleManager.ensureLoaded(context)
+                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ensureLoaded(context)
+                val resources = database.goalsDao().getAllResourcesRaw()
+                val verifiedIds = com.example.sharkmentor.core.coaching.BookCampManager.bindingsByResourceId.value
+                    .filterValues { it.hasVerifiedVideoSupport }.keys
+                val rolesBlock = if (!systemInstruction.contains("[ÖĞRENCİNİN DERS BAZLI KİTAP ROLLERİ")) {
+                    com.example.sharkmentor.core.coaching.BookCoachingRoleManager.buildAiBookRolesPrompt(
+                        resources = resources,
+                        assignments = com.example.sharkmentor.core.coaching.BookCoachingRoleManager.assignmentsByResourceId.value,
+                        verifiedVideoResourceIds = verifiedIds
+                    )
+                } else ""
+                val ledgerBlock = if (
+                    channel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(prompt)
+                ) {
+                    com.example.sharkmentor.core.coaching.AiCoachLedgerManager.buildAiLedgerPrompt(
+                        com.example.sharkmentor.core.coaching.AiCoachLedgerManager.ledger.value
+                    )
+                } else ""
+                listOf(rolesBlock, ledgerBlock).filter { it.isNotBlank() }.joinToString("\n\n")
+            }.getOrDefault("")
+        } else ""
+        val combinedHeaders = listOf(
+            if (dossierHeader.isNotBlank() &&
+                !systemInstruction.contains("[ANONİM ÖĞRENCİ DOSYASI") &&
+                !systemInstruction.contains("[ÖĞRENCİ HEDEF PUSULASI")
+            ) dossierHeader else "",
+            ledgerAndRolesHeader
+        ).filter { it.isNotBlank() }.joinToString("\n\n")
+        val enrichedInstruction = if (combinedHeaders.isNotBlank()) {
+            "$combinedHeaders\n\n$systemInstruction"
         } else {
             systemInstruction
         }

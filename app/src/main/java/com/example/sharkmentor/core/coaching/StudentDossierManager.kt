@@ -552,8 +552,13 @@ object StudentDossierManager {
             }
             .sortedWith(compareBy<DossierTopicSnapshot> { it.currentLevel }.thenBy { it.subject }.thenBy { it.topic })
 
+        BookCoachingRoleManager.ensureLoaded(appCtx)
+        val roleAssignments = BookCoachingRoleManager.assignmentsByResourceId.value
         val bookSnapshots = rawBooks
             .filter { !it.isDeleted }
+            .filter { res ->
+                BookCoachingRoleManager.resolveAssignment(res, roleAssignments).role != BookCoachingRole.PASSIVE
+            }
             .map {
                 DossierBookSnapshot(
                     title = it.title.trim(),

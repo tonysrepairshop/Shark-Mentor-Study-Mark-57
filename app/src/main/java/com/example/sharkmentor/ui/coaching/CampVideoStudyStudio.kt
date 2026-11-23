@@ -208,8 +208,51 @@ fun CampVideoStudyStudioDialog(
     var manualFullscreen by remember { mutableStateOf(false) }
     val isInFullscreen = customFullscreenView != null || manualFullscreen
 
-    // Direct WebView handle for programmatic pause on Posture Reminder
+    // Direct WebView handle for programmatic pause on Posture Reminder & AI Popup Open
     var activeWebViewRef by remember { mutableStateOf<WebView?>(null) }
+    var wasPlayingBeforeAiPopup by remember { mutableStateOf(false) }
+
+    // Isolated live playback telemetry (StateFlow so ticks NEVER recompose root WebView or AI Popup!)
+    val livePlaybackSecondsFlow = remember { kotlinx.coroutines.flow.MutableStateFlow(0) }
+    val liveVideoTitleRef = remember { java.util.concurrent.atomic.AtomicReference(activeEpisode.topicTitle) }
+    val liveActiveVideoIdRef = remember { java.util.concurrent.atomic.AtomicReference(activeEpisode.videoId) }
+
+    // Auto-pause video when AI Popup opens (frees low-end GPU/MediaCodec AND prevents missing the lesson!)
+    LaunchedEffect(isAiPopupOpen) {
+        val wv = activeWebViewRef ?: return@LaunchedEffect
+        if (isAiPopupOpen) {
+            runCatching {
+                wv.evaluateJavascript(
+                    """
+                    (function(){
+                      try {
+                        var v = document.querySelector('video');
+                        var playing = false;
+                        if (v) {
+                          playing = !v.paused && !v.ended;
+                          v.pause();
+                          if (window.SharkStudioBridge && !isNaN(v.currentTime)) {
+                            window.SharkStudioBridge.onTelemetry(Math.floor(v.currentTime), document.title || '', window.location.href || '');
+                          }
+                        }
+                        return playing ? '1' : '0';
+                      } catch(e) { return '0'; }
+                    })();
+                    """.trimIndent()
+                ) { res ->
+                    wasPlayingBeforeAiPopup = res?.contains("1") == true
+                }
+            }
+        } else if (wasPlayingBeforeAiPopup) {
+            wasPlayingBeforeAiPopup = false
+            runCatching {
+                wv.evaluateJavascript(
+                    "(function(){try{var v=document.querySelector('video');if(v&&v.paused){v.play();}}catch(e){}})();",
+                    null
+                )
+            }
+        }
+    }
 
     // Auto-pause video when Posture Reminder fires (NEVER touches Focus Timer!)
     LaunchedEffect(wellnessEvent?.id) {
@@ -231,20 +274,11 @@ fun CampVideoStudyStudioDialog(
         mutableStateOf(false)
     }
 
-    // Live playback telemetry from WebView JS Bridge
-    var livePlaybackSeconds by remember { mutableIntStateOf(0) }
-    var liveVideoTitle by remember(activeEpisode.dayNumber, activeEpisode.topicTitle) {
-        mutableStateOf(activeEpisode.topicTitle)
-    }
-    var liveActiveVideoId by remember(activeEpisode.dayNumber, activeEpisode.videoId) {
-        mutableStateOf(activeEpisode.videoId)
-    }
-
     LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.searchQuery) {
-        livePlaybackSeconds = 0
+        livePlaybackSecondsFlow.value = 0
         if (activeEpisode.videoId.length == 11) {
-            liveActiveVideoId = activeEpisode.videoId
-            liveVideoTitle = activeEpisode.topicTitle
+            liveActiveVideoIdRef.set(activeEpisode.videoId)
+            liveVideoTitleRef.set(activeEpisode.topicTitle)
             isResolvingVideo = false
             return@LaunchedEffect
         }
@@ -262,18 +296,12 @@ fun CampVideoStudyStudioDialog(
                 customUrl = "https://www.youtube.com/watch?v=${best.videoId}"
             )
             activeEpisode = updated
-            liveActiveVideoId = best.videoId
-            liveVideoTitle = best.title.ifBlank { activeEpisode.topicTitle }
+            liveActiveVideoIdRef.set(best.videoId)
+            liveVideoTitleRef.set(best.title.ifBlank { activeEpisode.topicTitle })
             onEpisodeChanged?.invoke(updated)
         }
         isResolvingVideo = false
     }
-
-    // Live Focus Timer state
-    val timerState by FocusTimerService.timerStateFlow.collectAsStateWithLifecycle()
-    val isFocusing = timerState.timerPhase == TimerPhase.FOCUSING
-    val isPaused = timerState.timerPhase == TimerPhase.PAUSED
-    val formattedTimer = FocusTimerService.formatMillis(timerState.displayMillis)
 
     // AI Tutor state
     var aiQuestion by remember { mutableStateOf("") }
@@ -299,15 +327,15 @@ fun CampVideoStudyStudioDialog(
 
     fun selectEpisode(ep: CampDayEpisode) {
         activeEpisode = ep
-        liveActiveVideoId = ep.videoId
-        liveVideoTitle = ep.topicTitle
-        livePlaybackSeconds = 0
+        liveActiveVideoIdRef.set(ep.videoId)
+        liveVideoTitleRef.set(ep.topicTitle)
+        livePlaybackSecondsFlow.value = 0
         useMobileWatchFallback = false
         onEpisodeChanged?.invoke(ep)
     }
 
-    fun activeVideoUrlWithTimestamp(targetSec: Int = livePlaybackSeconds): String {
-        val vid = liveActiveVideoId.ifBlank { activeEpisode.videoId }
+    fun activeVideoUrlWithTimestamp(targetSec: Int = livePlaybackSecondsFlow.value): String {
+        val vid = liveActiveVideoIdRef.get().orEmpty().ifBlank { activeEpisode.videoId }
         return if (vid.length == 11) {
             if (targetSec > 0) "https://www.youtube.com/watch?v=$vid&t=${targetSec}s"
             else "https://www.youtube.com/watch?v=$vid"
@@ -331,9 +359,9 @@ fun CampVideoStudyStudioDialog(
                 CoachingEngine.buildAiSystemCompassPrompt(context)
             }
             val mentionedSec = BookCampManager.extractMentionedTimestampSeconds(cleanQ)
-            val effectiveSec = mentionedSec ?: livePlaybackSeconds
+            val effectiveSec = mentionedSec ?: livePlaybackSecondsFlow.value
             val formattedTime = BookCampManager.formatSecondsAsTimestamp(effectiveSec)
-            val currentVid = liveActiveVideoId.ifBlank { activeEpisode.videoId }
+            val currentVid = liveActiveVideoIdRef.get().orEmpty().ifBlank { activeEpisode.videoId }
             val watchUrl = activeVideoUrlWithTimestamp(effectiveSec)
 
             val transcriptExcerpt = if (currentVid.length == 11) {
@@ -358,7 +386,7 @@ fun CampVideoStudyStudioDialog(
                 • Kamp / Liste: $campTitle
                 • Ders: $subject
                 • Bölüm / Konu: ${activeEpisode.dayNumber}. Ders - ${activeEpisode.topicTitle}
-                • Video Başlığı: ${liveVideoTitle.ifBlank { activeEpisode.topicTitle }}
+                • Video Başlığı: ${liveVideoTitleRef.get().orEmpty().ifBlank { activeEpisode.topicTitle }}
                 • Aktif Video Linki: $watchUrl
                 • Odaklanılan Video Zamanı: $formattedTime (${effectiveSec}. saniye)
 
@@ -370,6 +398,7 @@ fun CampVideoStudyStudioDialog(
 
             val systemInstruction = "$dossierBlock\n\n$STUDIO_MATH_FORMAT_RULES"
 
+            var lastEmitMs = 0L
             val response = withContext(Dispatchers.IO) {
                 runCatching {
                     MultiProviderAiClient.executeUnifiedTextPrompt(
@@ -379,7 +408,9 @@ fun CampVideoStudyStudioDialog(
                         temperature = 0.25f,
                         maxTokens = 4096,
                         onPartialText = { partial ->
-                            if (partial.isNotBlank()) {
+                            val now = System.currentTimeMillis()
+                            if (partial.isNotBlank() && (lastEmitMs == 0L || now - lastEmitMs >= 110L)) {
+                                lastEmitMs = now
                                 aiAnswer = partial
                             }
                         }
@@ -410,42 +441,6 @@ fun CampVideoStudyStudioDialog(
             withContext(Dispatchers.Main) {
                 onDone()
             }
-        }
-    }
-
-    fun toggleFocusTimerFromStudio() {
-        val cleanSubject = CoachingEngine.formatCleanLeagueSubject(subject).ifBlank { "Odak" }
-        val focusLabel = CoachingEngine.buildFormattedFocusSubject(
-            title = cleanSubject,
-            subNote = "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42)
-        )
-        when (timerState.timerPhase) {
-            TimerPhase.IDLE -> {
-                CoachingEngine.selectFocusTitle(context, cleanSubject)
-                CoachingEngine.setFocusSubNote(context, "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42))
-                CoachingEngine.updateLivePresenceOfflineFirst(context, true, cleanSubject)
-                val intent = Intent(context, FocusTimerService::class.java).apply {
-                    action = FocusTimerService.ACTION_START
-                    putExtra(FocusTimerService.EXTRA_MODE, TimerMode.STOPWATCH.name)
-                    putExtra(FocusTimerService.EXTRA_SUBJECT, focusLabel)
-                }
-                runCatching { context.startForegroundService(intent) }
-            }
-            TimerPhase.FOCUSING -> {
-                runCatching {
-                    context.startService(Intent(context, FocusTimerService::class.java).apply {
-                        action = FocusTimerService.ACTION_PAUSE
-                    })
-                }
-            }
-            TimerPhase.PAUSED -> {
-                runCatching {
-                    context.startService(Intent(context, FocusTimerService::class.java).apply {
-                        action = FocusTimerService.ACTION_RESUME
-                    })
-                }
-            }
-            TimerPhase.MANDATORY_BREAK -> {}
         }
     }
 
@@ -622,35 +617,11 @@ fun CampVideoStudyStudioDialog(
 
                                 Spacer(modifier = Modifier.width(6.dp))
 
-                                // Compact Live Focus Timer Pill
-                                Surface(
-                                    onClick = { toggleFocusTimerFromStudio() },
-                                    shape = RoundedCornerShape(50),
-                                    color = if (isFocusing) colorScheme.primaryContainer else colorScheme.surfaceVariant,
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (isFocusing) colorScheme.primary else colorScheme.outlineVariant
-                                    )
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (isFocusing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                            contentDescription = if (isFocusing) "Duraklat" else "Odak Başlat",
-                                            tint = if (isFocusing) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = if (isFocusing || isPaused) formattedTimer else "Odak",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (isFocusing) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
+                                // Compact Isolated Live Focus Timer Pill (ticks without recomposing WebView/AI!)
+                                StudioFocusTimerPill(
+                                    subject = subject,
+                                    activeEpisode = activeEpisode
+                                )
 
                                 IconButton(
                                     onClick = { manualFullscreen = true },
@@ -817,7 +788,7 @@ fun CampVideoStudyStudioDialog(
                                     onClick = {
                                         runCatching {
                                             context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds)))
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSecondsFlow.value)))
                                             )
                                         }
                                     },
@@ -841,7 +812,7 @@ fun CampVideoStudyStudioDialog(
                     // Full-Area Video Player Viewport (fills remaining screen cleanly!)
                     val playerUrl = remember(activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.dayNumber, adBlockerEnabled, useMobileWatchFallback) {
                         if (useMobileWatchFallback && activeEpisode.videoId.length == 11) {
-                            activeEpisode.buildMobileWatchUrl(livePlaybackSeconds)
+                            activeEpisode.buildMobileWatchUrl(livePlaybackSecondsFlow.value)
                         } else {
                             activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true)
                         }
@@ -877,13 +848,13 @@ fun CampVideoStudyStudioDialog(
                                 adBlockerEnabled = adBlockerEnabled,
                                 onWebViewCreated = { activeWebViewRef = it },
                                 onPlaybackTelemetry = { seconds, title, currentUrl ->
-                                    if (seconds >= 0) livePlaybackSeconds = seconds
+                                    if (seconds >= 0) livePlaybackSecondsFlow.value = seconds
                                     if (title.isNotBlank() && !title.equals("YouTube", ignoreCase = true)) {
-                                        liveVideoTitle = title.removeSuffix(" - YouTube").trim()
+                                        liveVideoTitleRef.set(title.removeSuffix(" - YouTube").trim())
                                     }
                                     val (parsedVid, _) = BookCampManager.parseYouTubeUrlIds(currentUrl)
                                     if (parsedVid.length == 11) {
-                                        liveActiveVideoId = parsedVid
+                                        liveActiveVideoIdRef.set(parsedVid)
                                     }
                                 },
                                 onEmbedRestricted = {
@@ -943,7 +914,7 @@ fun CampVideoStudyStudioDialog(
                     Surface(
                         onClick = { exitFullscreen() },
                         shape = RoundedCornerShape(50),
-                        color = Color.Black.copy(alpha = 0.58f),
+                        color = Color.Black.copy(alpha = 0.72f),
                         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
                         modifier = Modifier
                             .align(Alignment.TopStart)
@@ -970,37 +941,32 @@ fun CampVideoStudyStudioDialog(
                     }
                 }
 
-                // ── LAYER 3: Compact Floating AI Chat / Note / Episodes Popup (opens near AI Orb!) ──
+                // ── LAYER 3: Zero-Lag Opaque Floating AI Chat / Note / Episodes Popup (auto-pauses video!) ──
                 val popupAlignment = if (orbOffsetX > containerWidthPx * 0.45f) {
                     if (orbOffsetY > containerHeightPx * 0.45f) Alignment.BottomEnd else Alignment.TopEnd
                 } else {
                     if (orbOffsetY > containerHeightPx * 0.45f) Alignment.BottomStart else Alignment.TopStart
                 }
 
-                AnimatedVisibility(
-                    visible = isAiPopupOpen,
-                    enter = fadeIn() + scaleIn(initialScale = 0.90f),
-                    exit = fadeOut() + scaleOut(targetScale = 0.92f),
-                    modifier = Modifier
-                        .align(popupAlignment)
-                        .imePadding()
-                        .padding(
-                            start = 12.dp,
-                            end = 12.dp,
-                            top = if (isInFullscreen) 56.dp else 64.dp,
-                            bottom = 78.dp
-                        )
-                ) {
+                if (isAiPopupOpen) {
                     Surface(
                         modifier = Modifier
+                            .align(popupAlignment)
+                            .imePadding()
+                            .padding(
+                                start = 12.dp,
+                                end = 12.dp,
+                                top = if (isInFullscreen) 56.dp else 64.dp,
+                                bottom = 78.dp
+                            )
                             .widthIn(min = 280.dp, max = 380.dp)
                             .fillMaxWidth(0.92f)
                             .heightIn(min = 240.dp, max = (maxHeight * 0.62f).coerceAtLeast(280.dp)),
-                        shape = RoundedCornerShape(22.dp),
-                        color = colorScheme.surface.copy(alpha = 0.97f),
+                        shape = RoundedCornerShape(20.dp),
+                        color = colorScheme.surface,
                         border = BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.45f)),
-                        shadowElevation = 14.dp,
-                        tonalElevation = 6.dp
+                        shadowElevation = 2.dp,
+                        tonalElevation = 0.dp
                     ) {
                         Column(
                             modifier = Modifier
@@ -1030,24 +996,7 @@ fun CampVideoStudyStudioDialog(
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = colorScheme.primary.copy(alpha = 0.14f)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                        ) {
-                                            Icon(Icons.Default.AccessTime, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(11.dp))
-                                            Text(
-                                                text = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds),
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = colorScheme.primary
-                                            )
-                                        }
-                                    }
+                                    StudioLiveTimestampBadge(secondsFlow = livePlaybackSecondsFlow)
                                 }
                                 IconButton(
                                     onClick = { isAiPopupOpen = false },
@@ -1073,8 +1022,8 @@ fun CampVideoStudyStudioDialog(
                                         onClick = { popupTab = id },
                                         modifier = Modifier.weight(1f),
                                         shape = RoundedCornerShape(10.dp),
-                                        color = if (sel) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                                        border = BorderStroke(1.dp, if (sel) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                        color = if (sel) colorScheme.primaryContainer else colorScheme.surfaceVariant,
+                                        border = BorderStroke(1.dp, if (sel) colorScheme.primary else colorScheme.outlineVariant)
                                     ) {
                                         Row(
                                             modifier = Modifier.padding(vertical = 5.dp, horizontal = 5.dp),
@@ -1117,15 +1066,14 @@ fun CampVideoStudyStudioDialog(
                                             }
                                         }
                                     } else {
-                                        val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
                                         // Scrollable AI Answer Box
                                         Surface(
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .fillMaxWidth(),
                                             shape = RoundedCornerShape(12.dp),
-                                            color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.35f))
+                                            color = colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
                                         ) {
                                             Box(
                                                 modifier = Modifier
@@ -1150,28 +1098,17 @@ fun CampVideoStudyStudioDialog(
                                                             verticalArrangement = Arrangement.spacedBy(8.dp)
                                                         ) {
                                                             Text(
-                                                                text = "Takıldığın dakikayı veya formülü sor, video durmadan hemen yanıtlayayım.",
+                                                                text = "Video senin için duraklatıldı. Takıldığın dakikayı veya kavramı sorabilirsin.",
                                                                 style = MaterialTheme.typography.bodySmall,
                                                                 color = colorScheme.onSurfaceVariant
                                                             )
-                                                            Surface(
-                                                                onClick = {
-                                                                    val q = "$liveTimeLabel civarında anlatılan kısmı adım adım özetler misin?"
+                                                            StudioExplainNowChip(
+                                                                secondsFlow = livePlaybackSecondsFlow,
+                                                                onExplain = { q ->
                                                                     aiQuestion = q
                                                                     triggerAiTutorQuestion(q)
-                                                                },
-                                                                shape = RoundedCornerShape(10.dp),
-                                                                color = colorScheme.primary.copy(alpha = 0.12f),
-                                                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
-                                                            ) {
-                                                                Text(
-                                                                    text = "Şu anki ($liveTimeLabel) kısmı açıkla",
-                                                                    style = MaterialTheme.typography.labelSmall,
-                                                                    fontWeight = FontWeight.Bold,
-                                                                    color = colorScheme.primary,
-                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                                                )
-                                                            }
+                                                                }
+                                                            )
                                                         }
                                                     }
                                                     else -> {
@@ -1315,8 +1252,8 @@ fun CampVideoStudyStudioDialog(
                                                     isAiPopupOpen = false
                                                 },
                                                 shape = RoundedCornerShape(10.dp),
-                                                color = if (isCurrent) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                                border = BorderStroke(1.dp, if (isCurrent) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                                                color = if (isCurrent) colorScheme.primaryContainer else colorScheme.surfaceVariant,
+                                                border = BorderStroke(1.dp, if (isCurrent) colorScheme.primary else colorScheme.outlineVariant),
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Row(
@@ -1332,15 +1269,25 @@ fun CampVideoStudyStudioDialog(
                                                         tint = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
                                                         modifier = Modifier.size(16.dp)
                                                     )
-                                                    Text(
-                                                        text = "${ep.dayNumber}. ${ep.topicTitle}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                                        color = if (isCurrent) colorScheme.onPrimaryContainer else colorScheme.onSurface,
-                                                        maxLines = 2,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                        modifier = Modifier.weight(1f)
-                                                    )
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            text = "${ep.dayNumber}. ${ep.topicTitle}",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                                            color = if (isCurrent) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        if (ep.mappedTopic.isNotBlank() && !ep.mappedTopic.equals(ep.topicTitle, ignoreCase = true)) {
+                                                            Text(
+                                                                text = "Konu: ${ep.mappedTopic}",
+                                                                fontSize = 10.sp,
+                                                                color = colorScheme.primary,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1351,14 +1298,14 @@ fun CampVideoStudyStudioDialog(
                     }
                 }
 
-                // ── LAYER 4: Always-On-Top Draggable Floating AI Orb (Normal + Fullscreen!) ──
+                // ── LAYER 4: Lightweight Draggable Floating AI Orb (Normal + Fullscreen!) ──
                 if (orbOffsetX >= 0f && orbOffsetY >= 0f) {
                     Surface(
                         shape = CircleShape,
                         color = if (isAiPopupOpen) colorScheme.primaryContainer else colorScheme.primary,
                         contentColor = if (isAiPopupOpen) colorScheme.primary else colorScheme.onPrimary,
-                        border = BorderStroke(1.5.dp, colorScheme.onPrimary.copy(alpha = 0.45f)),
-                        shadowElevation = 10.dp,
+                        border = BorderStroke(1.5.dp, colorScheme.onPrimary.copy(alpha = 0.55f)),
+                        shadowElevation = 2.dp,
                         modifier = Modifier
                             .offset { IntOffset(orbOffsetX.roundToInt(), orbOffsetY.roundToInt()) }
                             .size(orbSizeDp)
@@ -1392,11 +1339,139 @@ fun CampVideoStudyStudioDialog(
     }
 }
 
+@Composable
+private fun StudioFocusTimerPill(
+    subject: String,
+    activeEpisode: CampDayEpisode
+) {
+    val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
+    val timerState by FocusTimerService.timerStateFlow.collectAsStateWithLifecycle()
+    val isFocusing = timerState.timerPhase == TimerPhase.FOCUSING
+    val isPaused = timerState.timerPhase == TimerPhase.PAUSED
+    val formattedTimer = FocusTimerService.formatMillis(timerState.displayMillis)
+
+    Surface(
+        onClick = {
+            val cleanSubject = CoachingEngine.formatCleanLeagueSubject(subject).ifBlank { "Odak" }
+            val focusLabel = CoachingEngine.buildFormattedFocusSubject(
+                title = cleanSubject,
+                subNote = "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42)
+            )
+            when (timerState.timerPhase) {
+                TimerPhase.IDLE -> {
+                    CoachingEngine.selectFocusTitle(context, cleanSubject)
+                    CoachingEngine.setFocusSubNote(context, "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42))
+                    CoachingEngine.updateLivePresenceOfflineFirst(context, true, cleanSubject)
+                    val intent = Intent(context, FocusTimerService::class.java).apply {
+                        action = FocusTimerService.ACTION_START
+                        putExtra(FocusTimerService.EXTRA_MODE, TimerMode.STOPWATCH.name)
+                        putExtra(FocusTimerService.EXTRA_SUBJECT, focusLabel)
+                    }
+                    runCatching { context.startForegroundService(intent) }
+                }
+                TimerPhase.FOCUSING -> {
+                    runCatching {
+                        context.startService(Intent(context, FocusTimerService::class.java).apply {
+                            action = FocusTimerService.ACTION_PAUSE
+                        })
+                    }
+                }
+                TimerPhase.PAUSED -> {
+                    runCatching {
+                        context.startService(Intent(context, FocusTimerService::class.java).apply {
+                            action = FocusTimerService.ACTION_RESUME
+                        })
+                    }
+                }
+                TimerPhase.MANDATORY_BREAK -> {}
+            }
+        },
+        shape = RoundedCornerShape(50),
+        color = if (isFocusing) colorScheme.primaryContainer else colorScheme.surfaceVariant,
+        border = BorderStroke(
+            1.dp,
+            if (isFocusing) colorScheme.primary else colorScheme.outlineVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                imageVector = if (isFocusing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                contentDescription = if (isFocusing) "Duraklat" else "Odak Başlat",
+                tint = if (isFocusing) colorScheme.primary else colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
+            Text(
+                text = if (isFocusing || isPaused) formattedTimer else "Odak",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = if (isFocusing) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun StudioLiveTimestampBadge(
+    secondsFlow: kotlinx.coroutines.flow.StateFlow<Int>
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val secs by secondsFlow.collectAsStateWithLifecycle()
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = colorScheme.primary.copy(alpha = 0.14f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Icon(Icons.Default.AccessTime, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(11.dp))
+            Text(
+                text = BookCampManager.formatSecondsAsTimestamp(secs),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = colorScheme.primary
+            )
+        }
+    }
+}
+
+@Composable
+private fun StudioExplainNowChip(
+    secondsFlow: kotlinx.coroutines.flow.StateFlow<Int>,
+    onExplain: (String) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val secs by secondsFlow.collectAsStateWithLifecycle()
+    val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(secs)
+    Surface(
+        onClick = {
+            onExplain("$liveTimeLabel civarında anlatılan kısmı adım adım özetler misin?")
+        },
+        shape = RoundedCornerShape(10.dp),
+        color = colorScheme.primary.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
+    ) {
+        Text(
+            text = "Şu anki ($liveTimeLabel) kısmı açıkla",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+
 private const val STUDIO_TELEMETRY_JS = """
 (function() {
   if (window.__sharkTelemetryInstalled) return;
   window.__sharkTelemetryInstalled = true;
-  setInterval(function() {
+  function sendSnap() {
     try {
       var v = document.querySelector('video');
       var sec = (v && !isNaN(v.currentTime)) ? Math.floor(v.currentTime) : -1;
@@ -1410,7 +1485,10 @@ private const val STUDIO_TELEMETRY_JS = """
         window.SharkStudioBridge.onEmbedError();
       }
     } catch (e) {}
-  }, 1800);
+  }
+  window.__sharkSendTelemetryNow = sendSnap;
+  setTimeout(sendSnap, 1800);
+  setInterval(sendSnap, 5000);
 })();
 """
 
@@ -1424,27 +1502,35 @@ private const val STUDIO_AD_BLOCKER_JS = """
   }
   if (window.__sharkAdSkipperInstalled) return;
   window.__sharkAdSkipperInstalled = true;
-  setInterval(function() {
+  function checkAndSkipAd() {
     try {
       var player = document.querySelector('.html5-video-player');
       var video = document.querySelector('video');
-      var isAd = (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting'))) || !!document.querySelector('.ytp-ad-player-overlay-layout,.ytp-ad-preview-container');
+      var isAd = (player && (player.classList.contains('ad-showing') || player.classList.contains('ad-interrupting')));
       if (isAd && video) {
         video.muted = true;
         if (isFinite(video.duration) && video.duration > 0.5) {
           video.currentTime = video.duration - 0.1;
         }
         video.playbackRate = 16.0;
+        var skipBtns = document.querySelectorAll('.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button,button[class*="skip-ad"]');
+        for (var i = 0; i < skipBtns.length; i++) {
+          skipBtns[i].click();
+        }
       } else if (video && video.playbackRate > 4.0) {
         video.playbackRate = 1.0;
         video.muted = false;
       }
-      var skipBtns = document.querySelectorAll('.ytp-ad-skip-button,.ytp-ad-skip-button-modern,.ytp-skip-ad-button,button[class*="skip-ad"]');
-      for (var i = 0; i < skipBtns.length; i++) {
-        skipBtns[i].click();
-      }
     } catch (e) {}
-  }, 600);
+  }
+  try {
+    var target = document.querySelector('.html5-video-player') || document.body;
+    if (target && typeof MutationObserver !== 'undefined') {
+      var obs = new MutationObserver(checkAndSkipAd);
+      obs.observe(target, { attributes: true, attributeFilter: ['class'] });
+    }
+  } catch (e) {}
+  setInterval(checkAndSkipAd, 2500);
 })();
 """
 
@@ -1579,11 +1665,11 @@ private fun DistractionFreeYouTubeWebView(
 }
 
 /**
- * Mark 63 Hybrid AI-Driven Book Playlist Discovery & Binding Dialog:
- * - Searches YouTube in background using Hybrid AI + heuristic ranking to find direct book playlists
- *   AND subject-appropriate camps when a book has no official playlist.
- * - Shows all discovered candidates with a clear "Önerilen" badge on index 0 so the student can choose freely.
- * - Absorbs REAL YouTube playlist videos (stripping intros, keeping exact real lesson order & videoIds).
+ * Mark 67 Top-3 Relevant Playlist Discovery, Real Absorption & Video Opt-Out Dialog:
+ * - Strictly presents ONLY the Top 3 most relevant YouTube playlists (`#1 Önerilen`, `#2`, `#3`).
+ * - Provides explicit "Video Desteği Olmasın (Sadece Kitap)" opt-out.
+ * - Truly absorbs the selected playlist's real ordered videos (stripping intros/promos and mapping
+ *   every lesson to its canonical curriculum topic) with transparent preview before saving.
  */
 @Composable
 fun ResourceCampConfigDialog(
@@ -1603,8 +1689,14 @@ fun ResourceCampConfigDialog(
     var youtubeUrl by remember(initialBinding) { mutableStateOf(initialBinding.youtubeUrl) }
     var loadedEpisodes by remember(initialBinding) { mutableStateOf(initialBinding.episodes) }
     var isFromRealPlaylist by remember(initialBinding) { mutableStateOf(initialBinding.isFromRealPlaylist) }
-    var candidatePlaylists by remember(initialBinding) { mutableStateOf(initialBinding.candidatePlaylists) }
+    var candidatePlaylists by remember(initialBinding) { mutableStateOf(initialBinding.candidatePlaylists.take(3)) }
     var hasDirectBookPlaylist by remember(initialBinding) { mutableStateOf(initialBinding.hasDirectBookPlaylist) }
+    var skippedIntroCount by remember(initialBinding) { mutableIntStateOf(initialBinding.skippedIntroCount) }
+
+    val roleAssignments by com.example.sharkmentor.core.coaching.BookCoachingRoleManager.assignmentsByResourceId.collectAsStateWithLifecycle()
+    val isVideoOptedOut = remember(roleAssignments, resource.id) {
+        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.isVideoDisabledFor(resource.id, roleAssignments)
+    }
 
     var isFetchingPlaylist by remember { mutableStateOf(false) }
     var isAutoSearching by remember { mutableStateOf(false) }
@@ -1615,11 +1707,12 @@ fun ResourceCampConfigDialog(
     }
 
     val (parsedVid, parsedPlId) = remember(youtubeUrl) { BookCampManager.parseYouTubeUrlIds(youtubeUrl) }
-    val hasValidMedia = loadedEpisodes.any { it.videoId.length == 11 } || parsedVid.length == 11 || parsedPlId.isNotBlank()
+    val hasValidMedia = !isVideoOptedOut && (loadedEpisodes.any { it.videoId.length == 11 } || parsedVid.length == 11 || parsedPlId.isNotBlank())
 
-    // Automatically trigger hybrid background search on open if no candidates cached yet
-    LaunchedEffect(resource.id) {
-        if (candidatePlaylists.isEmpty() && !initialBinding.videoCheckCompleted) {
+    // Automatically trigger Top-3 discovery on open if not opted out and no candidates cached yet
+    LaunchedEffect(resource.id, isVideoOptedOut) {
+        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.ensureLoaded(context)
+        if (!isVideoOptedOut && candidatePlaylists.isEmpty() && !initialBinding.videoCheckCompleted) {
             isAutoSearching = true
             val discovered = BookCampManager.discoverAndSyncRealCampForResource(
                 context = context,
@@ -1627,8 +1720,9 @@ fun ResourceCampConfigDialog(
                 forceRefresh = false
             )
             isAutoSearching = false
-            candidatePlaylists = discovered.candidatePlaylists
+            candidatePlaylists = discovered.candidatePlaylists.take(3)
             hasDirectBookPlaylist = discovered.hasDirectBookPlaylist
+            skippedIntroCount = discovered.skippedIntroCount
             if (discovered.discoveryStatusMessage.isNotBlank()) {
                 statusNotice = discovered.discoveryStatusMessage
             }
@@ -1647,6 +1741,7 @@ fun ResourceCampConfigDialog(
     fun buildAndSaveBinding(): ResourceCampBinding {
         val total = loadedEpisodes.size.coerceAtLeast(1)
         val cur = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, total)
+        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.setVideoDisabled(context, resource, false)
         return BookCampManager.saveResourceCampBinding(
             context = context,
             resource = resource,
@@ -1659,7 +1754,7 @@ fun ResourceCampConfigDialog(
             isFromRealPlaylist = isFromRealPlaylist && loadedEpisodes.isNotEmpty(),
             hasDirectBookPlaylist = hasDirectBookPlaylist,
             discoveryStatusMessage = statusNotice.orEmpty(),
-            candidatePlaylists = candidatePlaylists
+            candidatePlaylists = candidatePlaylists.take(3)
         )
     }
 
@@ -1686,373 +1781,458 @@ fun ResourceCampConfigDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // 1. Hybrid AI-Assisted Background Discovery button
-                OutlinedButton(
+                // Explicit "Video Olmasın (Sadece Kitap)" opt-out toggle
+                Surface(
                     onClick = {
-                        if (isAutoSearching || isFetchingPlaylist) return@OutlinedButton
-                        isAutoSearching = true
-                        statusNotice = "Hibrit AI motoru YouTube'da bu kitap ve ders için en uygun kampları arıyor..."
-                        scope.launch {
-                            val discovered = BookCampManager.discoverAndSyncRealCampForResource(
-                                context = context,
-                                resource = resource,
-                                forceRefresh = true
-                            )
-                            isAutoSearching = false
-                            candidatePlaylists = discovered.candidatePlaylists
-                            hasDirectBookPlaylist = discovered.hasDirectBookPlaylist
-                            statusNotice = discovered.discoveryStatusMessage.ifBlank {
-                                if (discovered.hasVerifiedVideoSupport) {
-                                    "Oynatma listesi eşleştirildi (${discovered.episodes.size} ders)."
-                                } else {
-                                    "Bu kitap için doğrudan liste bulunamadı; önerilen kamplardan seçebilir veya link ekleyebilirsin."
-                                }
-                            }
-                            if (discovered.hasVerifiedVideoSupport) {
-                                campTitle = discovered.campTitle
-                                instructor = discovered.instructor
-                                youtubeUrl = discovered.youtubeUrl
-                                loadedEpisodes = discovered.episodes
-                                isFromRealPlaylist = discovered.isFromRealPlaylist
-                                currentDayText = discovered.currentDay.toString()
-                                onSaved(discovered)
-                            } else {
-                                loadedEpisodes = emptyList()
-                                isFromRealPlaylist = false
-                            }
+                        val nextDisabled = !isVideoOptedOut
+                        com.example.sharkmentor.core.coaching.BookCoachingRoleManager.setVideoDisabled(
+                            context = context,
+                            resource = resource,
+                            videoDisabled = nextDisabled
+                        )
+                        if (nextDisabled) {
+                            loadedEpisodes = emptyList()
+                            youtubeUrl = ""
+                            isFromRealPlaylist = false
+                            statusNotice = "Bu kitap için video desteği kapatıldı (Sadece Kitap)."
+                        } else {
+                            statusNotice = "Video desteği açıldı. En alakalı 3 listeyi arayabilir veya link ekleyebilirsin."
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isVideoOptedOut) colorScheme.errorContainer.copy(alpha = 0.45f)
+                    else colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = BorderStroke(
+                        1.dp,
+                        if (isVideoOptedOut) colorScheme.error.copy(alpha = 0.5f) else colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    if (isAutoSearching) {
-                        CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("AI ile Uygun Oynatma Listelerini Bul", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
-
-                if (!statusNotice.isNullOrBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = colorScheme.primaryContainer.copy(alpha = 0.35f),
-                        modifier = Modifier.fillMaxWidth()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = statusNotice!!,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurface,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Video Desteği Olmasın (Sadece Kitap)",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isVideoOptedOut) colorScheme.error else colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (isVideoOptedOut) "Açık: Bu kitap için video aranmaz ve atanmaz."
+                                else "Kapalı: İstersen video desteği olmadan ilerleyebilirsin.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        androidx.compose.material3.Switch(
+                            checked = isVideoOptedOut,
+                            onCheckedChange = { checked ->
+                                com.example.sharkmentor.core.coaching.BookCoachingRoleManager.setVideoDisabled(
+                                    context = context,
+                                    resource = resource,
+                                    videoDisabled = checked
+                                )
+                                if (checked) {
+                                    loadedEpisodes = emptyList()
+                                    youtubeUrl = ""
+                                    isFromRealPlaylist = false
+                                    statusNotice = "Bu kitap için video desteği kapatıldı (Sadece Kitap)."
+                                }
+                            }
                         )
                     }
                 }
 
-                // 2. Hybrid Discovered Candidate List ("Önerilen" + Selectable Direct / Subject Camps)
-                if (candidatePlaylists.isNotEmpty()) {
-                    Text(
-                        text = if (hasDirectBookPlaylist) {
-                            "Bulunan Oynatma Listeleri (Seçmek için dokun)"
-                        } else {
-                            "${resource.subject.ifBlank { "Ders" }} İçin Önerilen Kamplar (Seçmek için dokun)"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.primary
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        candidatePlaylists.take(6).forEach { cand: BookVideoCandidate ->
-                            val isActive = parsedPlId.isNotBlank() && parsedPlId == cand.playlistId
-                            val isSelectingThis = selectingCandidateId == cand.playlistId
-                            Surface(
-                                onClick = {
-                                    if (selectingCandidateId != null) return@Surface
-                                    selectingCandidateId = cand.playlistId
-                                    statusNotice = "\"${cand.title}\" oynatma listesinin gerçek ders videoları çekiliyor..."
-                                    scope.launch {
-                                        val selected = BookCampManager.selectCandidatePlaylistForResource(
-                                            context = context,
-                                            resource = resource,
-                                            candidate = cand
-                                        )
-                                        selectingCandidateId = null
-                                        campTitle = selected.campTitle
-                                        instructor = selected.instructor
-                                        youtubeUrl = selected.youtubeUrl
-                                        loadedEpisodes = selected.episodes
-                                        isFromRealPlaylist = selected.isFromRealPlaylist
-                                        hasDirectBookPlaylist = selected.hasDirectBookPlaylist
-                                        currentDayText = selected.currentDay.toString()
-                                        candidatePlaylists = selected.candidatePlaylists
-                                        statusNotice = selected.discoveryStatusMessage
-                                        onSaved(selected)
+                if (!isVideoOptedOut) {
+                    // 1. Top-3 Discovery button
+                    OutlinedButton(
+                        onClick = {
+                            if (isAutoSearching || isFetchingPlaylist) return@OutlinedButton
+                            isAutoSearching = true
+                            statusNotice = "YouTube'da bu kitap için en alakalı 3 oynatma listesi aranıyor..."
+                            scope.launch {
+                                val discovered = BookCampManager.discoverAndSyncRealCampForResource(
+                                    context = context,
+                                    resource = resource,
+                                    forceRefresh = true
+                                )
+                                isAutoSearching = false
+                                candidatePlaylists = discovered.candidatePlaylists.take(3)
+                                hasDirectBookPlaylist = discovered.hasDirectBookPlaylist
+                                skippedIntroCount = discovered.skippedIntroCount
+                                statusNotice = discovered.discoveryStatusMessage.ifBlank {
+                                    if (discovered.hasVerifiedVideoSupport) {
+                                        "${discovered.episodes.size} gerçek ders özümsendi."
+                                    } else {
+                                        "Doğrudan liste bulunamadı; önerilen kamplardan seçebilir veya link ekleyebilirsin."
                                     }
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (isActive) colorScheme.primaryContainer.copy(alpha = 0.7f)
-                                else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (isActive || cand.isRecommended) colorScheme.primary.copy(alpha = 0.65f)
-                                    else colorScheme.outlineVariant.copy(alpha = 0.4f)
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                }
+                                if (discovered.hasVerifiedVideoSupport) {
+                                    campTitle = discovered.campTitle
+                                    instructor = discovered.instructor
+                                    youtubeUrl = discovered.youtubeUrl
+                                    loadedEpisodes = discovered.episodes
+                                    isFromRealPlaylist = discovered.isFromRealPlaylist
+                                    currentDayText = discovered.currentDay.toString()
+                                    onSaved(discovered)
+                                } else {
+                                    loadedEpisodes = emptyList()
+                                    isFromRealPlaylist = false
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        if (isAutoSearching) {
+                            CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("En Alakalı 3 Oynatma Listesini Bul", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    if (!statusNotice.isNullOrBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = colorScheme.primaryContainer.copy(alpha = 0.35f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = statusNotice!!,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                            )
+                        }
+                    }
+
+                    // 2. Strictly Top-3 Most Relevant Discovered Candidates
+                    if (candidatePlaylists.isNotEmpty()) {
+                        Text(
+                            text = if (hasDirectBookPlaylist) {
+                                "En Alakalı ${candidatePlaylists.size} Oynatma Listesi (Seç & Özümse)"
+                            } else {
+                                "${resource.subject.ifBlank { "Ders" }} İçin En Alakalı ${candidatePlaylists.size} Kamp Önerisi"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            candidatePlaylists.take(3).forEachIndexed { idx, cand: BookVideoCandidate ->
+                                val isActive = parsedPlId.isNotBlank() && parsedPlId == cand.playlistId
+                                val isSelectingThis = selectingCandidateId == cand.playlistId
+                                Surface(
+                                    onClick = {
+                                        if (selectingCandidateId != null) return@Surface
+                                        selectingCandidateId = cand.playlistId
+                                        statusNotice = "\"${cand.title}\" oynatma listesi özümseniyor (gerçek ders sırası ve konular işleniyor)..."
+                                        scope.launch {
+                                            val selected = BookCampManager.selectCandidatePlaylistForResource(
+                                                context = context,
+                                                resource = resource,
+                                                candidate = cand
+                                            )
+                                            selectingCandidateId = null
+                                            campTitle = selected.campTitle
+                                            instructor = selected.instructor
+                                            youtubeUrl = selected.youtubeUrl
+                                            loadedEpisodes = selected.episodes
+                                            isFromRealPlaylist = selected.isFromRealPlaylist
+                                            hasDirectBookPlaylist = selected.hasDirectBookPlaylist
+                                            skippedIntroCount = selected.skippedIntroCount
+                                            currentDayText = selected.currentDay.toString()
+                                            candidatePlaylists = selected.candidatePlaylists.take(3)
+                                            statusNotice = selected.discoveryStatusMessage
+                                            onSaved(selected)
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (isActive) colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                    else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isActive || idx == 0) colorScheme.primary.copy(alpha = 0.65f)
+                                        else colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            if (cand.isRecommended) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
                                                 Surface(
                                                     shape = RoundedCornerShape(6.dp),
-                                                    color = colorScheme.primary
+                                                    color = if (idx == 0) colorScheme.primary else colorScheme.surfaceVariant
                                                 ) {
                                                     Text(
-                                                        text = "Önerilen",
+                                                        text = if (idx == 0) "#1 Önerilen" else "#${idx + 1}",
                                                         fontSize = 9.sp,
                                                         fontWeight = FontWeight.Bold,
-                                                        color = colorScheme.onPrimary,
+                                                        color = if (idx == 0) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
                                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                     )
                                                 }
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = colorScheme.surface
+                                                ) {
+                                                    Text(
+                                                        text = if (cand.isDirectBookMatch) "Kitaba Özel" else "Ders Kampı",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                    )
+                                                }
                                             }
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = colorScheme.surface
-                                            ) {
+                                            Text(
+                                                text = cand.title,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.onSurface,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            val meta = buildList {
+                                                if (cand.channelName.isNotBlank()) add(cand.channelName)
+                                                if (cand.videoCount > 0) add("${cand.videoCount} video")
+                                            }.joinToString(" • ")
+                                            if (meta.isNotBlank()) {
                                                 Text(
-                                                    text = if (cand.isDirectBookMatch) "Kitap Listesi" else "Ders Kampı",
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                    text = meta,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = colorScheme.onSurfaceVariant
                                                 )
                                             }
                                         }
-                                        Text(
-                                            text = cand.title,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.onSurface,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        val meta = buildList {
-                                            if (cand.channelName.isNotBlank()) add(cand.channelName)
-                                            if (cand.videoCount > 0) add("${cand.videoCount} video")
-                                        }.joinToString(" • ")
-                                        if (meta.isNotBlank()) {
-                                            Text(
-                                                text = meta,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = colorScheme.onSurfaceVariant
-                                            )
+                                        if (isSelectingThis) {
+                                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        } else if (isActive) {
+                                            Icon(Icons.Default.CheckCircle, contentDescription = "Seçili", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
                                         }
                                     }
-                                    if (isSelectingThis) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    } else if (isActive) {
-                                        Icon(Icons.Default.CheckCircle, contentDescription = "Seçili", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
-                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // 3. Manual YouTube Playlist / Video Link + Fetch Real Videos button
-                OutlinedTextField(
-                    value = youtubeUrl,
-                    onValueChange = { youtubeUrl = it },
-                    label = { Text("YouTube Oynatma Listesi veya Video Linki") },
-                    placeholder = { Text("https://youtube.com/playlist?list=...") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    // 3. Manual YouTube Playlist / Video Link + Absorb button
+                    OutlinedTextField(
+                        value = youtubeUrl,
+                        onValueChange = { youtubeUrl = it },
+                        label = { Text("Kendi YouTube Liste veya Video Linkin") },
+                        placeholder = { Text("https://youtube.com/playlist?list=...") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            if (isFetchingPlaylist || parsedPlId.isBlank()) {
-                                if (parsedVid.length == 11) {
-                                    loadedEpisodes = listOf(
-                                        CampDayEpisode(
-                                            dayNumber = 1,
-                                            topicTitle = campTitle.ifBlank { resource.title },
-                                            videoId = parsedVid,
-                                            customUrl = youtubeUrl.trim()
-                                        )
-                                    )
-                                    isFromRealPlaylist = false
-                                    currentDayText = "1"
-                                    statusNotice = "Tekil YouTube videosu bağlandı."
-                                } else {
-                                    statusNotice = "Geçerli bir YouTube oynatma listesi veya video linki gir."
-                                }
-                                return@OutlinedButton
-                            }
-                            isFetchingPlaylist = true
-                            statusNotice = "Oynatma listesindeki gerçek ders videoları çekiliyor..."
-                            scope.launch {
-                                val (plTitle, eps) = BookCampManager.fetchRealPlaylistEpisodes(youtubeUrl)
-                                isFetchingPlaylist = false
-                                if (eps.isNotEmpty()) {
-                                    if (plTitle.isNotBlank()) campTitle = plTitle
-                                    loadedEpisodes = eps
-                                    isFromRealPlaylist = true
-                                    currentDayText = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, eps.size).toString()
-                                    statusNotice = "${eps.size} gerçek ders videosu sırasıyla çekildi (tanıtımlar atlandı)."
-                                } else {
-                                    statusNotice = "Oynatma listesi okunamadı. Bağlantının herkese açık olduğundan emin ol."
-                                }
-                            }
-                        },
-                        enabled = !isFetchingPlaylist && youtubeUrl.isNotBlank(),
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        if (isFetchingPlaylist) {
-                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text("Listeyi Çek", fontSize = 11.sp)
-                    }
-
-                    if (hasValidMedia && loadedEpisodes.isNotEmpty()) {
-                        OutlinedButton(
-                            onClick = {
-                                if (isDistributing) return@OutlinedButton
-                                isDistributing = true
-                                val saved = buildAndSaveBinding()
-                                onSaved(saved)
-                                scope.launch {
-                                    val added = BookCampManager.distributeCampToWeeklyPlan(context, saved)
-                                    isDistributing = false
-                                    statusNotice = "$added ders esnek sürelerle haftalık plana eklendi."
-                                    Toast.makeText(context, "$added ders haftalık plana eklendi", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text("Plana Dağıt", fontSize = 11.sp)
-                        }
-                    }
-                }
-
-                if (hasValidMedia) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
-                            value = campTitle,
-                            onValueChange = { campTitle = it },
-                            label = { Text("Liste Adı") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = currentDayText,
-                            onValueChange = { currentDayText = it.filter { c -> c.isDigit() } },
-                            label = { Text("Aktif Ders") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.width(96.dp)
-                        )
-                    }
-                }
+                        OutlinedButton(
+                            onClick = {
+                                if (isFetchingPlaylist || parsedPlId.isBlank()) {
+                                    if (parsedVid.length == 11) {
+                                        val cleanEp = campTitle.ifBlank { resource.title }
+                                        loadedEpisodes = listOf(
+                                            CampDayEpisode(
+                                                dayNumber = 1,
+                                                topicTitle = cleanEp,
+                                                videoId = parsedVid,
+                                                customUrl = youtubeUrl.trim(),
+                                                mappedTopic = BookCampManager.mapVideoTitleToCurriculumTopic(resource.subject, cleanEp)
+                                            )
+                                        )
+                                        isFromRealPlaylist = false
+                                        skippedIntroCount = 0
+                                        currentDayText = "1"
+                                        statusNotice = "Tekil YouTube videosu bağlandı."
+                                    } else {
+                                        statusNotice = "Geçerli bir YouTube oynatma listesi veya video linki gir."
+                                    }
+                                    return@OutlinedButton
+                                }
+                                isFetchingPlaylist = true
+                                statusNotice = "Oynatma listesi özümseniyor (gerçek dersler ve konular eşleştiriliyor)..."
+                                scope.launch {
+                                    val absorbed = BookCampManager.absorbRealPlaylist(youtubeUrl, subject = resource.subject)
+                                    isFetchingPlaylist = false
+                                    if (absorbed.episodes.isNotEmpty()) {
+                                        if (absorbed.playlistTitle.isNotBlank()) campTitle = absorbed.playlistTitle
+                                        loadedEpisodes = absorbed.episodes
+                                        isFromRealPlaylist = true
+                                        skippedIntroCount = absorbed.skippedIntroCount
+                                        currentDayText = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, absorbed.episodes.size).toString()
+                                        val skipNote = if (absorbed.skippedIntroCount > 0) " (${absorbed.skippedIntroCount} tanıtım elendi)" else ""
+                                        statusNotice = "${absorbed.episodes.size} gerçek ders özümsendi$skipNote."
+                                    } else {
+                                        statusNotice = "Oynatma listesi okunamadı. Bağlantının herkese açık olduğundan emin ol."
+                                    }
+                                }
+                            },
+                            enabled = !isFetchingPlaylist && youtubeUrl.isNotBlank(),
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            if (isFetchingPlaylist) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Default.PlaylistPlay, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Listeyi Özümse", fontSize = 11.sp)
+                        }
 
-                // Real episode preview (tapping selects the exact episode to start from)
-                if (loadedEpisodes.isNotEmpty()) {
-                    val selectedDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, loadedEpisodes.size)
-                    val startIdx = (selectedDay - 1).coerceAtLeast(0)
-                    val window = loadedEpisodes.drop(startIdx).take(6)
-                    HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
-                    Text(
-                        text = "Gerçek Liste Sırası (${loadedEpisodes.size} Ders • Seçmek için dokun)",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurfaceVariant
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        window.forEach { ep ->
-                            val isSelected = ep.dayNumber == selectedDay
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (isSelected) colorScheme.primaryContainer.copy(alpha = 0.6f)
-                                        else colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                                    )
-                                    .clickable { currentDayText = ep.dayNumber.toString() }
-                                    .padding(horizontal = 10.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
+                        if (hasValidMedia && loadedEpisodes.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = {
+                                    if (isDistributing) return@OutlinedButton
+                                    isDistributing = true
+                                    val saved = buildAndSaveBinding()
+                                    onSaved(saved)
+                                    scope.launch {
+                                        val added = BookCampManager.distributeCampToWeeklyPlan(context, saved)
+                                        isDistributing = false
+                                        statusNotice = "$added ders esnek sürelerle haftalık plana eklendi."
+                                        Toast.makeText(context, "$added ders haftalık plana eklendi", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
                             ) {
-                                Text(
-                                    text = "${ep.dayNumber}. ${ep.topicTitle}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (isSelected) {
-                                    Text(
-                                        text = "Seçili",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = colorScheme.primary,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text("Plana Dağıt", fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    if (hasValidMedia) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = campTitle,
+                                onValueChange = { campTitle = it },
+                                label = { Text("Liste Adı") },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = currentDayText,
+                                onValueChange = { currentDayText = it.filter { c -> c.isDigit() } },
+                                label = { Text("Kaldığın Ders") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.width(104.dp)
+                            )
+                        }
+                    }
+
+                    // Real absorbed episode preview with mapped curriculum topics
+                    if (loadedEpisodes.isNotEmpty()) {
+                        val selectedDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, loadedEpisodes.size)
+                        val startIdx = (selectedDay - 1).coerceAtLeast(0)
+                        val window = loadedEpisodes.drop(startIdx).take(6)
+                        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        val skipTag = if (skippedIntroCount > 0) " • $skippedIntroCount tanıtım elendi" else ""
+                        Text(
+                            text = "Özümsenen Ders Sırası (${loadedEpisodes.size} Ders$skipTag • Kaldığın yere dokun)",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            window.forEach { ep ->
+                                val isSelected = ep.dayNumber == selectedDay
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(
+                                            if (isSelected) colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                            else colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                        )
+                                        .clickable { currentDayText = ep.dayNumber.toString() }
+                                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${ep.dayNumber}. ${ep.topicTitle}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (ep.mappedTopic.isNotBlank() && !ep.mappedTopic.equals(ep.topicTitle, ignoreCase = true)) {
+                                            Text(
+                                                text = "Konu: ${ep.mappedTopic}",
+                                                fontSize = 10.sp,
+                                                color = colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (isSelected) {
+                                        Text(
+                                            text = "Aktif",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                if (initialBinding.hasVerifiedVideoSupport) {
-                    TextButton(
-                        onClick = {
-                            val cleared = BookCampManager.clearResourceVideoBinding(
-                                context = context,
-                                resource = resource,
-                                candidatePlaylists = candidatePlaylists
+                    if (initialBinding.hasVerifiedVideoSupport) {
+                        TextButton(
+                            onClick = {
+                                val cleared = BookCampManager.clearResourceVideoBinding(
+                                    context = context,
+                                    resource = resource,
+                                    candidatePlaylists = candidatePlaylists.take(3)
+                                )
+                                onSaved(cleared)
+                                onDismiss()
+                            },
+                            modifier = Modifier.align(Alignment.End)
+                        ) {
+                            Icon(
+                                Icons.Default.DeleteOutline,
+                                contentDescription = null,
+                                tint = colorScheme.error,
+                                modifier = Modifier.size(16.dp)
                             )
-                            onSaved(cleared)
-                            onDismiss()
-                        },
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Icon(
-                            Icons.Default.DeleteOutline,
-                            contentDescription = null,
-                            tint = colorScheme.error,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Video Desteğini Kaldır", color = colorScheme.error, fontSize = 12.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Video Bağlantısını Kaldır", color = colorScheme.error, fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -2082,7 +2262,7 @@ fun ResourceCampConfigDialog(
                         }
                         onDismiss()
                     },
-                    enabled = hasValidMedia,
+                    enabled = hasValidMedia || isVideoOptedOut,
                     shape = RoundedCornerShape(10.dp)
                 ) {
                     Text("Kaydet")

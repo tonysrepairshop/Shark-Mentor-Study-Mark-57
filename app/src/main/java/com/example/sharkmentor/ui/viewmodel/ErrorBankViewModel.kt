@@ -244,6 +244,7 @@ class ErrorBankViewModel(application: Application, savedStateHandle: androidx.li
                 // aiTopic starts as null — TopicTaggingWorker will fill it in
             )
             dao?.insertQuestion(entity)
+            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.syncWithErrorBankInBackground(context)
             com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(context)
             // Trigger background AI topic tagging for any untagged questions
             com.example.sharkmentor.worker.TopicTaggingWorker.enqueue(context)
@@ -258,6 +259,7 @@ class ErrorBankViewModel(application: Application, savedStateHandle: androidx.li
 
             // Delete from database
             dao?.deleteQuestion(question)
+            com.example.sharkmentor.core.coaching.AiCoachLedgerManager.syncWithErrorBankInBackground(context)
         }
     }
 
@@ -572,6 +574,11 @@ class ErrorBankViewModel(application: Application, savedStateHandle: androidx.li
                 val entityToSave = updated.copy(lapses = newLapses, isSynced = false)
                 
                 dao?.updateQuestion(entityToSave)
+                com.example.sharkmentor.core.coaching.AiCoachLedgerManager.onErrorQuestionReviewedInBackground(
+                    context = context,
+                    question = entityToSave,
+                    wasSolvedCorrectly = (rating == FsrsRating.GOOD || rating == FsrsRating.EASY)
+                )
                 com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(context)
 
                 if (rating == FsrsRating.GOOD || rating == FsrsRating.EASY) {
