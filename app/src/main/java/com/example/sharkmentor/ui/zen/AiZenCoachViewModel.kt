@@ -114,16 +114,15 @@ class AiZenCoachViewModel(application: Application) : AndroidViewModel(applicati
                 } else {
                     zenCoachSystemPrompt
                 }
-                val result = GeminiAiFactory.generateContentWithFailover(
+                val rawReply = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
                     context = appCtx,
-                    systemInstruction = effectiveSystemPrompt,
+                    systemPrompt = effectiveSystemPrompt,
                     userPrompt = questionText.trim(),
-                    responseJson = false,
                     temperature = 0.45f,
-                    maxOutputTokens = 1024,
+                    maxTokens = 1024,
                     timeoutMs = 45_000L
                 )
-                val aiReply = result.getOrThrow().text.takeIf { it.isNotBlank() }
+                val aiReply = rawReply.takeIf { it.isNotBlank() }
                     ?: "Derin bir nefes al. Yanındayım, bu his geçici ve sen düşündüğünden daha güçlüsün."
                 _messages.value = _messages.value + ChatMessage(text = aiReply, isUser = false)
             } catch (e: Exception) {

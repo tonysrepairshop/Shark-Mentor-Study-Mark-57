@@ -475,12 +475,12 @@ object MultiProviderAiClient {
     }
 
     /**
-     * Unified single-turn text completion router used by Video Study Studio & Coaching AI:
-     * - If the user has selected an external provider with an API key (Claude, OpenAI GPT, DeepSeek, Kimi, Grok)
-     *   or configured one in AUTO mode without custom Gemini keys, uses that provider/key first.
-     * - Otherwise (or on fallback), routes through [GeminiAiFactory.generateContent] which uses the user's
-     *   custom Gemini API key(s) & chosen model if present, or falls back seamlessly to the app's built-in
-     *   fixed API key / proxy pipeline.
+     * Unified single-turn text completion router used across Real Coaching, Study Planner,
+     * Video Study Studio, Zen Coach, Dopamine Coach, and Book Camp AI:
+     * - Supports ALL 6 providers (Claude, OpenAI GPT, DeepSeek, Kimi, Grok, and Custom/Built-in Gemini).
+     * - Guards external providers with [timeoutMs] so a slow/broken key NEVER hangs the UI.
+     * - Routes Gemini through [GeminiAiFactory.generateContentWithFailover] / [streamContentWithFailover]
+     *   with `context`, custom-key 404 smart model recovery, built-in key rotation, and Firebase proxy safety net.
      */
     suspend fun executeUnifiedTextPrompt(
         context: Context,
@@ -488,6 +488,8 @@ object MultiProviderAiClient {
         userPrompt: String,
         temperature: Float = 0.25f,
         maxTokens: Int = 4096,
+        responseJson: Boolean = false,
+        timeoutMs: Long = 45_000L,
         onPartialText: ((String) -> Unit)? = null
     ): String = withContext(Dispatchers.IO) {
         val prefs = UserAiPreferences.initialize(context)
@@ -515,45 +517,51 @@ object MultiProviderAiClient {
 
         if (resolvedExternalProvider != null) {
             val extResult = runCatching {
-                streamChatCompletion(
-                    provider = resolvedExternalProvider,
-                    systemPrompt = systemPrompt,
-                    userPrompt = userPrompt,
-                    temperature = temperature,
-                    maxTokens = maxTokens,
-                    context = context,
-                    onAccumulatedChunk = { partial -> onPartialText?.invoke(partial) }
-                )
+                kotlinx.coroutines.withTimeout(timeoutMs.coerceIn(4_000L, 90_000L)) {
+                    streamChatCompletion(
+                        provider = resolvedExternalProvider,
+                        systemPrompt = systemPrompt,
+                        userPrompt = userPrompt,
+                        temperature = temperature,
+                        maxTokens = maxTokens,
+                        context = context,
+                        onAccumulatedChunk = { partial -> onPartialText?.invoke(partial) }
+                    )
+                }
             }
             val text = extResult.getOrNull()?.trim().orEmpty()
             if (text.isNotBlank()) return@withContext text
             val err = extResult.exceptionOrNull()
-            if (err is CancellationException) throw err
-            Log.w(TAG, "External provider $resolvedExternalProvider failed; falling back to Gemini pipeline: ${err?.message}")
+            if (err is CancellationException && err !is kotlinx.coroutines.TimeoutCancellationException) throw err
+            Log.w(TAG, "External provider $resolvedExternalProvider failed/timed out; falling back to Gemini pipeline: ${err?.message}")
         }
 
-        // Gemini path: uses user custom Gemini key(s) + chosen model if set, otherwise built-in fixed key / proxy
-        val genConfig = GeminiGenerationConfig(
-            temperature = temperature,
-            maxOutputTokens = maxTokens,
-            topP = 0.85f
-        )
-        if (onPartialText != null) {
-            GeminiAiFactory.streamContents(
-                contents = listOf(GeminiContent.userText(userPrompt)),
-                systemPrompt = systemPrompt,
-                taskType = AiTaskType.LIGHT_INTERACTION,
-                generationConfig = genConfig,
+        // Gemini path: custom Gemini key(s) with smart 404 model recovery -> built-in keys -> Firebase proxy safety net
+        val result = if (onPartialText != null) {
+            GeminiAiFactory.streamContentWithFailover(
+                context = context,
+                systemInstruction = systemPrompt,
+                userPrompt = userPrompt,
+                responseJson = responseJson,
+                temperature = temperature,
+                maxOutputTokens = maxTokens,
+                topP = 0.85f,
+                timeoutMs = timeoutMs,
                 onPartialText = onPartialText
-            ).text
+            )
         } else {
-            GeminiAiFactory.generateContent(
-                contents = listOf(GeminiContent.userText(userPrompt)),
-                systemPrompt = systemPrompt,
-                taskType = AiTaskType.LIGHT_INTERACTION,
-                generationConfig = genConfig
-            ).text
+            GeminiAiFactory.generateContentWithFailover(
+                context = context,
+                systemInstruction = systemPrompt,
+                userPrompt = userPrompt,
+                responseJson = responseJson,
+                temperature = temperature,
+                maxOutputTokens = maxTokens,
+                topP = 0.85f,
+                timeoutMs = timeoutMs
+            )
         }
+        result.getOrThrow().text
     }
 
     // ── Discovery implementations ────────────────────────────────────────────

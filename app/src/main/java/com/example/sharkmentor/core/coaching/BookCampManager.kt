@@ -1453,13 +1453,15 @@ object BookCampManager {
         """.trimIndent()
 
         val aiLines = runCatching {
-            UserAiPreferences.initialize(context)
-            val res = com.example.sharkmentor.core.ai.GeminiAiFactory.generateContent(
-                contents = listOf(com.example.sharkmentor.core.ai.GeminiContent.userText(prompt)),
+            val resText = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
+                context = context,
                 systemPrompt = compass,
-                taskType = com.example.sharkmentor.core.ai.AiTaskType.LIGHT_INTERACTION
+                userPrompt = prompt,
+                temperature = 0.25f,
+                maxTokens = 2048,
+                timeoutMs = 15_000L
             )
-            res.text
+            resText
                 .lines()
                 .map { line ->
                     line.trim()
@@ -1828,24 +1830,50 @@ object BookCampManager {
         "kamp tanit",
         "kitap tanit",
         "kitap inceleme",
+        "vdd inceleme",
+        "kaynak inceleme",
         "fragman",
         "teaser",
         "duyuru",
         "on soz",
         "onsoz",
         "basliyoruz",
+        "basliyor",
+        "baslamadan once",
+        "izlemeden baslama",
+        "mutlaka izle",
         "kamp programi",
         "kamp takvimi",
+        "kamp plani",
         "kamp rehberi",
+        "kamp hakkinda",
+        "kampta neler",
+        "kamp baslangic",
+        "ders programi",
+        "calisma programi",
+        "yol haritasi",
         "nasil calis",
         "nasil ilerle",
         "kaynak oneri",
+        "kitap oneri",
+        "hangi kitap",
         "rehberlik",
         "hos geldin",
+        "hosgeldin",
+        "tanisma",
         "bilgilendirme",
+        "onemli aciklama",
+        "konu dagilimi",
+        "cikmis soru analizi",
+        "motivasyon",
+        "canli yayin",
+        "soru cevap",
         "cekilis",
         "abone ol",
         "pdf nasil",
+        "pdf indir",
+        "ders notu indir",
+        "giris videosu",
         "#shorts",
         "shorts",
         "intro",
@@ -1854,6 +1882,14 @@ object BookCampManager {
         "0.gun",
         "0. ders",
         "0.ders"
+    )
+
+    private val NON_DISTINCTIVE_TOPIC_TOKENS = setOf(
+        "modern", "giris", "temel", "kavram", "kavramlar", "sistem", "sistemler",
+        "genel", "bolum", "ders", "konu", "soru", "cozum", "cozumu", "kamp",
+        "kampi", "tekrar", "ozet", "bilim", "teori", "teorisi", "yasalari",
+        "ilkeleri", "turleri", "yapisi", "uygulama", "uygulamalari", "ozellikleri",
+        "problemleri", "hesaplamalar", "etkilesimler", "tepkimelerde"
     )
 
     private val GENERIC_BOOK_STOPWORDS = setOf(
@@ -1946,14 +1982,22 @@ object BookCampManager {
             .replace(Regex("""^\s*\d{1,3}\.\s*(?:[Gg]ün|[Dd]ers|[Vv]ideo)\s*[:\-|•–—]*\s*"""), "")
             .replace(Regex("""^\s*(?:[Gg]ün|[Dd]ers)\s*\d{1,3}\s*[:\-|•–—]*\s*"""), "")
             .trim()
-        // If pipe-separated ("Atom ve Periyodik Sistem | TYT Kimya Kampı 2026 | Ferrum"), keep the meaningful topic segment
+        // If pipe-separated ("AYT Kimya | Modern Atom Teorisi - 1 | 2026 Kampı | Ferrum"),
+        // skip pure subject/year/camp boilerplate segments and keep the real lesson topic segment.
         if (cleaned.contains("|")) {
             val segments = cleaned.split("|").map { it.trim() }.filter { it.length >= 3 }
             val best = segments.firstOrNull { seg ->
                 val normSeg = normalizeForMatch(seg)
-                val looksLikeBoilerplateOnly = normSeg.contains("kampi") &&
-                    (normSeg.contains("2024") || normSeg.contains("2025") || normSeg.contains("2026") || normSeg.contains("2027"))
-                !looksLikeBoilerplateOnly
+                val isCounterOnly = Regex("""^(?:\d{1,3}\.\s*)?(?:gun|ders|video|bolum)(?:\s*\d{1,3})?$""").matches(normSeg)
+                val looksLikeCampBoilerplate = (normSeg.contains("kampi") || normSeg.contains("kamp")) &&
+                    (normSeg.contains("2024") || normSeg.contains("2025") || normSeg.contains("2026") || normSeg.contains("2027") ||
+                        normSeg.contains("tyt") || normSeg.contains("ayt") || normSeg.contains("yks"))
+                val distinctiveTokens = normSeg.split(" ")
+                    .filter { it.length >= 2 && it !in GENERIC_BOOK_STOPWORDS }
+                !isCounterOnly && !looksLikeCampBoilerplate && distinctiveTokens.isNotEmpty()
+            } ?: segments.firstOrNull { seg ->
+                val normSeg = normalizeForMatch(seg)
+                !(normSeg.contains("kampi") && (normSeg.contains("2024") || normSeg.contains("2025") || normSeg.contains("2026") || normSeg.contains("2027")))
             } ?: segments.firstOrNull()
             if (!best.isNullOrBlank()) cleaned = best
         }
@@ -1991,30 +2035,83 @@ object BookCampManager {
             }
         if (exactMatch != null) return exactMatch
 
-        // 2. Token overlap match against canonical curriculum topics
-        val titleTokens = normTitle.split(" ").filter { it.length >= 4 && it !in GENERIC_BOOK_STOPWORDS }.toSet()
+        // 2. Distinctive domain-token overlap match (excludes generic words like "modern", "giris", "temel", "sistem")
+        val titleTokens = normTitle.split(" ")
+            .filter { it.length >= 4 && it !in GENERIC_BOOK_STOPWORDS && it !in NON_DISTINCTIVE_TOPIC_TOKENS }
+            .toSet()
         if (titleTokens.isEmpty()) return cleanedTitle
 
         var bestTopic: String? = null
         var bestScore = 0
+        var bestDistinctiveCanonCount = 0
         for (canon in canonicalTopics) {
             val canonTokens = normalizeForMatch(canon)
                 .split(" ")
-                .filter { it.length >= 4 && it !in GENERIC_BOOK_STOPWORDS }
-            val hits = canonTokens.count { ct -> titleTokens.any { tt -> tt.contains(ct) || ct.contains(tt) } }
+                .filter { it.length >= 4 && it !in GENERIC_BOOK_STOPWORDS && it !in NON_DISTINCTIVE_TOPIC_TOKENS }
+                .distinct()
+            if (canonTokens.isEmpty()) continue
+            val hits = canonTokens.count { ct ->
+                titleTokens.any { tt ->
+                    tt == ct || (ct.length >= 5 && tt.contains(ct)) || (tt.length >= 5 && ct.contains(tt))
+                }
+            }
             if (hits > bestScore) {
                 bestScore = hits
                 bestTopic = canon
+                bestDistinctiveCanonCount = canonTokens.size
             }
         }
-        return if (bestScore >= 1 && bestTopic != null) bestTopic else cleanedTitle
+        val isConfidentMatch = when {
+            bestTopic == null || bestScore <= 0 -> false
+            bestScore >= 2 -> true
+            bestDistinctiveCanonCount == 1 -> true // Single distinctive word topic (e.g. "Gazlar", "Türev", "Optik")
+            else -> false
+        }
+        return if (isConfidentMatch && bestTopic != null) bestTopic else cleanedTitle
+    }
+
+    private fun isExplicitFirstLessonTitle(rawTitle: String): Boolean {
+        val norm = normalizeForMatch(rawTitle)
+        if (norm.isBlank()) return false
+        return Regex("""\b1\.\s*(?:gun|ders|bolum|video|part)\b""").containsMatchIn(norm) ||
+            Regex("""\b(?:gun|ders|bolum|video|part)\s*1\b""").containsMatchIn(norm)
+    }
+
+    private fun isLikelyLeadingIntroClip(
+        video: ResolvedYouTubeVideo,
+        subject: String,
+        subsequentTitles: List<String> = emptyList()
+    ): Boolean {
+        val norm = normalizeForMatch(video.title)
+        if (norm.isBlank()) return true
+        // Never strip if it carries an explicit lesson/day number >= 1
+        if (Regex("""\b([1-9]\d*)\.\s*(?:gun|ders|bolum|video|part|test)\b""").containsMatchIn(norm)) return false
+        if (Regex("""\b(?:gun|ders|bolum|part)\s*([1-9]\d*)\b""").containsMatchIn(norm)) return false
+        // Never strip if it genuinely matches a canonical curriculum topic of this subject
+        if (subject.isNotBlank()) {
+            val cleaned = cleanRealPlaylistVideoTitle(video.title)
+            val mapped = mapVideoTitleToCurriculumTopic(subject, cleaned)
+            val canonicalSet = canonicalCurriculumForSubject(subject, cleaned)
+            if (canonicalSet.any { it.equals(mapped, ignoreCase = true) }) return false
+        }
+        // If a subsequent video right after this one explicitly starts at "1. Gün" / "1. Ders" / "Ders 1",
+        // then any unnumbered non-topic video sitting before Lesson 1 is mathematically a leading intro clip!
+        if (subsequentTitles.any { isExplicitFirstLessonTitle(it) }) return true
+
+        val softPromoSignals = listOf(
+            "kampi", "kitabi", "nasil", "kac gunde", "hazir misin", "hedef",
+            "program", "takvim", "plan", "duyuru", "tanit", "basl", "hakkinda",
+            "pdf", "notlari", "inceleme", "rehber", "izle", "yolculug", "sezon"
+        )
+        return softPromoSignals.any { norm.contains(it) }
     }
 
     /**
      * Converts REAL ordered YouTube playlist videos directly into 1..N [CampDayEpisode] entries:
-     * - Strips intro/promo/announcement videos via [isIntroOrNonLessonVideo].
+     * - Strips intro/promo/announcement videos via [isIntroOrNonLessonVideo] AND leading unnumbered
+     *   promo clips at positions 0..1 of multi-video playlists via [isLikelyLeadingIntroClip].
      * - Preserves exact YouTube playlist order, exact real 11-char `videoId`s, real titles,
-     *   real curriculum topic mapping ([CampDayEpisode.mappedTopic]), and question-solving tag.
+     *   honest curriculum topic mapping ([CampDayEpisode.mappedTopic]), and question-solving tag.
      */
     fun buildEpisodesFromRealPlaylistVideos(
         playlistId: String,
@@ -2022,10 +2119,14 @@ object BookCampManager {
         subject: String = ""
     ): List<CampDayEpisode> {
         val seenIds = HashSet<String>()
-        val realLessonVideos = rawVideos.filter { v ->
-            v.videoId.length == 11 &&
-                seenIds.add(v.videoId) &&
-                !isIntroOrNonLessonVideo(v.title, v.durationLabel)
+        val uniqueRaw = rawVideos.filter { it.videoId.length == 11 && seenIds.add(it.videoId) }
+        val realLessonVideos = uniqueRaw.filterIndexed { rawIdx, v ->
+            if (isIntroOrNonLessonVideo(v.title, v.durationLabel)) return@filterIndexed false
+            if (uniqueRaw.size >= 4 && rawIdx <= 1) {
+                val nextTitles = uniqueRaw.drop(rawIdx + 1).take(2).map { it.title }
+                if (isLikelyLeadingIntroClip(v, subject, nextTitles)) return@filterIndexed false
+            }
+            true
         }
         return realLessonVideos.mapIndexed { idx, video ->
             val day = idx + 1
@@ -2151,8 +2252,10 @@ object BookCampManager {
     )
 
     /**
-     * Fetches a real YouTube playlist by URL or `PL...` ID, strips intro/promo videos,
-     * maps every lesson to its canonical curriculum topic, and returns full absorption metadata.
+     * Fetches a real YouTube playlist by URL or `PL...` ID across 4 resilient layers
+     * (InnerTube `browse` WEB + continuation -> InnerTube `browse` ANDROID -> 8MB gzip HTML ->
+     * InnerTube `next` -> official Atom RSS XML), strips intro/promo videos, maps every lesson to
+     * its canonical curriculum topic, and returns full absorption metadata.
      */
     suspend fun absorbRealPlaylist(
         playlistUrlOrId: String,
@@ -2165,11 +2268,11 @@ object BookCampManager {
         }
         if (playlistId.isBlank()) return@withContext PlaylistAbsorptionResult("", emptyList(), 0, 0)
 
-        val html = fetchHtmlQuietly("https://www.youtube.com/playlist?list=$playlistId&hl=tr")
-            ?: return@withContext PlaylistAbsorptionResult("", emptyList(), 0, 0)
+        val (title, rawVideos) = fetchRealPlaylistVideosWithTitle(playlistId)
+        if (rawVideos.isEmpty()) {
+            return@withContext PlaylistAbsorptionResult(title, emptyList(), 0, 0)
+        }
 
-        val title = extractPlaylistTitleFromHtml(html)
-        val rawVideos = extractPlaylistVideosFromHtml(html)
         val episodes = buildEpisodesFromRealPlaylistVideos(playlistId, rawVideos, subject)
         val skipped = (rawVideos.size - episodes.size).coerceAtLeast(0)
         PlaylistAbsorptionResult(
@@ -2338,7 +2441,8 @@ object BookCampManager {
     /**
      * Lightweight background AI curator: inspects up to 6 pre-filtered YouTube playlist candidates
      * and returns up to 3 ordered 0-based indices of the genuinely relevant matches for [resourceTitle]/[subject].
-     * Returns null cleanly if offline or AI key unavailable.
+     * Strictly bounded to 4.5s so slow/misconfigured custom API keys NEVER stall YouTube discovery.
+     * Returns null cleanly if offline, timed out, or AI key unavailable.
      */
     private suspend fun pickTop3RelevantIndicesWithAiQuietly(
         context: Context,
@@ -2347,32 +2451,37 @@ object BookCampManager {
         candidates: List<BookVideoCandidate>
     ): List<Int>? {
         if (candidates.size <= 1) return null
-        return runCatching {
-            val listing = candidates.take(6).mapIndexed { idx, c ->
-                val countLabel = if (c.videoCount > 0) "${c.videoCount} video" else "oynatma listesi"
-                "$idx) ${c.title} | Kanal: ${c.channelName.ifBlank { "-" }} | $countLabel"
-            }.joinToString("\n")
-            val reply = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
-                context = context,
-                systemPrompt = "Sen bir eğitim kaynağı oynatma listesi seçicisisin. Alakasız listeleri ele ve en alakalı en fazla 3 listenin 0-tabanlı sıra numaralarını virgülle ayırarak yaz (örn: 0,2,1). Başka açıklama yazma.",
-                userPrompt = "Kitap: \"$resourceTitle\" | Ders: \"$subject\"\nAday YouTube oynatma listeleri:\n$listing\nEn alakalı en fazla 3 sıra numarasını en iyiden başlayarak döndür:",
-                temperature = 0.05f,
-                maxTokens = 24
-            )
-            val picks = Regex("""\b([0-5])\b""").findAll(reply.orEmpty())
-                .mapNotNull { it.groupValues[1].toIntOrNull() }
-                .filter { it in candidates.indices }
-                .distinct()
-                .take(3)
-                .toList()
-            picks.takeIf { it.isNotEmpty() }
-        }.getOrNull()
+        return kotlinx.coroutines.withTimeoutOrNull(4_500L) {
+            runCatching {
+                val listing = candidates.take(6).mapIndexed { idx, c ->
+                    val countLabel = if (c.videoCount > 0) "${c.videoCount} video" else "oynatma listesi"
+                    "$idx) ${c.title} | Kanal: ${c.channelName.ifBlank { "-" }} | $countLabel"
+                }.joinToString("\n")
+                val reply = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
+                    context = context,
+                    systemPrompt = "Sen bir eğitim kaynağı oynatma listesi seçicisisin. Alakasız listeleri ele ve en alakalı en fazla 3 listenin 0-tabanlı sıra numaralarını virgülle ayırarak yaz (örn: 0,2,1). Başka açıklama yazma.",
+                    userPrompt = "Kitap: \"$resourceTitle\" | Ders: \"$subject\"\nAday YouTube oynatma listeleri:\n$listing\nEn alakalı en fazla 3 sıra numarasını en iyiden başlayarak döndür:",
+                    temperature = 0.05f,
+                    maxTokens = 24,
+                    timeoutMs = 4_000L
+                )
+                val picks = Regex("""\b([0-5])\b""").findAll(reply.orEmpty())
+                    .mapNotNull { it.groupValues[1].toIntOrNull() }
+                    .filter { it in candidates.indices }
+                    .distinct()
+                    .take(3)
+                    .toList()
+                picks.takeIf { it.isNotEmpty() }
+            }.getOrNull()
+        }
     }
 
     /**
      * Applies a student-selected (or AI-recommended) [candidate] playlist to [resource],
      * absorbing its REAL YouTube videos (skipping intros, preserving exact lesson order, real videoIds,
      * and mapping every video to its canonical curriculum topic).
+     *
+     * NEVER fabricates a fake 1-episode dummy when playlist absorption returns empty.
      */
     suspend fun selectCandidatePlaylistForResource(
         context: Context,
@@ -2392,15 +2501,43 @@ object BookCampManager {
             }
             base.take(3)
         }
+
+        // CRITICAL: Never save a fabricated 1-episode dummy binding if real playlist videos could not be fetched!
+        if (realEpisodes.isEmpty()) {
+            val failedMsg = "Oynatma listesi videoları şu an çekilemedi. İnternet bağlantını kontrol edip tekrar dene veya başka bir liste seç."
+            return@withContext (existing ?: ResourceCampBinding(
+                resourceId = resource.id,
+                resourceTitle = resource.title,
+                subject = resource.subject,
+                campTitle = effectiveTitle,
+                instructor = candidate.channelName.ifBlank { resource.title },
+                totalDays = 0,
+                currentDay = 1,
+                youtubeUrl = "",
+                videoId = "",
+                playlistId = "",
+                episodes = emptyList(),
+                isAutoMatched = false,
+                hasVerifiedVideoSupport = false,
+                isFromRealPlaylist = false,
+                videoCheckCompleted = true,
+                hasDirectBookPlaylist = candidate.isDirectBookMatch
+            )).copy(
+                hasVerifiedVideoSupport = false,
+                isFromRealPlaylist = false,
+                episodes = emptyList(),
+                discoveryStatusMessage = failedMsg,
+                candidatePlaylists = updatedCandidates
+            )
+        }
+
         val skippedNote = if (absorbed.skippedIntroCount > 0) " (${absorbed.skippedIntroCount} tanıtım/ders dışı elendi)" else ""
-        val statusMsg = if (realEpisodes.isEmpty()) {
-            "Oynatma listesi okunamadı; bağlantının herkese açık olduğundan emin ol."
-        } else if (candidate.isDirectBookMatch) {
+        val statusMsg = if (candidate.isDirectBookMatch) {
             "${realEpisodes.size} gerçek ders videosu özümsendi$skippedNote."
         } else {
             "Seçtiğin ${resource.subject} kampı özümsendi: ${realEpisodes.size} gerçek ders$skippedNote."
         }
-        val syncedStartDay = if (realEpisodes.isNotEmpty() && resource.totalUnits > 0 && resource.completedUnits > 0) {
+        val syncedStartDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
             ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
                 .toInt().plus(1).coerceIn(1, realEpisodes.size)
         } else 1
@@ -2413,11 +2550,11 @@ object BookCampManager {
             resource = resource,
             campTitle = effectiveTitle,
             instructor = candidate.channelName.ifBlank { resource.title },
-            totalDays = realEpisodes.size.coerceAtLeast(1),
+            totalDays = realEpisodes.size,
             currentDay = syncedStartDay,
             youtubeUrl = "https://www.youtube.com/playlist?list=${candidate.playlistId}",
             realEpisodes = realEpisodes,
-            isFromRealPlaylist = realEpisodes.isNotEmpty(),
+            isFromRealPlaylist = true,
             isAutoMatched = false,
             hasDirectBookPlaylist = candidate.isDirectBookMatch,
             discoveryStatusMessage = statusMsg,
@@ -2434,12 +2571,13 @@ object BookCampManager {
     /**
      * Mark 67 High-Accuracy Top-3 Book Playlist Discovery & Real Absorption Engine:
      * 1. Respects `videoDisabled` opt-out from [BookCoachingRoleManager].
-     * 2. Searches YouTube with EXACT book title directly FIRST (plus fixed `sp=EgIQAw%3D%3D` playlist filter —
-     *    never double-encoded, never forcing "kamp" onto books whose playlists are titled "Çözümleri" or just the book name).
+     * 2. Searches YouTube with EXACT book title directly FIRST (plus fixed `sp=EgIQAw%3D%3D` playlist filter
+     *    and automatic InnerTube search fallback if desktop HTML is gated).
      * 3. Uses structural Gson `ytInitialData` JSON tree parsing supporting BOTH classic `playlistRenderer`
      *    AND modern 2024-2026 `lockupViewModel` playlist cards regardless of thumbnail size.
      * 4. Strictly filters out irrelevant subjects/exam-levels/shorts/tiny lists and caps candidates to **Top 3**.
-     * 5. Absorbs REAL playlist videos (skipping intros/promos, mapping every episode to curriculum topics).
+     * 5. Absorbs ALL REAL playlist videos via the 4-layer InnerTube/HTML/Atom engine (skipping intros/promos,
+     *    mapping every episode to curriculum topics, NEVER collapsing multi-video lists to 1 video).
      */
     suspend fun discoverAndSyncRealCampForResource(
         context: Context,
@@ -2464,14 +2602,19 @@ object BookCampManager {
         }
 
         if (!forceRefresh && existing != null) {
-            // Upgrade legacy/manual playlist binding that still lacks real per-episode videoIds
-            if (existing.playlistId.isNotBlank() && existing.episodes.none { it.videoId.length == 11 }) {
+            // Upgrade legacy/manual/broken 1-episode stub playlist bindings automatically!
+            val looksLikeUnabsorbedPlaylistStub = existing.playlistId.isNotBlank() && (
+                existing.episodes.none { it.videoId.length == 11 } ||
+                    (existing.episodes.size <= 1 && existing.candidatePlaylists.any { it.playlistId == existing.playlistId && it.videoCount >= 3 })
+            )
+            if (looksLikeUnabsorbedPlaylistStub) {
                 val absorbed = absorbRealPlaylist(existing.playlistId, subject = resource.subject)
                 if (absorbed.episodes.isNotEmpty()) {
+                    val skipSuffix = if (absorbed.skippedIntroCount > 0) " (${absorbed.skippedIntroCount} tanıtım elendi)" else ""
                     val saved = saveResourceCampBinding(
                         context = context,
                         resource = resource,
-                        campTitle = existing.campTitle.ifBlank { absorbed.playlistTitle.ifBlank { resource.title } },
+                        campTitle = absorbed.playlistTitle.ifBlank { existing.campTitle.ifBlank { resource.title } },
                         instructor = existing.instructor,
                         totalDays = absorbed.episodes.size,
                         currentDay = existing.currentDay.coerceIn(1, absorbed.episodes.size),
@@ -2480,7 +2623,7 @@ object BookCampManager {
                         isFromRealPlaylist = true,
                         isAutoMatched = existing.isAutoMatched,
                         hasDirectBookPlaylist = existing.hasDirectBookPlaylist,
-                        discoveryStatusMessage = "${absorbed.episodes.size} gerçek ders özümsendi.",
+                        discoveryStatusMessage = "${absorbed.episodes.size} gerçek ders özümsendi$skipSuffix.",
                         candidatePlaylists = existing.candidatePlaylists.take(3)
                     ).copy(skippedIntroCount = absorbed.skippedIntroCount)
                     val map = _bindingsByResourceId.value.toMutableMap().apply { put(resource.id, saved) }
@@ -2522,6 +2665,9 @@ object BookCampManager {
         if (!primaryPlHtml.isNullOrBlank()) {
             addUniqueDirect(extractPlaylistsFromSearchHtml(primaryPlHtml).take(8))
         }
+        if (directRaw.isEmpty()) {
+            addUniqueDirect(searchYouTubePlaylistsViaInnerTube(queryWithSubject, playlistsOnly = true).take(8))
+        }
 
         // 1B. Direct exact book title ONLY (catches playlists when user typed e.g. "Ferrum Kimya" or "Aydın AYT Kimya")
         if (directRaw.size < 4 && cleanTitle.isNotBlank() && !cleanTitle.equals(queryWithSubject, ignoreCase = true)) {
@@ -2529,8 +2675,11 @@ object BookCampManager {
             val exactPlHtml = fetchHtmlQuietly(
                 "https://www.youtube.com/results?search_query=$encExactTitle&sp=EgIQAw%3D%3D&hl=tr&gl=TR"
             )
-            if (!exactPlHtml.isNullOrBlank()) {
-                addUniqueDirect(extractPlaylistsFromSearchHtml(exactPlHtml).take(6))
+            val fromExactHtml = if (!exactPlHtml.isNullOrBlank()) extractPlaylistsFromSearchHtml(exactPlHtml).take(6) else emptyList()
+            if (fromExactHtml.isNotEmpty()) {
+                addUniqueDirect(fromExactHtml)
+            } else {
+                addUniqueDirect(searchYouTubePlaylistsViaInnerTube(cleanTitle, playlistsOnly = true).take(6))
             }
         }
 
@@ -2542,7 +2691,7 @@ object BookCampManager {
             addUniqueDirect(extractPlaylistsFromSearchHtml(generalHtml).take(6))
         }
 
-        if (primaryPlHtml.isNullOrBlank() && generalHtml.isNullOrBlank()) {
+        if (primaryPlHtml.isNullOrBlank() && generalHtml.isNullOrBlank() && directRaw.isEmpty()) {
             return@withContext existing ?: resolveCampForResource(context, resource)
         }
 
@@ -2550,12 +2699,16 @@ object BookCampManager {
         val subjectRaw = mutableListOf<DiscoveredYouTubePlaylist>()
         val (hasDirectInitial, _) = rankHybridBookCandidates(cleanTitle, cleanSubject, directRaw, emptyList(), maxResults = 3)
         if (!hasDirectInitial && cleanSubject.isNotBlank()) {
-            val encSubj = java.net.URLEncoder.encode("$cleanSubject konu anlatım kampı", "UTF-8")
+            val subjQuery = "$cleanSubject konu anlatım kampı"
+            val encSubj = java.net.URLEncoder.encode(subjQuery, "UTF-8")
             val subjHtml = fetchHtmlQuietly(
                 "https://www.youtube.com/results?search_query=$encSubj&sp=EgIQAw%3D%3D&hl=tr&gl=TR"
             )
-            if (!subjHtml.isNullOrBlank()) {
-                subjectRaw.addAll(extractPlaylistsFromSearchHtml(subjHtml).take(8))
+            val fromSubjHtml = if (!subjHtml.isNullOrBlank()) extractPlaylistsFromSearchHtml(subjHtml).take(8) else emptyList()
+            if (fromSubjHtml.isNotEmpty()) {
+                subjectRaw.addAll(fromSubjHtml)
+            } else {
+                subjectRaw.addAll(searchYouTubePlaylistsViaInnerTube(subjQuery, playlistsOnly = true).take(8))
             }
         }
 
@@ -2581,12 +2734,13 @@ object BookCampManager {
             }
         }
 
-        // 4. If a direct book playlist was found, absorb its REAL videos immediately (skipping intros & mapping topics!)
+        // 4. If direct book playlist(s) were found, absorb ALL real videos from the best readable direct candidate!
         if (hasDirectBookMatch) {
-            val bestDirect = rankedCandidates.firstOrNull { it.isDirectBookMatch }
-            if (bestDirect != null) {
-                val absorbed = absorbRealPlaylist(bestDirect.playlistId, subject = cleanSubject)
-                if (absorbed.episodes.isNotEmpty()) {
+            val directCandidates = rankedCandidates.filter { it.isDirectBookMatch }
+            var bestFallbackSingle: Pair<BookVideoCandidate, PlaylistAbsorptionResult>? = null
+            for (cand in directCandidates) {
+                val absorbed = absorbRealPlaylist(cand.playlistId, subject = cleanSubject)
+                if (absorbed.episodes.size >= 2 || (absorbed.episodes.size == 1 && cand.videoCount <= 2)) {
                     val realEpisodes = absorbed.episodes
                     val syncedStartDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
                         ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
@@ -2596,11 +2750,11 @@ object BookCampManager {
                     val saved = saveResourceCampBinding(
                         context = context,
                         resource = resource,
-                        campTitle = absorbed.playlistTitle.ifBlank { bestDirect.title.ifBlank { cleanTitle } },
-                        instructor = bestDirect.channelName.ifBlank { cleanTitle },
+                        campTitle = absorbed.playlistTitle.ifBlank { cand.title.ifBlank { cleanTitle } },
+                        instructor = cand.channelName.ifBlank { cleanTitle },
                         totalDays = realEpisodes.size,
                         currentDay = syncedStartDay,
-                        youtubeUrl = "https://www.youtube.com/playlist?list=${bestDirect.playlistId}",
+                        youtubeUrl = "https://www.youtube.com/playlist?list=${cand.playlistId}",
                         realEpisodes = realEpisodes,
                         isFromRealPlaylist = true,
                         isAutoMatched = true,
@@ -2612,19 +2766,49 @@ object BookCampManager {
                     _bindingsByResourceId.value = updatedMap
                     persistBindingsToPrefs(context, updatedMap)
                     return@withContext saved
+                } else if (absorbed.episodes.size == 1 && bestFallbackSingle == null) {
+                    bestFallbackSingle = cand to absorbed
                 }
+            }
+            // Only accept a 1-episode direct playlist if no other direct candidate yielded >= 2 real lessons
+            if (bestFallbackSingle != null && directCandidates.none { it.videoCount >= 3 }) {
+                val (cand, absorbed) = bestFallbackSingle
+                val realEpisodes = absorbed.episodes
+                val saved = saveResourceCampBinding(
+                    context = context,
+                    resource = resource,
+                    campTitle = absorbed.playlistTitle.ifBlank { cand.title.ifBlank { cleanTitle } },
+                    instructor = cand.channelName.ifBlank { cleanTitle },
+                    totalDays = realEpisodes.size,
+                    currentDay = 1,
+                    youtubeUrl = "https://www.youtube.com/playlist?list=${cand.playlistId}",
+                    realEpisodes = realEpisodes,
+                    isFromRealPlaylist = true,
+                    isAutoMatched = true,
+                    hasDirectBookPlaylist = true,
+                    discoveryStatusMessage = "${realEpisodes.size} gerçek ders özümsendi. En alakalı ${rankedCandidates.size} seçenekten istediğini seçebilirsin.",
+                    candidatePlaylists = rankedCandidates
+                ).copy(skippedIntroCount = absorbed.skippedIntroCount)
+                val updatedMap = _bindingsByResourceId.value.toMutableMap().apply { put(resource.id, saved) }
+                _bindingsByResourceId.value = updatedMap
+                persistBindingsToPrefs(context, updatedMap)
+                return@withContext saved
             }
         }
 
-        // 5. Fallback: check TOP 3 direct non-intro single videos from general search if it matches the exact book
-        val topDirectVideo = generalHtml?.let { html ->
-            extractSearchVideosFromHtml(html)
-                .take(3)
-                .firstOrNull { v ->
-                    !isIntroOrNonLessonVideo(v.title, v.durationLabel) &&
-                        isRelevantYouTubeMatch(cleanTitle, cleanSubject, v.title, v.channelName)
-                }
-        }
+        // 5. Fallback: ONLY check single videos when NO multi-video playlist candidates exist!
+        // Prevents silently collapsing a 30-60 video camp into a 1-video binding!
+        val hasMultiVideoPlaylistCandidates = rankedCandidates.any { it.videoCount >= 3 }
+        val topDirectVideo = if (!hasMultiVideoPlaylistCandidates) {
+            generalHtml?.let { html ->
+                extractSearchVideosFromHtml(html)
+                    .take(3)
+                    .firstOrNull { v ->
+                        !isIntroOrNonLessonVideo(v.title, v.durationLabel) &&
+                            isRelevantYouTubeMatch(cleanTitle, cleanSubject, v.title, v.channelName)
+                    }
+            }
+        } else null
 
         if (topDirectVideo != null) {
             val cleanEpTitle = cleanRealPlaylistVideoTitle(topDirectVideo.title)
@@ -2655,9 +2839,13 @@ object BookCampManager {
             )
         }
 
-        // 6. No direct book playlist found -> state clearly AND offer strictly Top 3 relevant subject camps!
+        // 6. No direct book playlist absorbed -> state clearly AND offer strictly Top 3 relevant camps!
         val honestMsg = if (rankedCandidates.isNotEmpty()) {
-            "Bu kitap için doğrudan oynatma listesi bulunamadı. ${cleanSubject.ifBlank { "Bu ders" }} için en alakalı ${rankedCandidates.size} kampı seçebilir veya videosuz devam edebilirsin."
+            if (hasDirectBookMatch) {
+                "En alakalı ${rankedCandidates.size} oynatma listesi bulundu. Aşağıdan birini seçerek tüm derslerini özümseyebilirsin."
+            } else {
+                "Bu kitap için doğrudan oynatma listesi bulunamadı. ${cleanSubject.ifBlank { "Bu ders" }} için en alakalı ${rankedCandidates.size} kampı seçebilir veya videosuz devam edebilirsin."
+            }
         } else {
             "Bu kitap için YouTube'da uyumlu oynatma listesi bulunamadı; istersen kendi liste bağlantını yapıştırabilir veya videosuz devam edebilirsin."
         }
@@ -2692,7 +2880,7 @@ object BookCampManager {
         val cleanQuery = episode.searchQuery.trim()
             .ifBlank { "$campTitle $subject ${episode.topicTitle.substringBefore(" (").trim()} konu anlatımı" }
         val cacheKey = if (episode.playlistId.isNotBlank()) {
-            "pl_v2_${episode.playlistId}_d${episode.dayNumber}"
+            "pl_v3_${episode.playlistId}_d${episode.dayNumber}"
         } else {
             "q_v2_${cleanQuery.lowercase(TR_LOCALE).take(120)}"
         }
@@ -2705,19 +2893,30 @@ object BookCampManager {
             if (cached.isNotEmpty()) return@withContext cached
         }
 
-        // 2. Live resolution from YouTube Playlist (stripping intro/promo videos!) or Search ytInitialData
+        // 2. Live resolution from YouTube Playlist via 4-layer engine (stripping intro/promo videos!)
         val resolved = mutableListOf<ResolvedYouTubeVideo>()
         if (episode.playlistId.isNotBlank()) {
-            val plUrl = "https://www.youtube.com/playlist?list=${episode.playlistId}&hl=tr"
-            val html = fetchHtmlQuietly(plUrl)
-            if (!html.isNullOrBlank()) {
-                val realLessonVideos = extractPlaylistVideosFromHtml(html)
-                    .filter { !isIntroOrNonLessonVideo(it.title, it.durationLabel) }
-                if (realLessonVideos.isNotEmpty()) {
-                    val idx = (episode.dayNumber - 1).coerceIn(0, realLessonVideos.lastIndex)
-                    resolved.add(realLessonVideos[idx])
-                    realLessonVideos.forEach { v ->
-                        if (resolved.size < 5 && resolved.none { it.videoId == v.videoId }) resolved.add(v)
+            val (_, rawVideos) = fetchRealPlaylistVideosWithTitle(episode.playlistId)
+            val realEpisodes = buildEpisodesFromRealPlaylistVideos(episode.playlistId, rawVideos, subject)
+            if (realEpisodes.isNotEmpty()) {
+                val idx = (episode.dayNumber - 1).coerceIn(0, realEpisodes.lastIndex)
+                val target = realEpisodes[idx]
+                resolved.add(
+                    ResolvedYouTubeVideo(
+                        videoId = target.videoId,
+                        title = target.topicTitle,
+                        channelName = campTitle
+                    )
+                )
+                realEpisodes.forEach { ep ->
+                    if (resolved.size < 5 && resolved.none { it.videoId == ep.videoId }) {
+                        resolved.add(
+                            ResolvedYouTubeVideo(
+                                videoId = ep.videoId,
+                                title = ep.topicTitle,
+                                channelName = campTitle
+                            )
+                        )
                     }
                 }
             }
@@ -2838,30 +3037,48 @@ object BookCampManager {
             .replace("&gt;", ">")
             .replace("&nbsp;", " ")
 
+    private const val YT_CONSENT_COOKIE =
+        "SOCS=CAESEwgDEgk0ODE3Nzk3MjQaAmVuIAEaBgiA_LyaBg; CONSENT=YES+cb.20210328-17-p0.en+FX+917"
+    private const val YT_WEB_CLIENT_VERSION = "2.20250501.00.00"
+    private const val YT_ANDROID_CLIENT_VERSION = "19.29.37"
+    private const val YT_ANDROID_UA = "com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip"
+
+    private fun readHttpBodyWithGzip(conn: java.net.HttpURLConnection, maxChars: Int = 8_000_000): String {
+        val rawStream = conn.inputStream
+        val decodedStream = if (conn.contentEncoding?.equals("gzip", ignoreCase = true) == true) {
+            java.util.zip.GZIPInputStream(rawStream)
+        } else {
+            rawStream
+        }
+        return decodedStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            val buf = CharArray(8192)
+            val sb = StringBuilder()
+            var total = 0
+            while (total < maxChars) {
+                val read = reader.read(buf)
+                if (read <= 0) break
+                sb.append(buf, 0, read)
+                total += read
+            }
+            sb.toString()
+        }
+    }
+
     private fun fetchHtmlQuietly(urlString: String): String? {
         return runCatching {
             val conn = (java.net.URL(urlString).openConnection() as java.net.HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 9_000
-                readTimeout = 10_000
+                connectTimeout = 10_000
+                readTimeout = 14_000
+                instanceFollowRedirects = true
                 setRequestProperty("User-Agent", YT_DESKTOP_UA)
                 setRequestProperty("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8")
-                setRequestProperty("Cookie", "CONSENT=YES+cb.20210328-17-p0.en+FX+917")
+                setRequestProperty("Accept-Encoding", "gzip")
+                setRequestProperty("Cookie", YT_CONSENT_COOKIE)
             }
             try {
                 if (conn.responseCode in 200..299) {
-                    conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                        val buf = CharArray(8192)
-                        val sb = StringBuilder()
-                        var total = 0
-                        while (total < 2_400_000) {
-                            val read = reader.read(buf)
-                            if (read <= 0) break
-                            sb.append(buf, 0, read)
-                            total += read
-                        }
-                        sb.toString()
-                    }
+                    readHttpBodyWithGzip(conn, maxChars = 8_000_000)
                 } else null
             } finally {
                 conn.disconnect()
@@ -2869,23 +3086,421 @@ object BookCampManager {
         }.getOrNull()
     }
 
+    private fun postJsonQuietly(
+        urlString: String,
+        jsonBody: String,
+        userAgent: String = YT_DESKTOP_UA,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): String? {
+        return runCatching {
+            val conn = (java.net.URL(urlString).openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                readTimeout = 14_000
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Accept-Encoding", "gzip")
+                setRequestProperty("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8")
+                setRequestProperty("User-Agent", userAgent)
+                setRequestProperty("Origin", "https://www.youtube.com")
+                setRequestProperty("Cookie", YT_CONSENT_COOKIE)
+                extraHeaders.forEach { (k, v) -> setRequestProperty(k, v) }
+            }
+            try {
+                conn.outputStream.use { os ->
+                    os.write(jsonBody.toByteArray(Charsets.UTF_8))
+                }
+                if (conn.responseCode in 200..299) {
+                    readHttpBodyWithGzip(conn, maxChars = 8_000_000)
+                } else null
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrNull()
+    }
+
+    private fun buildInnerTubeContextJson(
+        clientName: String,
+        clientVersion: String,
+        androidSdkVersion: Int? = null
+    ): com.google.gson.JsonObject {
+        val client = com.google.gson.JsonObject().apply {
+            addProperty("clientName", clientName)
+            addProperty("clientVersion", clientVersion)
+            addProperty("hl", "tr")
+            addProperty("gl", "TR")
+            addProperty("utcOffsetMinutes", 180)
+            if (androidSdkVersion != null) {
+                addProperty("androidSdkVersion", androidSdkVersion)
+            }
+        }
+        return com.google.gson.JsonObject().apply {
+            add("client", client)
+        }
+    }
+
+    internal data class InnerTubePlaylistParseResult(
+        val playlistTitle: String,
+        val videos: List<ResolvedYouTubeVideo>,
+        val continuationToken: String
+    )
+
+    internal fun extractPlaylistTitleFromJson(root: com.google.gson.JsonElement?): String {
+        if (root == null || !root.isJsonObject) return ""
+        val obj = root.asJsonObject
+        // 1. metadata.playlistMetadataRenderer.title
+        obj.getAsJsonObject("metadata")
+            ?.getAsJsonObject("playlistMetadataRenderer")
+            ?.get("title")
+            ?.let { extractTextFromJsonElement(it).trim() }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        // 2. header.playlistHeaderRenderer.title
+        obj.getAsJsonObject("header")
+            ?.getAsJsonObject("playlistHeaderRenderer")
+            ?.get("title")
+            ?.let { extractTextFromJsonElement(it).trim() }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        // 3. header.pageHeaderRenderer.pageTitle / pageHeaderViewModel.title
+        val pageHeader = obj.getAsJsonObject("header")?.getAsJsonObject("pageHeaderRenderer")
+        if (pageHeader != null) {
+            extractTextFromJsonElement(pageHeader.get("pageTitle")).trim()
+                .takeIf { it.isNotBlank() }
+                ?.let { return it }
+            pageHeader.getAsJsonObject("content")
+                ?.getAsJsonObject("pageHeaderViewModel")
+                ?.getAsJsonObject("title")
+                ?.getAsJsonObject("dynamicTextViewModel")
+                ?.get("text")
+                ?.let { extractTextFromJsonElement(it).trim() }
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+        // 4. contents.twoColumnWatchNextResults.playlist.playlist.title (InnerTube /next)
+        obj.getAsJsonObject("contents")
+            ?.getAsJsonObject("twoColumnWatchNextResults")
+            ?.getAsJsonObject("playlist")
+            ?.getAsJsonObject("playlist")
+            ?.get("title")
+            ?.let { extractTextFromJsonElement(it).trim() }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+        return ""
+    }
+
+    internal fun extractContinuationTokenFromJson(element: com.google.gson.JsonElement?): String {
+        if (element == null || element.isJsonNull) return ""
+        if (element.isJsonArray) {
+            for (child in element.asJsonArray) {
+                val found = extractContinuationTokenFromJson(child)
+                if (found.isNotBlank()) return found
+            }
+            return ""
+        }
+        if (!element.isJsonObject) return ""
+        val obj = element.asJsonObject
+        val contItem = obj.get("continuationItemRenderer")?.takeIf { it.isJsonObject }?.asJsonObject
+        if (contItem != null) {
+            val token = contItem.getAsJsonObject("continuationEndpoint")
+                ?.getAsJsonObject("continuationCommand")
+                ?.get("token")
+                ?.takeIf { it.isJsonPrimitive }
+                ?.asString
+                ?.trim()
+                .orEmpty()
+            if (token.isNotBlank()) return token
+        }
+        for ((_, value) in obj.entrySet()) {
+            if (value.isJsonObject || value.isJsonArray) {
+                val found = extractContinuationTokenFromJson(value)
+                if (found.isNotBlank()) return found
+            }
+        }
+        return ""
+    }
+
+    internal fun extractPlaylistDataFromInnerTubeJson(rawJson: String): InnerTubePlaylistParseResult {
+        if (rawJson.isBlank()) return InnerTubePlaylistParseResult("", emptyList(), "")
+        return runCatching {
+            val root = com.google.gson.JsonParser.parseString(rawJson)
+            val title = extractPlaylistTitleFromJson(root)
+            val videos = mutableListOf<ResolvedYouTubeVideo>()
+            val seen = HashSet<String>()
+            walkJsonTreeForPlaylistVideos(root, videos, seen, insidePlaylistContainer = false)
+            val token = extractContinuationTokenFromJson(root)
+            InnerTubePlaylistParseResult(title, videos, token)
+        }.getOrDefault(InnerTubePlaylistParseResult("", emptyList(), ""))
+    }
+
+    internal fun extractPlaylistVideosFromAtomXml(xml: String): Pair<String, List<ResolvedYouTubeVideo>> {
+        if (xml.isBlank()) return "" to emptyList()
+        val entryIdx = xml.indexOf("<entry>")
+        val headerPart = if (entryIdx > 0) xml.substring(0, entryIdx) else xml
+        val playlistTitle = Regex("""<title>([\s\S]*?)</title>""")
+            .find(headerPart)
+            ?.groupValues?.getOrNull(1)
+            ?.let { decodeHtmlEntities(it).trim() }
+            .orEmpty()
+
+        val entryRegex = Regex("""<entry>([\s\S]*?)</entry>""")
+        val vidRegex = Regex("""<yt:videoId>([a-zA-Z0-9_-]{11})</yt:videoId>""")
+        val titleRegex = Regex("""<title>([\s\S]*?)</title>""")
+        val authorRegex = Regex("""<author>[\s\S]*?<name>([\s\S]*?)</name>[\s\S]*?</author>""")
+
+        val out = mutableListOf<ResolvedYouTubeVideo>()
+        val seen = HashSet<String>()
+        for (m in entryRegex.findAll(xml)) {
+            val block = m.groupValues[1]
+            val vid = vidRegex.find(block)?.groupValues?.getOrNull(1).orEmpty()
+            if (vid.length != 11 || !seen.add(vid)) continue
+            val title = titleRegex.find(block)?.groupValues?.getOrNull(1)
+                ?.let { decodeHtmlEntities(it).trim() }
+                ?.ifBlank { "Kamp Videosu" }
+                ?: "Kamp Videosu"
+            val channel = authorRegex.find(block)?.groupValues?.getOrNull(1)
+                ?.let { decodeHtmlEntities(it).trim() }
+                .orEmpty()
+            out.add(ResolvedYouTubeVideo(videoId = vid, title = title, channelName = channel))
+        }
+        return playlistTitle to out
+    }
+
     /**
-     * Brace-balanced extractor for `var ytInitialData = {...};` inside YouTube HTML pages.
+     * 4-Layer Resilient YouTube Playlist Fetcher:
+     * - Layer 1A: InnerTube `POST /youtubei/v1/browse` (`WEB` client) + up to 1 continuation page (absorbs up to 200 videos cleanly!).
+     * - Layer 1B: InnerTube `POST /youtubei/v1/browse` (`ANDROID` client) fallback.
+     * - Layer 2: Desktop HTML `GET /playlist?list=...` with `SOCS` + `CONSENT` cookies, gzip decompression, and 8MB read cap.
+     * - Layer 3: InnerTube `POST /youtubei/v1/next` (`playlistPanelVideoRenderer` list).
+     * - Layer 4: Official public YouTube Atom RSS Feed (`/feeds/videos.xml?playlist_id=...`).
+     * Stops immediately as soon as any layer extracts >= 2 real videos; otherwise keeps the richest result across all layers.
+     */
+    private fun fetchRealPlaylistVideosWithTitle(playlistId: String): Pair<String, List<ResolvedYouTubeVideo>> {
+        if (playlistId.isBlank()) return "" to emptyList()
+        val browseId = if (playlistId.startsWith("VL")) playlistId else "VL$playlistId"
+        var bestTitle = ""
+        var bestVideos: List<ResolvedYouTubeVideo> = emptyList()
+
+        fun merge(title: String, videos: List<ResolvedYouTubeVideo>) {
+            if (title.isNotBlank() && bestTitle.isBlank()) bestTitle = title
+            if (videos.size > bestVideos.size) {
+                bestVideos = videos
+                if (title.isNotBlank()) bestTitle = title
+            }
+        }
+
+        // Layer 1A: InnerTube /browse (WEB) + continuation
+        run {
+            val reqObj = com.google.gson.JsonObject().apply {
+                add("context", buildInnerTubeContextJson("WEB", YT_WEB_CLIENT_VERSION))
+                addProperty("browseId", browseId)
+            }
+            val webHeaders = mapOf(
+                "Referer" to "https://www.youtube.com/playlist?list=$playlistId",
+                "X-YouTube-Client-Name" to "1",
+                "X-YouTube-Client-Version" to YT_WEB_CLIENT_VERSION
+            )
+            val raw = postJsonQuietly(
+                urlString = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",
+                jsonBody = reqObj.toString(),
+                userAgent = YT_DESKTOP_UA,
+                extraHeaders = webHeaders
+            )
+            if (!raw.isNullOrBlank()) {
+                val parsed = extractPlaylistDataFromInnerTubeJson(raw)
+                val combined = parsed.videos.toMutableList()
+                val seenIds = combined.mapTo(HashSet()) { it.videoId }
+                if (parsed.continuationToken.isNotBlank() && combined.size in 1..199) {
+                    val contReq = com.google.gson.JsonObject().apply {
+                        add("context", buildInnerTubeContextJson("WEB", YT_WEB_CLIENT_VERSION))
+                        addProperty("continuation", parsed.continuationToken)
+                    }
+                    val contRaw = postJsonQuietly(
+                        urlString = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",
+                        jsonBody = contReq.toString(),
+                        userAgent = YT_DESKTOP_UA,
+                        extraHeaders = webHeaders
+                    )
+                    if (!contRaw.isNullOrBlank()) {
+                        val nextPage = extractPlaylistDataFromInnerTubeJson(contRaw)
+                        for (v in nextPage.videos) {
+                            if (combined.size >= 200) break
+                            if (seenIds.add(v.videoId)) combined.add(v)
+                        }
+                    }
+                }
+                merge(parsed.playlistTitle, combined)
+                if (bestVideos.size >= 2) return bestTitle to bestVideos
+            }
+        }
+
+        // Layer 1B: InnerTube /browse (ANDROID)
+        run {
+            val reqObj = com.google.gson.JsonObject().apply {
+                add("context", buildInnerTubeContextJson("ANDROID", YT_ANDROID_CLIENT_VERSION, androidSdkVersion = 34))
+                addProperty("browseId", browseId)
+            }
+            val raw = postJsonQuietly(
+                urlString = "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false",
+                jsonBody = reqObj.toString(),
+                userAgent = YT_ANDROID_UA,
+                extraHeaders = mapOf(
+                    "X-YouTube-Client-Name" to "3",
+                    "X-YouTube-Client-Version" to YT_ANDROID_CLIENT_VERSION
+                )
+            )
+            if (!raw.isNullOrBlank()) {
+                val parsed = extractPlaylistDataFromInnerTubeJson(raw)
+                merge(parsed.playlistTitle, parsed.videos)
+                if (bestVideos.size >= 2) return bestTitle to bestVideos
+            }
+        }
+
+        // Layer 2: Desktop HTML (8MB gzip + SOCS cookie + structural ytInitialData + fixed regex)
+        run {
+            val html = fetchHtmlQuietly("https://www.youtube.com/playlist?list=$playlistId&hl=tr&gl=TR")
+            if (!html.isNullOrBlank()) {
+                val title = extractPlaylistTitleFromHtml(html)
+                val videos = extractPlaylistVideosFromHtml(html)
+                merge(title, videos)
+                if (bestVideos.size >= 2) return bestTitle to bestVideos
+            }
+        }
+
+        // Layer 3: InnerTube /next (returns playlistPanelVideoRenderer items directly)
+        run {
+            val reqObj = com.google.gson.JsonObject().apply {
+                add("context", buildInnerTubeContextJson("WEB", YT_WEB_CLIENT_VERSION))
+                addProperty("playlistId", playlistId)
+            }
+            val raw = postJsonQuietly(
+                urlString = "https://www.youtube.com/youtubei/v1/next?prettyPrint=false",
+                jsonBody = reqObj.toString(),
+                userAgent = YT_DESKTOP_UA,
+                extraHeaders = mapOf(
+                    "Referer" to "https://www.youtube.com/playlist?list=$playlistId",
+                    "X-YouTube-Client-Name" to "1",
+                    "X-YouTube-Client-Version" to YT_WEB_CLIENT_VERSION
+                )
+            )
+            if (!raw.isNullOrBlank()) {
+                val parsed = extractPlaylistDataFromInnerTubeJson(raw)
+                merge(parsed.playlistTitle, parsed.videos)
+                if (bestVideos.size >= 2) return bestTitle to bestVideos
+            }
+        }
+
+        // Layer 4: Official YouTube Public Atom RSS Feed
+        run {
+            val xml = fetchHtmlQuietly("https://www.youtube.com/feeds/videos.xml?playlist_id=$playlistId")
+            if (!xml.isNullOrBlank()) {
+                val (title, videos) = extractPlaylistVideosFromAtomXml(xml)
+                merge(title, videos)
+            }
+        }
+
+        return bestTitle to bestVideos
+    }
+
+    private fun searchYouTubePlaylistsViaInnerTube(
+        query: String,
+        playlistsOnly: Boolean = true
+    ): List<DiscoveredYouTubePlaylist> {
+        val cleanQ = query.trim()
+        if (cleanQ.isBlank()) return emptyList()
+        val reqObj = com.google.gson.JsonObject().apply {
+            add("context", buildInnerTubeContextJson("WEB", YT_WEB_CLIENT_VERSION))
+            addProperty("query", cleanQ)
+            if (playlistsOnly) addProperty("params", "EgIQAw==")
+        }
+        val raw = postJsonQuietly(
+            urlString = "https://www.youtube.com/youtubei/v1/search?prettyPrint=false",
+            jsonBody = reqObj.toString(),
+            userAgent = YT_DESKTOP_UA,
+            extraHeaders = mapOf(
+                "X-YouTube-Client-Name" to "1",
+                "X-YouTube-Client-Version" to YT_WEB_CLIENT_VERSION
+            )
+        ) ?: return emptyList()
+
+        val out = mutableListOf<DiscoveredYouTubePlaylist>()
+        val seen = HashSet<String>()
+        runCatching {
+            val root = com.google.gson.JsonParser.parseString(raw)
+            walkJsonTreeForPlaylists(root, out, seen)
+        }
+        return out
+    }
+
+    private fun decodeJsHexEscapedJson(escaped: String): String {
+        val sb = StringBuilder(escaped.length)
+        var i = 0
+        while (i < escaped.length) {
+            val ch = escaped[i]
+            if (ch == '\\' && i + 1 < escaped.length) {
+                val next = escaped[i + 1]
+                if (next == 'x' && i + 3 < escaped.length) {
+                    val code = escaped.substring(i + 2, i + 4).toIntOrNull(16)
+                    if (code != null) {
+                        sb.append(code.toChar())
+                        i += 4
+                        continue
+                    }
+                } else if (next == '\'' || next == '"' || next == '\\') {
+                    sb.append(next)
+                    i += 2
+                    continue
+                }
+            }
+            sb.append(ch)
+            i++
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Brace-balanced extractor for `var ytInitialData = {...};` AND single-quoted hex-escaped
+     * `var ytInitialData = '\x7b...\x7d';` inside YouTube HTML pages.
      * Completely immune to nested thumbnail arrays, large objects, and field reordering.
      */
     internal fun extractYtInitialDataJson(html: String): String? {
         val markers = listOf("var ytInitialData = ", "window[\"ytInitialData\"] = ", "ytInitialData = ")
-        var braceStart = -1
+        var markerEnd = -1
         for (marker in markers) {
             val idx = html.indexOf(marker)
             if (idx >= 0) {
-                val nextBrace = html.indexOf('{', idx + marker.length)
-                if (nextBrace >= 0) {
-                    braceStart = nextBrace
-                    break
-                }
+                markerEnd = idx + marker.length
+                break
             }
         }
+        if (markerEnd < 0) return null
+
+        var cursor = markerEnd
+        while (cursor < html.length && html[cursor].isWhitespace()) cursor++
+        if (cursor >= html.length) return null
+
+        // Handle hex-escaped single-quoted form: var ytInitialData = '\x7b...\x7d';
+        if (html[cursor] == '\'') {
+            val strStart = cursor + 1
+            var i = strStart
+            var esc = false
+            while (i < html.length) {
+                val ch = html[i]
+                if (esc) {
+                    esc = false
+                } else if (ch == '\\') {
+                    esc = true
+                } else if (ch == '\'') {
+                    val decoded = decodeJsHexEscapedJson(html.substring(strStart, i))
+                    return decoded.takeIf { it.startsWith("{") }
+                }
+                i++
+            }
+            return null
+        }
+
+        val braceStart = html.indexOf('{', cursor)
         if (braceStart < 0) return null
 
         var depth = 0
@@ -3023,12 +3638,13 @@ object BookCampManager {
     private fun walkJsonTreeForPlaylistVideos(
         element: com.google.gson.JsonElement?,
         out: MutableList<ResolvedYouTubeVideo>,
-        seen: MutableSet<String>
+        seen: MutableSet<String>,
+        insidePlaylistContainer: Boolean = false
     ) {
         if (element == null || element.isJsonNull || out.size >= 200) return
         if (element.isJsonArray) {
             for (child in element.asJsonArray) {
-                walkJsonTreeForPlaylistVideos(child, out, seen)
+                walkJsonTreeForPlaylistVideos(child, out, seen, insidePlaylistContainer)
                 if (out.size >= 200) return
             }
             return
@@ -3036,6 +3652,7 @@ object BookCampManager {
         if (!element.isJsonObject) return
         val obj = element.asJsonObject
 
+        // 1. Classic playlistVideoRenderer (Web / Android /browse & HTML)
         val pvr = obj.get("playlistVideoRenderer")?.takeIf { it.isJsonObject }?.asJsonObject
         if (pvr != null) {
             val vid = pvr.get("videoId")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
@@ -3048,9 +3665,59 @@ object BookCampManager {
             return
         }
 
-        for ((_, value) in obj.entrySet()) {
+        // 2. playlistPanelVideoRenderer (InnerTube /next playlist queue — NEVER sidebar recs!)
+        val ppvr = obj.get("playlistPanelVideoRenderer")?.takeIf { it.isJsonObject }?.asJsonObject
+        if (ppvr != null) {
+            val vid = ppvr.get("videoId")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+            if (vid.length == 11 && seen.add(vid)) {
+                val title = extractTextFromJsonElement(ppvr.get("title")).trim().ifBlank { "Kamp Videosu" }
+                val channel = extractTextFromJsonElement(ppvr.get("shortBylineText"))
+                    .ifBlank { extractTextFromJsonElement(ppvr.get("longBylineText")) }
+                    .trim()
+                val duration = extractTextFromJsonElement(ppvr.get("lengthText")).trim()
+                out.add(ResolvedYouTubeVideo(videoId = vid, title = title, channelName = channel, durationLabel = duration))
+            }
+            return
+        }
+
+        // 3. Container-scoped modern renderers inside playlistVideoListRenderer ONLY (guards against unrelated sidebar recs!)
+        if (insidePlaylistContainer) {
+            val vwcr = obj.get("videoWithContextRenderer")?.takeIf { it.isJsonObject }?.asJsonObject
+            if (vwcr != null) {
+                val vid = vwcr.get("videoId")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                if (vid.length == 11 && seen.add(vid)) {
+                    val title = extractTextFromJsonElement(vwcr.get("headline"))
+                        .ifBlank { extractTextFromJsonElement(vwcr.get("title")) }
+                        .trim().ifBlank { "Kamp Videosu" }
+                    val channel = extractTextFromJsonElement(vwcr.get("shortBylineText")).trim()
+                    val duration = extractTextFromJsonElement(vwcr.get("lengthText")).trim()
+                    out.add(ResolvedYouTubeVideo(videoId = vid, title = title, channelName = channel, durationLabel = duration))
+                }
+                return
+            }
+
+            val lockup = obj.get("lockupViewModel")?.takeIf { it.isJsonObject }?.asJsonObject
+            if (lockup != null) {
+                val contentType = lockup.get("contentType")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                val vid = lockup.get("contentId")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                val isVideoCard = !contentType.contains("PLAYLIST", ignoreCase = true) && vid.length == 11
+                if (isVideoCard && seen.add(vid)) {
+                    val metaObj = lockup.getAsJsonObject("metadata")?.getAsJsonObject("lockupMetadataViewModel")
+                    val title = extractTextFromJsonElement(metaObj?.get("title")).trim().ifBlank { "Kamp Videosu" }
+                    val duration = Regex(""""text":"(\d{1,2}:\d{2}(?::\d{2})?)"""")
+                        .find(lockup.toString())?.groupValues?.getOrNull(1).orEmpty()
+                    out.add(ResolvedYouTubeVideo(videoId = vid, title = title, durationLabel = duration))
+                }
+                return
+            }
+        }
+
+        for ((key, value) in obj.entrySet()) {
             if (value.isJsonObject || value.isJsonArray) {
-                walkJsonTreeForPlaylistVideos(value, out, seen)
+                val childInContainer = insidePlaylistContainer ||
+                    key == "playlistVideoListRenderer" ||
+                    key == "playlistVideoListContinuation"
+                walkJsonTreeForPlaylistVideos(value, out, seen, childInContainer)
                 if (out.size >= 200) return
             }
         }
@@ -3175,26 +3842,33 @@ object BookCampManager {
         if (!initialDataJson.isNullOrBlank()) {
             runCatching {
                 val root = com.google.gson.JsonParser.parseString(initialDataJson)
-                walkJsonTreeForPlaylistVideos(root, out, seen)
+                walkJsonTreeForPlaylistVideos(root, out, seen, insidePlaylistContainer = false)
             }
         }
         if (out.isNotEmpty()) return out
 
-        // 2. Fallback: Regex extraction for partial HTML snippets
-        val plRegex = Regex(""""playlistVideoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"[\s\S]{0,2000}?(?="playlistVideoRenderer":|\}\]\}\}|\}\}\}\s*(?:\n|$))""")
+        // 2. Fallback: Safe window-based regex extraction for partial/truncated HTML snippets
+        // (NEVER truncates on nested thumbnail `}]}}` brackets before reaching `"title"`!)
+        val startRegex = Regex(""""playlist(?:Panel)?VideoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})"""")
         val runsTitleRegex = Regex(""""title":\{"runs":\[\{"text":"([^"\\]{2,180})"""")
         val simpleTitleRegex = Regex(""""title":\{"simpleText":"([^"\\]{2,180})"""")
-        val lenRegex = Regex(""""lengthText":\{[^\}]{0,180}"simpleText":"([0-9:]{3,10})"""")
+        val ownerRegex = Regex(""""shortBylineText":\{"runs":\[\{"text":"([^"\\]{2,90})"""")
+        val lenRegex = Regex(""""lengthText":\{[^\}]{0,220}"simpleText":"([0-9:]{3,10})"""")
 
-        for (match in plRegex.findAll(html)) {
-            val vid = match.groupValues[1]
+        val matches = startRegex.findAll(html).toList()
+        for (idx in matches.indices) {
+            val m = matches[idx]
+            val vid = m.groupValues[1]
             if (!seen.add(vid)) continue
-            val chunk = match.value
+            val nextStart = if (idx + 1 < matches.size) matches[idx + 1].range.first else html.length
+            val end = nextStart.coerceAtMost(m.range.first + 6_000)
+            val chunk = html.substring(m.range.first, end)
             val title = (runsTitleRegex.find(chunk)?.groupValues?.getOrNull(1)
                 ?: simpleTitleRegex.find(chunk)?.groupValues?.getOrNull(1))
                 ?.let { unescapeJsonString(it) } ?: "Kamp Videosu"
+            val channel = ownerRegex.find(chunk)?.groupValues?.getOrNull(1)?.let { unescapeJsonString(it) }.orEmpty()
             val duration = lenRegex.find(chunk)?.groupValues?.getOrNull(1).orEmpty()
-            out.add(ResolvedYouTubeVideo(videoId = vid, title = title, durationLabel = duration))
+            out.add(ResolvedYouTubeVideo(videoId = vid, title = title, channelName = channel, durationLabel = duration))
             if (out.size >= 200) break
         }
         return out

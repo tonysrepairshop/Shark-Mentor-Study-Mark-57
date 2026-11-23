@@ -1941,17 +1941,19 @@ fun ResourceCampConfigDialog(
                                                 candidate = cand
                                             )
                                             selectingCandidateId = null
-                                            campTitle = selected.campTitle
-                                            instructor = selected.instructor
-                                            youtubeUrl = selected.youtubeUrl
-                                            loadedEpisodes = selected.episodes
-                                            isFromRealPlaylist = selected.isFromRealPlaylist
-                                            hasDirectBookPlaylist = selected.hasDirectBookPlaylist
-                                            skippedIntroCount = selected.skippedIntroCount
-                                            currentDayText = selected.currentDay.toString()
                                             candidatePlaylists = selected.candidatePlaylists.take(3)
                                             statusNotice = selected.discoveryStatusMessage
-                                            onSaved(selected)
+                                            if (selected.episodes.isNotEmpty() && selected.hasVerifiedVideoSupport) {
+                                                campTitle = selected.campTitle
+                                                instructor = selected.instructor
+                                                youtubeUrl = selected.youtubeUrl
+                                                loadedEpisodes = selected.episodes
+                                                isFromRealPlaylist = selected.isFromRealPlaylist
+                                                hasDirectBookPlaylist = selected.hasDirectBookPlaylist
+                                                skippedIntroCount = selected.skippedIntroCount
+                                                currentDayText = selected.currentDay.toString()
+                                                onSaved(selected)
+                                            }
                                         }
                                     },
                                     shape = RoundedCornerShape(10.dp),

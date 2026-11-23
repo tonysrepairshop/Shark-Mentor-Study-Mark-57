@@ -218,15 +218,27 @@ class DopamineProtocolViewModel : ViewModel() {
                     "${if (msg.sender == "user") "Öğrenci" else "Koç"}: ${msg.text}"
                 }
                 val appContext = runCatching { FirebaseApp.getInstance().applicationContext }.getOrNull()
-                val reply = GeminiAiFactory.generateContentWithFailover(
-                    context = appContext,
-                    systemInstruction = reflectionSystemPrompt,
-                    userPrompt = history,
-                    responseJson = false,
-                    temperature = 0.45f,
-                    maxOutputTokens = 1024,
-                    timeoutMs = 45_000L
-                ).getOrThrow().text.trim().ifBlank { "Seni dinliyorum, devam et." }
+                val rawText = if (appContext != null) {
+                    com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
+                        context = appContext,
+                        systemPrompt = reflectionSystemPrompt,
+                        userPrompt = history,
+                        temperature = 0.45f,
+                        maxTokens = 1024,
+                        timeoutMs = 45_000L
+                    )
+                } else {
+                    GeminiAiFactory.generateContentWithFailover(
+                        context = null,
+                        systemInstruction = reflectionSystemPrompt,
+                        userPrompt = history,
+                        responseJson = false,
+                        temperature = 0.45f,
+                        maxOutputTokens = 1024,
+                        timeoutMs = 45_000L
+                    ).getOrThrow().text
+                }
+                val reply = rawText.trim().ifBlank { "Seni dinliyorum, devam et." }
                 _reflectionMessages.value = _reflectionMessages.value +
                         ReflectionMessage(sender = "ai", text = reply)
             } catch (e: Exception) {

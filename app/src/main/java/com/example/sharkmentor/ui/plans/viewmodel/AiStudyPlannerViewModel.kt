@@ -214,17 +214,15 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
     }
 
     private suspend fun executeWithKeyRotation(promptText: String, systemPrompt: String): String {
-        val result = GeminiAiFactory.generateContentWithFailover(
+        val raw = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
             context = getApplication(),
-            systemInstruction = systemPrompt,
+            systemPrompt = systemPrompt,
             userPrompt = promptText,
+            temperature = 0.2f,
+            maxTokens = 8192,
             responseJson = true,
-            maxOutputTokens = 8192,
             timeoutMs = 55_000L
         )
-        val raw = result.getOrElse { err ->
-            throw (err as? Exception) ?: RuntimeException(err.localizedMessage ?: "Gemini API hatası", err)
-        }.text
         val cleanJson = GeminiRestClient.extractCleanJsonString(raw)
         if (cleanJson.isBlank()) {
             throw IllegalStateException("Yapay zeka boş plan yanıtı döndürdü.")
@@ -252,8 +250,10 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
             }
 
             UserAiPreferences.initialize(getApplication())
-            if (!ApiKeyRotator.hasAnyGeminiKey(getApplication())) {
-                _uiState.value = PlannerUiState.Error("Gemini API anahtarı tanımlanmamış. Ayarlardan bir anahtar ekleyin.")
+            if (!ApiKeyRotator.hasAnyGeminiKey(getApplication()) &&
+                !com.example.sharkmentor.core.ai.MultiProviderAiClient.hasAnyExternalProviderKey(getApplication())
+            ) {
+                _uiState.value = PlannerUiState.Error("AI API anahtarı tanımlanmamış. Ayarlardan bir anahtar ekleyin.")
                 return@launch
             }
 

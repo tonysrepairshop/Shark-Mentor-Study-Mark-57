@@ -405,4 +405,167 @@ class Mark67BookRolesRepetitionAndLedgerTest {
         val totalFerrumCount = specs.count { it.topicLabel.contains("Ferrum AYT Kimya") }
         assertTrue("Concept video book must not hijack all 7 days (found $totalFerrumCount)", totalFerrumCount in 1..2)
     }
+
+    @Test
+    fun testFourLayerPlaylistAbsorptionInnerTubeAtomXmlHexHtmlAndStrictIntroStripping() {
+        // 1. InnerTube /browse JSON with 12 videos (2 tricky leading Turkish intros + 10 real lessons) + continuation token
+        val realLessonTitles = listOf(
+            "AYT Kimya | 1. Gün | Modern Atom Teorisi - Kuantum Sayıları | Ferrum",
+            "AYT Kimya | 2. Gün | Modern Atom Teorisi - Elektron Dizilimi | Ferrum",
+            "3. Gün | Periyodik Özellikler | AYT Kimya Kampı 2026",
+            "4. Gün | Gazlar - Gaz Yasaları | Ferrum",
+            "5. Gün | Gazlar - İdeal Gaz Denklemi | Ferrum",
+            "6. Gün | Sıvı Çözeltiler ve Çözünürlük - 1 | Ferrum",
+            "7. Gün | Kimyasal Tepkimelerde Enerji | Ferrum",
+            "8. Gün | Kimyasal Tepkimelerde Hız | Ferrum",
+            "9. Gün | Kimyasal Tepkimelerde Denge | Ferrum",
+            "10. Gün | Organik Bileşikler - Alkanlar | Ferrum"
+        )
+        val pvrItems = buildList {
+            // Tricky leading intro #1: NO literal "tanıtım", but says "Başlıyoruz!"
+            add("""{"playlistVideoRenderer":{"videoId":"intrA000001","title":{"runs":[{"text":"2026 AYT Kimya Kampı Başlıyoruz!"}]},"shortBylineText":{"runs":[{"text":"Ferrum"}]},"lengthText":{"simpleText":"08:40"}}}""")
+            // Tricky leading intro #2: NO keyword at all, just subject/year before "1. Gün"
+            add("""{"playlistVideoRenderer":{"videoId":"intrB000002","title":{"runs":[{"text":"AYT Kimya 2026 Yolculuğu | Ferrum"}]},"shortBylineText":{"runs":[{"text":"Ferrum"}]},"lengthText":{"simpleText":"05:12"}}}""")
+            realLessonTitles.forEachIndexed { i, title ->
+                val vid = "lesn%07d".format(i + 1)
+                add("""{"playlistVideoRenderer":{"videoId":"$vid","title":{"runs":[{"text":"$title"}]},"shortBylineText":{"runs":[{"text":"Ferrum"}]},"lengthText":{"simpleText":"38:20"}}}""")
+            }
+            add("""{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":"CONT_TOKEN_PAGE_2"}}}}""")
+        }.joinToString(",")
+
+        val browseJson = """
+            {
+              "metadata": {"playlistMetadataRenderer": {"title": "2026 AYT Kimya Kampı | Ferrum"}},
+              "contents": {"playlistVideoListRenderer": {"contents": [$pvrItems]}}
+            }
+        """.trimIndent()
+
+        val parsedBrowse = BookCampManager.extractPlaylistDataFromInnerTubeJson(browseJson)
+        assertEquals("2026 AYT Kimya Kampı | Ferrum", parsedBrowse.playlistTitle)
+        assertEquals(12, parsedBrowse.videos.size)
+        assertEquals("CONT_TOKEN_PAGE_2", parsedBrowse.continuationToken)
+
+        val absorbedEpisodes = BookCampManager.buildEpisodesFromRealPlaylistVideos(
+            playlistId = "PLFerrumAytKimya2026",
+            rawVideos = parsedBrowse.videos,
+            subject = "AYT Kimya"
+        )
+        // MUST strip BOTH leading intro clips and preserve ALL 10 real lessons in exact order (NEVER collapse to 1!)
+        assertEquals(10, absorbedEpisodes.size)
+        assertEquals("lesn0000001", absorbedEpisodes[0].videoId)
+        assertEquals("Modern Atom Teorisi - Kuantum Sayıları", absorbedEpisodes[0].topicTitle)
+        assertEquals("Modern Atom Teorisi", absorbedEpisodes[0].mappedTopic)
+        assertEquals("lesn0000010", absorbedEpisodes[9].videoId)
+        assertEquals(10, absorbedEpisodes[9].dayNumber)
+        assertFalse(absorbedEpisodes.any { it.videoId == "intrA000001" || it.videoId == "intrB000002" })
+
+        // Verify generic words like "Modern" in an intro title do NOT falsely map to "Modern Atom Teorisi"
+        assertNotEquals(
+            "Modern Atom Teorisi",
+            BookCampManager.mapVideoTitleToCurriculumTopic("AYT Kimya", "Modern Kamp Rehberi 2026")
+        )
+
+        // 2. InnerTube /next JSON (playlistPanelVideoRenderer) + sidebar lockupViewModel must be ignored!
+        val nextJson = """
+            {
+              "contents": {
+                "twoColumnWatchNextResults": {
+                  "playlist": {
+                    "playlist": {
+                      "title": "Aydın AYT Kimya Çözümleri",
+                      "contents": [
+                        {"playlistPanelVideoRenderer": {"videoId": "ppvr0000001", "title": {"simpleText": "1. Ders: Modern Atom Teorisi"}, "lengthText": {"simpleText": "22:10"}}},
+                        {"playlistPanelVideoRenderer": {"videoId": "ppvr0000002", "title": {"simpleText": "2. Ders: Gazlar"}, "lengthText": {"simpleText": "25:40"}}}
+                      ]
+                    }
+                  },
+                  "secondaryResults": {
+                    "results": [
+                      {"lockupViewModel": {"contentType": "LOCKUP_CONTENT_TYPE_VIDEO", "contentId": "sidebarRec1", "metadata": {"lockupMetadataViewModel": {"title": {"content": "Alakasız Öneri Videosu"}}}}}
+                    ]
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+        val parsedNext = BookCampManager.extractPlaylistDataFromInnerTubeJson(nextJson)
+        assertEquals("Aydın AYT Kimya Çözümleri", parsedNext.playlistTitle)
+        assertEquals(listOf("ppvr0000001", "ppvr0000002"), parsedNext.videos.map { it.videoId })
+
+        // 3. Container-scoped lockupViewModel inside playlistVideoListRenderer IS extracted cleanly
+        val lockupPlaylistJson = """
+            {
+              "contents": {
+                "playlistVideoListRenderer": {
+                  "contents": [
+                    {"lockupViewModel": {"contentType": "LOCKUP_CONTENT_TYPE_VIDEO", "contentId": "lckVid00001", "metadata": {"lockupMetadataViewModel": {"title": {"content": "1. Ders: Türev"}}}}},
+                    {"lockupViewModel": {"contentType": "LOCKUP_CONTENT_TYPE_VIDEO", "contentId": "lckVid00002", "metadata": {"lockupMetadataViewModel": {"title": {"content": "2. Ders: İntegral"}}}}}
+                  ]
+                }
+              }
+            }
+        """.trimIndent()
+        val parsedLockup = BookCampManager.extractPlaylistDataFromInnerTubeJson(lockupPlaylistJson)
+        assertEquals(listOf("lckVid00001", "lckVid00002"), parsedLockup.videos.map { it.videoId })
+
+        // 4. Truncated HTML fallback with giant nested thumbnail `}]}}` brackets still captures ALL titles & videoIds!
+        val truncatedHtml = """
+            <html><script>var ytInitialData = {"contents":[
+              {"playlistVideoRenderer":{"videoId":"regVid00001","thumbnail":{"thumbnails":[{"url":"https://i.ytimg.com/1.jpg"}]},"badges":[{"nested":[{}]}]},"title":{"runs":[{"text":"1. Ders: Gazlar"}]},"lengthText":{"simpleText":"31:00"}},
+              {"playlistVideoRenderer":{"videoId":"regVid00002","thumbnail":{"thumbnails":[{"url":"https://i.ytimg.com/2.jpg"}]},"badges":[{"nested":[{}]}]},"title":{"runs":[{"text":"2. Ders: Çözeltiler"}]},"lengthText":{"simpleText":"29:15"}}
+        """.trimIndent() // intentionally unclosed JSON so regex fallback runs!
+        val regexExtracted = BookCampManager.extractPlaylistVideosFromHtml(truncatedHtml)
+        assertEquals(2, regexExtracted.size)
+        assertEquals("1. Ders: Gazlar", regexExtracted[0].title)
+        assertEquals("2. Ders: Çözeltiler", regexExtracted[1].title)
+
+        // 5. Official YouTube Atom RSS XML fallback extracts title & all entries cleanly
+        val atomXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+              <title>AYT Kimya Full Kamp</title>
+              <entry><yt:videoId>atomVid0001</yt:videoId><title>1. Ders &amp; Kuantum</title><author><name>Ferrum</name></author></entry>
+              <entry><yt:videoId>atomVid0002</yt:videoId><title>2. Ders: Gazlar</title><author><name>Ferrum</name></author></entry>
+            </feed>
+        """.trimIndent()
+        val (atomTitle, atomVideos) = BookCampManager.extractPlaylistVideosFromAtomXml(atomXml)
+        assertEquals("AYT Kimya Full Kamp", atomTitle)
+        assertEquals(2, atomVideos.size)
+        assertEquals("1. Ders & Kuantum", atomVideos[0].title)
+        assertEquals("Ferrum", atomVideos[0].channelName)
+    }
+
+    @Test
+    fun testCustomGeminiKeySmart404FallbackAndModelCacheRespectsSettingsChanges() {
+        com.example.sharkmentor.core.ai.GeminiAiFactory.clearCustomKeyModelCacheForTesting()
+        com.example.sharkmentor.core.ai.UserAiPreferences.clearCustomGeminiConfig()
+        try {
+            val fallbacks = com.example.sharkmentor.core.ai.GeminiAiFactory.resolveCustomKeyFallbackModels("gemini-3.6-flash")
+            assertEquals(listOf("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"), fallbacks)
+
+            // When user enters a Google AI Studio key with default gemini-3.6-flash and 404 recovery discovers gemini-2.5-flash
+            val testKey = "AIzaSyTestCustomKey1234567890"
+            com.example.sharkmentor.core.ai.UserAiPreferences.setCustomGeminiConfig(testKey, "gemini-3.6-flash")
+            assertEquals(
+                "gemini-3.6-flash",
+                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
+            )
+            com.example.sharkmentor.core.ai.GeminiAiFactory.rememberWorkingCustomKeyModel(testKey, "gemini-2.5-flash", "gemini-3.6-flash")
+            assertEquals(
+                "gemini-2.5-flash",
+                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
+            )
+
+            // If user explicitly changes their model in Settings to gemini-2.5-pro, cache MUST respect the new model!
+            com.example.sharkmentor.core.ai.UserAiPreferences.setSelectedUserGeminiModel("gemini-2.5-pro")
+            assertEquals(
+                "gemini-2.5-pro",
+                com.example.sharkmentor.core.ai.GeminiAiFactory.resolveEffectiveModelForCustomKey(null, testKey)
+            )
+        } finally {
+            com.example.sharkmentor.core.ai.GeminiAiFactory.clearCustomKeyModelCacheForTesting()
+            com.example.sharkmentor.core.ai.UserAiPreferences.clearCustomGeminiConfig()
+        }
+    }
 }
+
