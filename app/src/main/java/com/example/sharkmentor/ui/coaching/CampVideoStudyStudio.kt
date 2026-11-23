@@ -1186,7 +1186,7 @@ fun CampVideoStudyStudioDialog(
                                                                     text = aiAnswer,
                                                                     textColor = colorScheme.onSurface,
                                                                     accentColor = colorScheme.primary,
-                                                                    formulaBackground = colorScheme.surface
+                                                                    formulaContainerColor = colorScheme.surface
                                                                 )
                                                             }
                                                             if (!isAiLoading) {
@@ -1219,14 +1219,12 @@ fun CampVideoStudyStudioDialog(
                                             }
                                         }
 
-                                        if (showMathPanel) {
-                                            MathSymbolKeyboardPanel(
-                                                onInsertSymbol = { sym ->
-                                                    aiQuestion = MathSymbolCatalog.insertAtEnd(aiQuestion, sym)
-                                                },
-                                                onClose = { showMathPanel = false }
-                                            )
-                                        }
+                                        MathSymbolKeyboardPanel(
+                                            visible = showMathPanel,
+                                            onInsertSymbol = { sym ->
+                                                aiQuestion += sym
+                                            }
+                                        )
 
                                         // Compact Input Row
                                         Row(
@@ -1236,7 +1234,7 @@ fun CampVideoStudyStudioDialog(
                                         ) {
                                             MathSymbolToggleButton(
                                                 expanded = showMathPanel,
-                                                onToggle = { showMathPanel = !showMathPanel }
+                                                onClick = { showMathPanel = !showMathPanel }
                                             )
                                             OutlinedTextField(
                                                 value = aiQuestion,

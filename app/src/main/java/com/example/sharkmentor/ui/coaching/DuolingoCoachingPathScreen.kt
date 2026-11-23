@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -103,6 +104,10 @@ import com.example.sharkmentor.core.coaching.CampDayEpisode
 import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.coaching.DailyGoalLedgerEntry
 import com.example.sharkmentor.core.coaching.DailyGoalStatus
+import com.example.sharkmentor.core.coaching.DossierAiChannel
+import com.example.sharkmentor.core.coaching.StudentDossier
+import com.example.sharkmentor.core.coaching.StudentDossierManager
+import com.example.sharkmentor.core.coaching.StudentDossierNavBus
 import com.example.sharkmentor.core.coaching.StudentTargetContext
 import com.example.sharkmentor.core.coaching.WeeklyVarianceAdvice
 import com.example.sharkmentor.core.service.FocusTimerService
@@ -117,6 +122,7 @@ import com.example.sharkmentor.data.local.entity.TopicGoalEntity
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
 import com.example.sharkmentor.ui.components.RichSolutionContent
 import java.util.Calendar
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.firstOrNull
