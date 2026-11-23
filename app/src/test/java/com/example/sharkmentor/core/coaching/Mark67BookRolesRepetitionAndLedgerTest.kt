@@ -459,6 +459,11 @@ class Mark67BookRolesRepetitionAndLedgerTest {
         assertEquals(10, absorbedEpisodes[9].dayNumber)
         assertFalse(absorbedEpisodes.any { it.videoId == "intrA000001" || it.videoId == "intrB000002" })
 
+        // Verify 0. Gün is stripped while 10. Gün / 20. Ders are NEVER falsely stripped by substring matching
+        assertTrue(BookCampManager.isIntroOrNonLessonVideo("0. Gün | Kamp Başlangıcı"))
+        assertFalse(BookCampManager.isIntroOrNonLessonVideo("10. Gün | Organik Bileşikler - Alkanlar"))
+        assertFalse(BookCampManager.isIntroOrNonLessonVideo("20. Ders | Asit Baz Dengesi"))
+
         // Verify generic words like "Modern" in an intro title do NOT falsely map to "Modern Atom Teorisi"
         assertNotEquals(
             "Modern Atom Teorisi",

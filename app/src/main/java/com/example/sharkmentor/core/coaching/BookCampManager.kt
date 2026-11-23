@@ -1874,14 +1874,11 @@ object BookCampManager {
         "pdf indir",
         "ders notu indir",
         "giris videosu",
-        "#shorts",
-        "shorts",
-        "intro",
-        "trailer",
-        "0. gun",
-        "0.gun",
-        "0. ders",
-        "0.ders"
+        "#shorts"
+    )
+
+    private val ZERO_DAY_OR_INTRO_BOUNDARY_REGEX = Regex(
+        """\b(?:0\.\s*(?:gun|ders|video)|(?:gun|ders|video)\s*0|shorts|intro|trailer)\b"""
     )
 
     private val NON_DISTINCTIVE_TOPIC_TOKENS = setOf(
@@ -1951,12 +1948,14 @@ object BookCampManager {
      * Identifies non-lesson playlist videos such as channel trailers, camp intros ("Tanıtım"),
      * announcements ("Duyuru"), book reviews, guidance/schedule clips, or ultra-short teasers
      * so they are NEVER turned into lesson days (e.g. Ferrum Kimya's first 2 intro videos).
+     * Uses strict word-boundary checks for `0. gün` / `0. ders` so `10. Gün` / `20. Ders` are NEVER stripped.
      * Never filters real lesson titles like "Kimya Bilimine Giriş" or "Karbon Kimyasına Giriş".
      */
     fun isIntroOrNonLessonVideo(title: String, durationLabel: String = ""): Boolean {
         val norm = normalizeForMatch(title)
         if (norm.isBlank()) return true
         if (INTRO_VIDEO_KEYWORDS.any { kw -> norm.contains(kw) }) return true
+        if (ZERO_DAY_OR_INTRO_BOUNDARY_REGEX.containsMatchIn(norm)) return true
 
         val secs = parseDurationLabelToSeconds(durationLabel)
         if (secs != null && secs in 1..44) return true
