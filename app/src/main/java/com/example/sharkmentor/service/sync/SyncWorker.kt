@@ -84,6 +84,7 @@ class SyncWorker(
         private const val PULL_COOLDOWN_MS = 15L * 60L * 1000L // 15 minutes
         private const val LEGACY_FALLBACK_COOLDOWN_MS = 24L * 60L * 60L * 1000L // 24 hours
         private const val COLLECTION_QUERY_LIMIT = 100L
+        private const val TOPIC_QUERY_LIMIT = 400L
         const val INPUT_FORCE_PULL = "force_pull"
 
         fun enqueuePeriodicSync(context: Context) {
@@ -335,6 +336,16 @@ class SyncWorker(
                 quotaPrefs.edit().putLong(KEY_LAST_PULL_MS, System.currentTimeMillis()).apply()
             } else {
                 Log.d(syncTag, "Inbound remote pull skipped (quota cooldown active; uploaded=$uploadedCount).")
+            }
+
+            // Propagate freshly pulled/pushed data into CoachingEngine & StudentDossier
+            if (shouldPullRemote || uploadedCount > 0) {
+                runCatching {
+                    com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(context)
+                }
+                runCatching {
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
+                }
             }
 
             Log.d(syncTag, ">>> SYNC CYCLE FINISHED (uploaded=$uploadedCount, pulled=$shouldPullRemote) <<<")
@@ -597,11 +608,17 @@ class SyncWorker(
                 .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
                 .map { it.first }
 
-            if (activeRemoteIds.isEmpty()) {
-                goalsDao.clearAllResources()
-                Log.d(syncTag, "No active remote resources found. Purged synced Room resources.")
+            val canSafelyPruneResources = !snapshot.metadata.isFromCache &&
+                snapshot.size().toLong() < COLLECTION_QUERY_LIMIT
+            if (canSafelyPruneResources) {
+                if (activeRemoteIds.isEmpty()) {
+                    goalsDao.clearAllResources()
+                    Log.d(syncTag, "No active remote resources found. Purged synced Room resources.")
+                } else {
+                    goalsDao.deleteOrphanedResources(activeRemoteIds)
+                }
             } else {
-                goalsDao.deleteOrphanedResources(activeRemoteIds)
+                Log.d(syncTag, "Skipped destructive resource orphan sweep (fromCache=${snapshot.metadata.isFromCache}, size=${snapshot.size()})")
             }
 
             for ((remoteId, doc) in resolvedDocs) {
@@ -681,7 +698,7 @@ class SyncWorker(
             try {
                 snapshot = firestore.collection("students").document(uid)
                     .collection("topics")
-                    .limit(COLLECTION_QUERY_LIMIT)
+                    .limit(TOPIC_QUERY_LIMIT)
                     .get(Source.DEFAULT).await()
             } catch (e: Exception) {
                 Log.w(syncTag, "Subcollection pull failed for students/$uid/topics: ${e.message}")
@@ -694,7 +711,7 @@ class SyncWorker(
                 try {
                     val rootSnapshot = firestore.collection("topics")
                         .whereEqualTo("studentId", uid)
-                        .limit(COLLECTION_QUERY_LIMIT)
+                        .limit(TOPIC_QUERY_LIMIT)
                         .get(Source.DEFAULT).await()
                     if (rootSnapshot.isEmpty) {
                         markLegacyFallbackChecked(applicationContext, "topics")
@@ -727,10 +744,16 @@ class SyncWorker(
                 .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
                 .map { it.first }
 
-            if (activeRemoteIds.isEmpty()) {
-                goalsDao.clearAllTopics()
+            val canSafelyPruneTopics = !snapshot.metadata.isFromCache &&
+                snapshot.size().toLong() < TOPIC_QUERY_LIMIT
+            if (canSafelyPruneTopics) {
+                if (activeRemoteIds.isEmpty()) {
+                    goalsDao.clearAllTopics()
+                } else {
+                    goalsDao.deleteOrphanedTopics(activeRemoteIds)
+                }
             } else {
-                goalsDao.deleteOrphanedTopics(activeRemoteIds)
+                Log.d(syncTag, "Skipped destructive topic orphan sweep (fromCache=${snapshot.metadata.isFromCache}, size=${snapshot.size()})")
             }
 
             for ((remoteId, doc) in resolvedDocs) {
@@ -827,10 +850,16 @@ class SyncWorker(
                 .filterNot { (_, doc) -> doc.getSafeBoolean("isDeleted") ?: false }
                 .map { it.first }
 
-            if (activeGoalIds.isNotEmpty()) {
-                targetDao.deleteOrphanedTargets(activeGoalIds)
+            val canSafelyPruneGoals = !goalsSnapshot.metadata.isFromCache &&
+                goalsSnapshot.size().toLong() < COLLECTION_QUERY_LIMIT
+            if (canSafelyPruneGoals) {
+                if (activeGoalIds.isNotEmpty()) {
+                    targetDao.deleteOrphanedTargets(activeGoalIds)
+                } else {
+                    targetDao.clearAllTargets()
+                }
             } else {
-                targetDao.clearAllTargets()
+                Log.d(syncTag, "Skipped destructive goal orphan sweep (fromCache=${goalsSnapshot.metadata.isFromCache}, size=${goalsSnapshot.size()})")
             }
 
             var latestMacroGoal: com.google.firebase.firestore.DocumentSnapshot? = null
@@ -1120,6 +1149,33 @@ class SyncWorker(
                                 .collection("topics").document(docId).delete().await()
                             anyDeleted = true
                         }
+                    }
+                    if (anyDeleted) {
+                        pendingDeletionDao.deleteById(deletion.id)
+                        count++
+                    }
+                } else if (deletion.collectionName == "plan_folders" || deletion.collectionName == "plans") {
+                    var anyDeleted = false
+                    runCatching {
+                        val userCol = firestore.collection("users").document(uid).collection(deletion.collectionName)
+                        userCol.document(deletion.entityId).delete().await()
+                        if (deletion.collectionName == "plan_folders") {
+                            val childTasks = firestore.collection("users").document(uid).collection("plans")
+                                .whereEqualTo("folderId", deletion.entityId)
+                                .get()
+                                .await()
+                            if (!childTasks.isEmpty) {
+                                val batch = firestore.batch()
+                                childTasks.documents.forEach { batch.delete(it.reference) }
+                                batch.commit().await()
+                            }
+                        }
+                        anyDeleted = true
+                    }
+                    runCatching {
+                        val legacyPath = "${getCollectionPath(defaultInstitution, uid, deletion.collectionName)}/${deletion.entityId}"
+                        firestore.document(legacyPath).delete().await()
+                        anyDeleted = true
                     }
                     if (anyDeleted) {
                         pendingDeletionDao.deleteById(deletion.id)

@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 63 APK
+name: Build SharkMentor Mark 65 APK
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - mark-61
       - mark-62
       - mark-63
+      - mark-65
   workflow_dispatch:
 
 permissions:
@@ -263,7 +264,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark63-debug-apk
+          name: SharkMentor-Mark65-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -272,8 +273,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark63-debug.apk
-          gh release delete mark63-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark63-apk SharkMentor-Mark63-debug.apk \
-            --title "Shark Mentor Study Mark 63 (Debug APK)" \
-            --notes "KullanımKolaylığı Konsey Raporu tüm geliştirmeleriyle otomatik derlenen doğrudan kurulabilir Mark 63 APK paketi."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark65-debug.apk
+          gh release delete mark65-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark65-apk SharkMentor-Mark65-debug.apk \
+            --title "Shark Mentor Study Mark 65 (Debug APK)" \
+            --notes "Yapay zeka plan ilerleme denetimi, kümülatif eksik devri, Pazar günü konu/kitap kontrol bildirimi, plan kurgulama öncesi güncellik kartı ve uçtan uca senkronizasyon iyileştirmeleriyle derlenen Mark 65 APK paketi."

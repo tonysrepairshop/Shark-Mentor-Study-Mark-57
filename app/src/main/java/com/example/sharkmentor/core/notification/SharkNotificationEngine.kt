@@ -13,6 +13,7 @@ object SharkNotificationEngine {
     const val CHANNEL_LEAGUE_QUESTIONS = "shark_league_questions"
     const val CHANNEL_STUDY_NUDGE = "shark_study_invites"
     const val CHANNEL_WATER_STREAK = "shark_water_streak"
+    const val CHANNEL_WEEKLY_COACHING_CHECKIN = "shark_weekly_coaching_checkin"
 
     fun init(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -87,6 +88,16 @@ object SharkNotificationEngine {
             setShowBadge(true)
         }
 
+        val weeklyCoachingCheckInChannel = NotificationChannel(
+            CHANNEL_WEEKLY_COACHING_CHECKIN,
+            "Haftalık Konu & Plan Kontrolü",
+            NotificationManager.IMPORTANCE_HIGH
+        ).apply {
+            description = "Resmi haftanın son günü Pazar için konu hakimiyeti ve kitap ilerlemesi güncelleme hatırlatması"
+            enableVibration(true)
+            setShowBadge(true)
+        }
+
         manager.createNotificationChannels(
             listOf(
                 deskChannel,
@@ -95,7 +106,8 @@ object SharkNotificationEngine {
                 chatMessagesChannel,
                 leagueQuestionsChannel,
                 studyNudgeChannel,
-                waterStreakChannel
+                waterStreakChannel,
+                weeklyCoachingCheckInChannel
             )
         )
     }

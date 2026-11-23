@@ -147,7 +147,7 @@ object PlanAssignmentEngine {
                 id = if (task.id.isBlank()) java.util.UUID.randomUUID().toString() else task.id,
                 folderId = folderId,
                 dayOfWeek = normalizeDay(task.dayOfWeek),
-                scheduledTime = if (task.scheduledTime.isBlank()) "09:00" else task.scheduledTime,
+                scheduledTime = if (task.scheduledTime.isBlank()) "Esnek • 90 dk" else task.scheduledTime,
                 orderIndex = index
             )
         }

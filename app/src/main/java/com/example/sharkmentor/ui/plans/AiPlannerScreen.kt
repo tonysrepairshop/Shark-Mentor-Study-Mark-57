@@ -47,6 +47,26 @@ fun AiPlannerScreen(
     val isOrganizing by viewModel.isOrganizing.collectAsState()
     var userNote by remember { mutableStateOf("") }
     var selectedDay by remember { mutableStateOf(1) } // 1..7
+    // "ORGANIZE" or "GENERATE" when awaiting pre-plan mastery/book readiness check-in
+    var pendingPlannerAction by remember { mutableStateOf<String?>(null) }
+
+    if (pendingPlannerAction != null) {
+        val action = pendingPlannerAction
+        com.example.sharkmentor.ui.coaching.PlanReadinessCheckInDialog(
+            title = if (action == "ORGANIZE") "Planı Düzenlemeden Önce" else "Plan Oluşturmadan Önce",
+            subtitle = "Yeni planının eksik görevlerini öne alıp tamamladıklarını tekrar etmemesi için konu hakimiyetini ve kitaplarında çözdüğün noktaları son haline getir.",
+            confirmButtonLabel = if (action == "ORGANIZE") "Güncel, Planı Düzenle" else "Güncel, Planı Oluştur",
+            onConfirmProceed = {
+                pendingPlannerAction = null
+                if (action == "ORGANIZE") {
+                    viewModel.organizeWeeklyPlan()
+                } else {
+                    viewModel.generateWeeklyPlan(userNote)
+                }
+            },
+            onDismiss = { pendingPlannerAction = null }
+        )
+    }
 
     // Group plans by dayOfWeek once per recomposition when activePlans changes
     val groupedByDay = remember(activePlans) {
@@ -78,7 +98,7 @@ fun AiPlannerScreen(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        IconButton(onClick = { viewModel.organizeWeeklyPlan() }) {
+                        IconButton(onClick = { pendingPlannerAction = "ORGANIZE" }) {
                             Icon(
                                 imageVector = Icons.Default.AutoFixHigh,
                                 contentDescription = "Planı Organize Et",
@@ -153,7 +173,7 @@ fun AiPlannerScreen(
                 uiState = uiState,
                 userNote = userNote,
                 onNoteChange = { userNote = it },
-                onGeneratePlan = { viewModel.generateWeeklyPlan(userNote) }
+                onGeneratePlan = { pendingPlannerAction = "GENERATE" }
             )
         }
     }

@@ -29,6 +29,7 @@ import com.example.sharkmentor.data.local.entity.PlanEntity
 import com.example.sharkmentor.data.local.entity.PlanFolderEntity
 import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
 import com.example.sharkmentor.ui.components.FlushTextField
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,14 +38,45 @@ fun PlanScreen(
     viewModel: PlanViewModel = viewModel(),
     onNavigateToSchedule: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val state by viewModel.uiState.collectAsState()
     val currentTasks by viewModel.currentTasks.collectAsState()
     val showCreateDialog by viewModel.showCreateFolderDialog.collectAsState()
     val showAddTaskDialog by viewModel.showAddTaskDialog.collectAsState()
 
-    // Dialog State for Deletion
+    // Dialog State for Deletion & Pre-Plan Readiness Check-In
     var folderToDelete by remember { mutableStateOf<PlanFolderEntity?>(null) }
     var taskToDelete by remember { mutableStateOf<PlanEntity?>(null) }
+    var showReadinessCheckIn by remember { mutableStateOf(false) }
+    var isRebuildingPlan by remember { mutableStateOf(false) }
+
+    if (showReadinessCheckIn) {
+        com.example.sharkmentor.ui.coaching.PlanReadinessCheckInDialog(
+            title = "Planı Yeniden Kurgulamadan Önce",
+            subtitle = "Yeni planının eksik görevlerini öne alıp tamamladıklarını tekrar etmemesi için konu hakimiyetini ve kitaplarında çözdüğün noktaları son haline getir.",
+            confirmButtonLabel = "Güncel, Planı Kurgula",
+            onConfirmProceed = {
+                showReadinessCheckIn = false
+                if (!isRebuildingPlan) {
+                    isRebuildingPlan = true
+                    scope.launch {
+                        val count = runCatching {
+                            com.example.sharkmentor.ui.coaching.rebalanceWeeklyPlanWithAiCoach(context)
+                        }.getOrDefault(0)
+                        isRebuildingPlan = false
+                        val msg = if (count > 0) {
+                            "Planın eksiklerini devrederek $count blok halinde kurgulandı."
+                        } else {
+                            "Plan kurgulamak için önce konu veya kitap eklemelisin."
+                        }
+                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onDismiss = { showReadinessCheckIn = false }
+        )
+    }
 
     // Deletion Dialogs
     if (folderToDelete != null) {
@@ -240,6 +272,42 @@ fun PlanScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // Pre-Plan Readiness & Smart Rebuild Button
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            onClick = { if (!isRebuildingPlan) showReadinessCheckIn = true },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (isRebuildingPlan) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(12.dp),
+                                        strokeWidth = 1.8.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoFixHigh,
+                                        contentDescription = "Planı Kurgula",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "Kurgula",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
                             }
                         }
 

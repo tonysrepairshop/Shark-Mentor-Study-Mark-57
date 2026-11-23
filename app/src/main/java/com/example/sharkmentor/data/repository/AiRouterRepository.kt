@@ -359,6 +359,7 @@ KRİTİK DOĞRULUK VE ATAMA KURALLARI (KESİNLİKLE UYULACAK):
 3. Sohbet metninde öğrenciye hitaben 2-4 cümlelik net bir Türkçe açıklama/özet yaz ve mesajının EN SONUNA ilgili JSON eylem bloğunu (#ACTION:{...}#) ekle:
 
 HAFTALIK 7 GÜNLÜK PLAN OLUŞTURMA (ESNEK SÜRELİ, 7 GÜNE VE ÇOKLU DERSE DENGELİ; ASLA '09:00 - 10:30' GİBİ KATI SAAT YAZMA):
+• KÜMÜLATİF TEMEL & TEKRARSIZLIK KURALI: Bağlamdaki `[MEVCUT PLAN & GÖREV DENETİMİ]` bölümünü mutlaka incele. Önceki plandan EKSİK / TAMAMLANMAYAN görevleri yeni haftanın ilk günlerine öncelikli devret (kazanım zinciri kırılmasın). TAMAMLANAN görevleri ise öğrenciye tekrar tekrar yazma; üstüne bir sonraki konu/kitap adımını inşa et (yalnızca konu hakimiyeti 0-2/5 ise kısa pekiştirme ekle).
 #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Strateji özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
 
 TEKİL GÖREV EKLEME:
@@ -439,7 +440,7 @@ $MANDATORY_PERSONA_RULES
             ),
             "scheduledTime" to GeminiSchemaProperty(
                 type = "string",
-                description = "Time slot formatted as HH:mm - HH:mm (e.g. 16:00 - 17:30)"
+                description = "Flexible study duration label (e.g. 'Esnek • 90 dk' or 'Esnek • 60 dk', never rigid clock ranges)"
             ),
             "targetQuestions" to GeminiSchemaProperty(
                 type = "integer",
@@ -832,24 +833,11 @@ $MANDATORY_PERSONA_RULES
                 val jsonObj = Gson().fromJson(jsonPayload, JsonObject::class.java)
                 val actionType = jsonObj.get("type")?.asString?.uppercase(Locale.ROOT)
                 when (actionType) {
-                    "INSERT_TASK" -> {
-                        val day = jsonObj.get("day")?.asInt ?: 1
+                    "INSERT_TASK", "INSERT_PLAN_TASK" -> {
                         val subj = jsonObj.get("subject")?.asString ?: "Ders"
                         val top = jsonObj.get("topic")?.asString ?: "Çalışma"
                         val qCount = jsonObj.get("questions")?.asInt ?: 30
-                        val planEntity = PlanEntity(
-                            id = UUID.randomUUID().toString(),
-                            folderId = "",
-                            title = "$subj - $top",
-                            subject = subj,
-                            topic = top,
-                            dayOfWeek = day,
-                            scheduledTime = "16:00 - 17:30",
-                            targetQuestions = qCount,
-                            orderIndex = 0
-                        )
-                        planDao.insertTasks(listOf(planEntity))
-                        parsedActionNotes.add("Plan eklendi: $subj • $top ($qCount Soru)")
+                        parsedActionNotes.add("Plan görevi hazırlandı: $subj • $top ($qCount Soru)")
                     }
                     "INSERT_TOPICS_BATCH" -> {
                         parsedActionNotes.add("Konu hakimiyeti listesi işlendi.")
@@ -1351,7 +1339,12 @@ $MANDATORY_PERSONA_RULES
                 val subject = args["subject"]?.ifBlank { "Matematik" } ?: "Matematik"
                 val topic = args["topic"]?.ifBlank { "Soru Çözümü" } ?: "Soru Çözümü"
                 val dayOfWeek = args["dayOfWeek"]?.toIntOrNull()?.coerceIn(1, 7) ?: 1
-                val scheduledTime = args["scheduledTime"]?.takeIf { it.isNotBlank() } ?: "16:00 - 17:30"
+                val rawTime = args["scheduledTime"]?.trim().orEmpty()
+                val scheduledTime = if (rawTime.isBlank() || Regex("""\d{1,2}:\d{2}\s*[-–—]\s*\d{1,2}:\d{2}""").containsMatchIn(rawTime)) {
+                    "Esnek • 90 dk"
+                } else {
+                    rawTime
+                }
                 val targetQuestions = (args["targetQuestions"]?.toIntOrNull() ?: 30).coerceAtLeast(20)
 
                 val dayName = dayOfWeekToTurkishName(dayOfWeek)
@@ -1386,6 +1379,8 @@ $MANDATORY_PERSONA_RULES
                     ),
                     tasks = listOf("$topic ($targetQuestions Soru)")
                 )
+
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
 
                 ToolExecutionOutcome(
                     note = "Çalışma Planına Eklendi: **$dayName ($scheduledTime)** — $subject: $topic ($targetQuestions Soru) #ACTION:NAV_PLANS",

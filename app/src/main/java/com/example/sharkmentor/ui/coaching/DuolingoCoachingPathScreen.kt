@@ -105,6 +105,9 @@ import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.coaching.DailyGoalLedgerEntry
 import com.example.sharkmentor.core.coaching.DailyGoalStatus
 import com.example.sharkmentor.core.coaching.DossierAiChannel
+import com.example.sharkmentor.core.coaching.PlanProgressAuditor
+import com.example.sharkmentor.core.coaching.PlanReadinessNavBus
+import com.example.sharkmentor.core.coaching.PlanTaskAuditItem
 import com.example.sharkmentor.core.coaching.StudentDossier
 import com.example.sharkmentor.core.coaching.StudentDossierManager
 import com.example.sharkmentor.core.coaching.StudentDossierNavBus
@@ -115,11 +118,15 @@ import com.example.sharkmentor.core.timer.TimerMode
 import com.example.sharkmentor.core.timer.TimerPhase
 import com.example.sharkmentor.core.timer.TimerState
 import com.example.sharkmentor.data.local.SharkMentorDatabase
+import com.example.sharkmentor.data.local.entity.ActivePlanEntity
 import com.example.sharkmentor.data.local.entity.PlanEntity
 import com.example.sharkmentor.data.local.entity.PlanFolderEntity
 import com.example.sharkmentor.data.local.entity.ResourceEntity
+import com.example.sharkmentor.data.local.entity.StudyTaskEntity
 import com.example.sharkmentor.data.local.entity.TopicGoalEntity
+import com.example.sharkmentor.data.repository.PlanRepositoryImpl
 import com.example.sharkmentor.domain.engine.DailyFocusEngine
+import com.example.sharkmentor.service.sync.SyncWorker
 import com.example.sharkmentor.ui.components.RichSolutionContent
 import java.util.Calendar
 import java.util.Locale
@@ -1504,6 +1511,34 @@ fun DuolingoCoachingPathView(
     var activePracticeNode by remember { mutableStateOf<DuolingoPathNode?>(null) }
     var activeMiniCheckNode by remember { mutableStateOf<DuolingoPathNode?>(null) }
     var isRebalancingWeek by remember { mutableStateOf(false) }
+    var showPlanReadinessDialog by remember { mutableStateOf(false) }
+    var isSundayCheckInPrompt by remember { mutableStateOf(false) }
+    var showSundayBanner by remember { mutableStateOf(PlanReadinessNavBus.shouldShowSundayBanner(context)) }
+
+    val triggerRebalanceNow: () -> Unit = {
+        if (!isRebalancingWeek) {
+            isRebalancingWeek = true
+            scope.launch {
+                val count = rebalanceWeeklyPlanWithAiCoach(
+                    context = context,
+                    db = db,
+                    libraryResources = libraryResources,
+                    activeResource = activeSelectedResource,
+                    topicGoals = topicGoals,
+                    targetContext = targetContext
+                )
+                completedNodeIds = emptySet()
+                saveCompletedNodeIds(context, emptySet())
+                isRebalancingWeek = false
+                showSundayBanner = false
+                Toast.makeText(
+                    context,
+                    "Haftalık program eksik görevleri devredip güncel verilere göre kurgulandı ($count görev)",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     LaunchedEffect(activeSelectedResource?.id, activeSelectedResource?.title, activeSelectedResource?.subject) {
         val res = activeSelectedResource ?: return@LaunchedEffect
@@ -1537,6 +1572,32 @@ fun DuolingoCoachingPathView(
             topicGoals = topicGoals,
             targetContext = targetContext,
             completedNodeIds = completedNodeIds
+        )
+    }
+
+    // Pre-Plan & Sunday Topic Mastery + Book Progress Readiness Notification Card
+    if (showPlanReadinessDialog) {
+        PlanReadinessCheckInDialog(
+            title = if (isSundayCheckInPrompt) "Pazar Günü Haftalık Kontrol" else "Plan Öncesi Güncellik Kontrolü",
+            subtitle = if (isSundayCheckInPrompt) {
+                "Haftanın son günü Pazar. Yeni haftanın esnek planı eksik görevlerini devredip sana tam uyum sağlasın diye konu hakimiyetini ve kitap ilerlemeni güncelle."
+            } else {
+                "Yeni planın eksik görevlerini devredip tamamlananları tekrar etmeden en sağlıklı şekilde kurgulanması için konu hakimiyetini ve kitaplarında çözdüğün noktaları güncelle."
+            },
+            confirmButtonLabel = "Güncel, Planı Kurgula",
+            secondarySaveOnlyLabel = if (isSundayCheckInPrompt) "Sadece Kaydet" else null,
+            onSaveOnly = if (isSundayCheckInPrompt) {
+                {
+                    showPlanReadinessDialog = false
+                    showSundayBanner = false
+                    Toast.makeText(context, "Konu hakimiyeti ve kitap verileri eşitlendi", Toast.LENGTH_SHORT).show()
+                }
+            } else null,
+            onConfirmProceed = {
+                showPlanReadinessDialog = false
+                triggerRebalanceNow()
+            },
+            onDismiss = { showPlanReadinessDialog = false }
         )
     }
 
@@ -1587,8 +1648,11 @@ fun DuolingoCoachingPathView(
                         db.goalsDao().incrementProgress(node.linkedResource.id, step = solvedUnits)
                     }
                     if (node.linkedPlanTask != null) {
-                        db.planDao().updateTaskCompletion(node.linkedPlanTask.id, true)
+                        val planRepo = PlanRepositoryImpl(db.planDao(), db.pendingDeletionDao())
+                        planRepo.updateTaskCompletion(node.linkedPlanTask.id, true)
                     }
+                    SyncWorker.enqueueImmediateSync(context)
+                    StudentDossierManager.syncInBackground(context)
                     withContext(Dispatchers.Main) {
                         val updated = completedNodeIds + node.id
                         completedNodeIds = updated
@@ -1638,6 +1702,64 @@ fun DuolingoCoachingPathView(
             currentMode = AppStudyMode.REAL_COACHING,
             onModeChange = onSwitchMode
         )
+
+        // 1a. Official Calendar Sunday Check-In Prompt Banner (if today is Sunday & not yet updated)
+        if (showSundayBanner) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colorScheme.primaryContainer.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Pazar Günü Haftalık Kontrol",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
+                        )
+                        IconButton(
+                            onClick = {
+                                PlanReadinessNavBus.dismissSundayBannerToday(context)
+                                showSundayBanner = false
+                            },
+                            modifier = Modifier.size(24.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Kapat",
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "Haftanın son günü Pazar. Yeni haftanın esnek planı eksik görevlerini devredip güncel seviyene tam uyum sağlasın diye konu hakimiyetini ve kitaplarını güncelle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurface
+                    )
+                    Button(
+                        onClick = {
+                            isSundayCheckInPrompt = true
+                            showPlanReadinessDialog = true
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 8.dp)
+                    ) {
+                        Text("Konu & Kitapları Güncelle", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
 
         // 1b. Adaptive Efficiency Suggestion (when high-hour target + missed tasks occur; respects student veto!)
         efficiencySuggestion?.let { suggestion ->
@@ -1882,23 +2004,8 @@ fun DuolingoCoachingPathView(
                         Surface(
                             onClick = {
                                 if (isRebalancingWeek) return@Surface
-                                isRebalancingWeek = true
-                                scope.launch {
-                                    val count = rebalanceWeeklyPlanWithAiCoach(
-                                        context = context,
-                                        db = db,
-                                        libraryResources = libraryResources,
-                                        activeResource = activeSelectedResource,
-                                        topicGoals = topicGoals,
-                                        targetContext = targetContext
-                                    )
-                                    isRebalancingWeek = false
-                                    Toast.makeText(
-                                        context,
-                                        "Haftalık program müfredat sırası ve konu hakimiyetine göre dengelendi ($count görev)",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
+                                isSundayCheckInPrompt = false
+                                showPlanReadinessDialog = true
                             },
                             shape = RoundedCornerShape(8.dp),
                             color = colorScheme.primary.copy(alpha = 0.14f),
@@ -1920,7 +2027,7 @@ fun DuolingoCoachingPathView(
                                     )
                                 }
                                 Text(
-                                    text = "Programı Dengele",
+                                    text = "Programı Kurgula",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.primary
@@ -2227,21 +2334,58 @@ fun DuolingoCoachingPathView(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = if (allDone) completedAccent.copy(alpha = 0.16f) else colorScheme.primary.copy(alpha = 0.15f),
-                        border = BorderStroke(
-                            1.dp,
-                            if (allDone) completedAccent.copy(alpha = 0.45f) else colorScheme.primary.copy(alpha = 0.35f)
-                        )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "$completedCount / ${pathNodes.size} Adım",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = if (allDone) completedAccent else colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
+                        if (weeklyAdvice == null && recentLedger.isEmpty()) {
+                            Surface(
+                                onClick = {
+                                    if (!isRebalancingWeek) {
+                                        isSundayCheckInPrompt = false
+                                        showPlanReadinessDialog = true
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = colorScheme.primary.copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoFixHigh,
+                                        contentDescription = "Planı Kurgula",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "Kurgula",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = if (allDone) completedAccent.copy(alpha = 0.16f) else colorScheme.primary.copy(alpha = 0.15f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (allDone) completedAccent.copy(alpha = 0.45f) else colorScheme.primary.copy(alpha = 0.35f)
+                            )
+                        ) {
+                            Text(
+                                text = "$completedCount / ${pathNodes.size} Adım",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = if (allDone) completedAccent else colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
                     }
                 }
 
@@ -2989,13 +3133,16 @@ data class BalancedPlanTaskSpec(
     val subject: String,
     val topicLabel: String,
     val flexibleTimeLabel: String,
-    val targetQuestions: Int
+    val targetQuestions: Int,
+    val isCarryOver: Boolean = false
 )
 
 /**
  * Pure deterministic balanced 7-day multi-subject plan builder:
  * - Spreads blocks evenly across ALL 7 days (1..7) — never dumps onto Sunday.
  * - Strictly respects weekday/weekend target minutes (e.g. 12h weekday = 8x90m, 15h weekend = 10x90m).
+ * - Carries forward ALL [incompleteCarryOverTasks] FIRST so cumulative learning foundations are never skipped.
+ * - Excludes already [completedTasks] (unless mastery is still weak <= 2/5) so completed work is never mindlessly repeated.
  * - Rotates across all available books/topics/exam subjects so no single subject floods a day/week.
  * - Uses ONLY flexible duration labels ("Esnek • 90 dk") — zero rigid clock ranges!
  */
@@ -3004,13 +3151,17 @@ fun buildBalancedMultiDayPlanSpecs(
     weekendMinutes: Int,
     libraryResources: List<ResourceEntity>,
     topicGoals: List<TopicGoalEntity>,
-    examType: String
+    examType: String,
+    completedTasks: List<PlanTaskAuditItem> = emptyList(),
+    incompleteCarryOverTasks: List<PlanTaskAuditItem> = emptyList(),
+    startDayIso: Int = 1
 ): List<BalancedPlanTaskSpec> {
     val safeWd = weekdayMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
     val safeWe = weekendMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
 
-    // Collect distinct subjects from student's books + weak topics + exam defaults
+    // Collect distinct subjects from incomplete carry-over tasks + student's books + weak topics + exam defaults
     val subjectPool = LinkedHashSet<String>()
+    incompleteCarryOverTasks.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
     libraryResources.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
     topicGoals
         .sortedBy { it.currentLevel }
@@ -3027,24 +3178,67 @@ fun buildBalancedMultiDayPlanSpecs(
     }
     val subjects = subjectPool.toList()
 
-    // Prepare topic queues per subject (weak topics first, ordered canonically)
+    // Interleave incomplete carry-over tasks across subjects (canonical order inside each subject)
+    val carryOverBuckets = incompleteCarryOverTasks
+        .distinctBy { "${PlanProgressAuditor.normalizeTrKey(it.subject)}_${PlanProgressAuditor.normalizeTrKey(PlanProgressAuditor.extractCoreTopicName(it.topic))}" }
+        .groupBy { it.subject.trim() }
+        .values
+        .map { bucket ->
+            bucket.sortedBy {
+                BookCampManager.canonicalTopicIndex(it.subject, PlanProgressAuditor.extractCoreTopicName(it.topic))
+            }.toMutableList()
+        }
+    val carryOverQueue = ArrayDeque<PlanTaskAuditItem>()
+    var hasCarryItems = true
+    while (hasCarryItems) {
+        hasCarryItems = false
+        for (bucket in carryOverBuckets) {
+            if (bucket.isNotEmpty()) {
+                carryOverQueue.addLast(bucket.removeAt(0))
+                hasCarryItems = true
+            }
+        }
+    }
+    val carryOverKeys = carryOverQueue.map {
+        "${PlanProgressAuditor.normalizeTrKey(it.subject)}_${PlanProgressAuditor.normalizeTrKey(PlanProgressAuditor.extractCoreTopicName(it.topic))}"
+    }.toHashSet()
+
+    // Prepare topic queues per subject (weak topics first, ordered canonically, excluding already completed tasks!)
     val topicQueueBySubject = subjects.associateWith { subj ->
         val weakForSubj = topicGoals
-            .filter { it.subject.equals(subj, ignoreCase = true) && it.currentLevel <= 3 }
+            .filter { !it.isDeleted && it.subject.equals(subj, ignoreCase = true) && it.currentLevel <= 3 }
             .sortedWith(
                 compareBy<TopicGoalEntity> { it.currentLevel }
                     .thenBy { BookCampManager.canonicalTopicIndex(subj, it.topic) }
             )
             .map { it.topic }
         val canonical = BookCampManager.canonicalCurriculumForSubject(subj)
-        val merged = (weakForSubj + canonical).distinct()
-        if (merged.isNotEmpty()) merged else listOf("$subj Temel Pekiştirme", "$subj Soru Çözümü", "$subj Tekrar")
+        val mergedAll = (weakForSubj + canonical).distinct()
+        val nonRepeated = mergedAll.filter { candidate ->
+            val key = "${PlanProgressAuditor.normalizeTrKey(subj)}_${PlanProgressAuditor.normalizeTrKey(candidate)}"
+            !carryOverKeys.contains(key) &&
+                !PlanProgressAuditor.isTopicAlreadyCompletedInPlan(
+                    subject = subj,
+                    topic = candidate,
+                    completedTasks = completedTasks,
+                    topicGoals = topicGoals
+                )
+        }
+        val effectiveList = when {
+            nonRepeated.isNotEmpty() -> nonRepeated
+            mergedAll.isNotEmpty() -> mergedAll
+            else -> listOf("$subj Yeni Adım & Soru Çözümü", "$subj Pekiştirme", "$subj Genel Deneme")
+        }
+        effectiveList
     }
+
     val cursorBySubject = HashMap<String, Int>()
     val result = mutableListOf<BalancedPlanTaskSpec>()
     var globalSlot = 0
+    val safeStartDay = startDayIso.coerceIn(1, 7)
+    val orderedDays = (0..6).map { offset -> ((safeStartDay - 1 + offset) % 7) + 1 }
 
-    for (day in 1..7) {
+    for (day in orderedDays) {
         val isWeekend = day == 6 || day == 7
         val dayTargetMins = if (isWeekend) safeWe else safeWd
         val blockCount = (dayTargetMins / 90).coerceIn(2, 11)
@@ -3052,6 +3246,38 @@ fun buildBalancedMultiDayPlanSpecs(
         val flexLabel = "Esnek • $minsPerBlock dk"
 
         for (slotIdx in 0 until blockCount) {
+            if (carryOverQueue.isNotEmpty()) {
+                val missed = carryOverQueue.removeFirst()
+                val rawCoreTopic = PlanProgressAuditor.extractCoreTopicName(missed.topic)
+                val gatedTopic = BookCampManager.enforcePrerequisiteFoundationGate(
+                    subject = missed.subject,
+                    requestedTopic = rawCoreTopic,
+                    studentTopicGoals = topicGoals
+                ).effectiveTopic
+                val matchingBook = libraryResources.firstOrNull {
+                    it.subject.equals(missed.subject, ignoreCase = true) ||
+                        it.subject.contains(missed.subject.substringAfterLast(' '), ignoreCase = true)
+                }
+                val label = when {
+                    missed.topic.contains(":") -> missed.topic.trim()
+                    matchingBook != null -> "${matchingBook.title}: $gatedTopic"
+                    else -> "${missed.subject}: $gatedTopic"
+                }
+                val qCount = if (missed.targetQuestions >= 30) missed.targetQuestions else if (minsPerBlock >= 90) 40 else 30
+                result.add(
+                    BalancedPlanTaskSpec(
+                        dayOfWeek = day,
+                        subject = missed.subject,
+                        topicLabel = label,
+                        flexibleTimeLabel = flexLabel,
+                        targetQuestions = qCount,
+                        isCarryOver = true
+                    )
+                )
+                globalSlot++
+                continue
+            }
+
             val subj = subjects[(globalSlot + day - 1) % subjects.size]
             globalSlot++
             val topicList = topicQueueBySubject[subj].orEmpty()
@@ -3081,89 +3307,68 @@ fun buildBalancedMultiDayPlanSpecs(
                     subject = subj,
                     topicLabel = label,
                     flexibleTimeLabel = flexLabel,
-                    targetQuestions = qCount
+                    targetQuestions = qCount,
+                    isCarryOver = false
                 )
             )
         }
     }
-    return result
+    return result.sortedBy { it.dayOfWeek }
 }
 
-private suspend fun rebalanceWeeklyPlanWithAiCoach(
+/**
+ * Rebuilds/rebalances the student's flexible 7-day study plan using the FRESHEST Room data:
+ * - Audits all completed vs. incomplete tasks via [PlanProgressAuditor].
+ * - Carries forward ALL incomplete/missed tasks first (protecting cumulative prerequisites).
+ * - Excludes already completed tasks from mindless repetition.
+ * - Syncs atomically to `planDao`, `studyPlanDao`, Firestore (`PlanRepositoryImpl`), and encrypted `StudentDossierManager`.
+ */
+suspend fun rebalanceWeeklyPlanWithAiCoach(
     context: Context,
-    db: SharkMentorDatabase,
-    libraryResources: List<ResourceEntity>,
-    activeResource: ResourceEntity?,
-    topicGoals: List<TopicGoalEntity>,
-    targetContext: StudentTargetContext
+    db: SharkMentorDatabase = SharkMentorDatabase.getDatabase(context),
+    libraryResources: List<ResourceEntity> = emptyList(),
+    activeResource: ResourceEntity? = null,
+    topicGoals: List<TopicGoalEntity> = emptyList(),
+    targetContext: StudentTargetContext = CoachingEngine.targetContext.value
 ): Int = withContext(Dispatchers.IO) {
+    CoachingEngine.ensureInitialized(context)
     val planDao = db.planDao()
+    val planRepo = PlanRepositoryImpl(planDao, db.pendingDeletionDao())
+
+    // Always read the freshest topics, resources, and plan audit directly from Room (reflects inline check-in edits immediately!)
+    val freshResources = runCatching { db.goalsDao().getAllResourcesRaw() }
+        .getOrDefault(libraryResources)
+        .ifEmpty { libraryResources }
+    val freshTopics = runCatching { db.goalsDao().getAllTopicsRaw() }
+        .getOrDefault(topicGoals)
+        .ifEmpty { topicGoals }
+    val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
+    val audit = PlanProgressAuditor.captureFromDatabase(context, todayIsoDay = todayIso)
+
     val folders = planDao.getAllFoldersSync()
     val activeFolder = folders.firstOrNull() ?: PlanFolderEntity(
         id = UUID.randomUUID().toString(),
-        title = "AI Koç Dengeli Haftalık Plan"
-    ).also { planDao.insertFolder(it) }
+        title = "AI Koç Dengeli Haftalık Plan",
+        source = "AI_PLANNER"
+    ).also { planRepo.insertFolder(it) }
 
-    val existingTasks = planDao.getTasksForFolder(activeFolder.id).firstOrNull().orEmpty()
-    val uncompleted = existingTasks.filter { !it.isCompleted }
-
-    if (uncompleted.isNotEmpty()) {
-        // Interleave subjects cleanly and ALWAYS distribute across ALL 7 days cycling from todayIso (NEVER Sunday-only!)
-        val bySubject = uncompleted
-            .map { task ->
-                val gate = BookCampManager.enforcePrerequisiteFoundationGate(
-                    subject = task.subject,
-                    requestedTopic = task.topic.ifBlank { task.title },
-                    studentTopicGoals = topicGoals
-                )
-                val cleanTime = if (task.scheduledTime.contains(":") && task.scheduledTime.contains("-")) {
-                    "Esnek • 90 dk"
-                } else {
-                    task.scheduledTime.ifBlank { "Esnek • 90 dk" }
-                }
-                task.copy(
-                    title = gate.effectiveTopic,
-                    topic = gate.effectiveTopic,
-                    scheduledTime = cleanTime
-                )
-            }
-            .groupBy { it.subject.trim() }
-            .values
-            .map { list ->
-                list.sortedBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }.toMutableList()
-            }
-
-        val interleaved = mutableListOf<PlanEntity>()
-        var remaining = true
-        while (remaining) {
-            remaining = false
-            for (bucket in bySubject) {
-                if (bucket.isNotEmpty()) {
-                    interleaved.add(bucket.removeAt(0))
-                    remaining = true
-                }
-            }
-        }
-
-        val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
-        val cyclicSevenDays = (0..6).map { offset -> ((todayIso - 1 + offset) % 7) + 1 }
-        val rebalanced = interleaved.mapIndexed { idx, task ->
-            val assignedDay = cyclicSevenDays[idx % cyclicSevenDays.size]
-            task.copy(dayOfWeek = assignedDay, orderIndex = idx + 1)
-        }
-        planDao.insertTasks(rebalanced)
-        return@withContext rebalanced.size
-    }
-
-    // Generate a full 7-day multi-subject flexible-duration plan respecting exact weekday/weekend target hours
     val wdMins = CoachingEngine.weekdayGoalMinutes.value
     val weMins = CoachingEngine.weekendGoalMinutes.value
+    val effectiveExamType = targetContext.examType.ifBlank {
+        CoachingEngine.targetContext.value.examType.ifBlank { "YKS" }
+    }
+
+    // Start new week from Monday if rebuilding on Sunday (week-end), else cycle from todayIso
+    val startDay = if (todayIso == 7) 1 else todayIso
     val specs = buildBalancedMultiDayPlanSpecs(
         weekdayMinutes = wdMins,
         weekendMinutes = weMins,
-        libraryResources = libraryResources,
-        topicGoals = topicGoals,
-        examType = targetContext.examType
+        libraryResources = freshResources,
+        topicGoals = freshTopics,
+        examType = effectiveExamType,
+        completedTasks = audit.completedTasks,
+        incompleteCarryOverTasks = audit.incompleteTasks,
+        startDayIso = startDay
     )
 
     val generated = specs.mapIndexed { idx, spec ->
@@ -3180,7 +3385,44 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
             orderIndex = idx + 1
         )
     }
-    planDao.insertTasks(generated)
+
+    // 1. Atomic Room + Firestore sync via PlanRepositoryImpl (replaces active folder tasks cleanly)
+    planRepo.insertAiGeneratedPlan(activeFolder.id, generated)
+
+    // 2. Mirror into StudyPlanDao so StudyPlanScreen & legacy views remain 100% synced
+    val dayNames = listOf("Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar")
+    val activeStudyPlan = ActivePlanEntity(
+        id = "CURRENT_ACTIVE_PLAN",
+        title = activeFolder.title,
+        strategyNote = if (audit.incompleteCount > 0) {
+            "${audit.incompleteCount} eksik görev öncelikli devredildi, tamamlananlar tekrar edilmeden esnek 7 günlük plan kurgulandı."
+        } else {
+            "Güncel konu hakimiyeti ve kitap ilerlemesine göre esnek 7 günlük plan kurgulandı."
+        },
+        totalTargetQuestions = generated.sumOf { it.targetQuestions },
+        updatedAtTimestamp = System.currentTimeMillis()
+    )
+    val studyTasks = generated.map { p ->
+        StudyTaskEntity(
+            localId = 0,
+            planId = "CURRENT_ACTIVE_PLAN",
+            dayName = dayNames.getOrElse(p.dayOfWeek - 1) { "Pazartesi" },
+            dayIndex = (p.dayOfWeek - 1).coerceIn(0, 6),
+            time = p.scheduledTime,
+            subject = p.subject,
+            topic = p.topic.ifBlank { p.title },
+            goal = "${p.targetQuestions} Soru Hedefi",
+            isCompleted = false
+        )
+    }
+    runCatching { db.studyPlanDao().replaceActivePlanWithTasks(activeStudyPlan, studyTasks) }
+
+    // 3. Refresh encrypted Student Dossier & enqueue cloud sync immediately
+    PlanReadinessNavBus.markCheckInCompletedToday(context)
+    runCatching { StudentDossierManager.syncFromDatabase(context, force = true) }
+    CoachingEngine.refreshTargetAndLedgerAsync(context)
+    SyncWorker.enqueueImmediateSync(context)
+
     generated.size
 }
 

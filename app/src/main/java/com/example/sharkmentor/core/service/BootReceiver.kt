@@ -27,9 +27,15 @@ class BootReceiver : BroadcastReceiver() {
                 sessionManager.endSession()
             }
 
-            // Always re-schedule Duolingo Water Streak widget & reminder worker after reboot
+            // Always re-schedule background coaching & reminder workers after reboot
             runCatching {
                 com.example.sharkmentor.worker.StreakReminderWorker.schedule(context.applicationContext)
+            }
+            runCatching {
+                com.example.sharkmentor.worker.StudentDossierSyncWorker.schedule(context.applicationContext)
+            }
+            runCatching {
+                com.example.sharkmentor.worker.WeeklyMasteryCheckInWorker.schedule(context.applicationContext)
             }
         }
     }

@@ -214,6 +214,14 @@ class MainActivity : ComponentActivity() {
 
         val requestedRoute = intent.getStringExtra("EXTRA_TARGET_ROUTE")?.trim()?.takeIf { it.isNotEmpty() }
         val shouldStartFocus = intent.getBooleanExtra("EXTRA_START_FOCUS", false)
+        val openWeeklyCheckIn = intent.getBooleanExtra(
+            com.example.sharkmentor.worker.WeeklyMasteryCheckInWorker.EXTRA_OPEN_WEEKLY_CHECKIN,
+            false
+        )
+        if (openWeeklyCheckIn) {
+            intent.removeExtra(com.example.sharkmentor.worker.WeeklyMasteryCheckInWorker.EXTRA_OPEN_WEEKLY_CHECKIN)
+            com.example.sharkmentor.core.coaching.PlanReadinessNavBus.requestOpenSundayCheckIn()
+        }
         if (requestedRoute != null) {
             targetRouteState = requestedRoute
             intent.removeExtra("EXTRA_TARGET_ROUTE")

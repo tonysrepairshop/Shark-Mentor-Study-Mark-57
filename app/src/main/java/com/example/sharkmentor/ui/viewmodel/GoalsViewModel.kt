@@ -321,6 +321,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             dao?.updateTopicGoal(updated)
             syncTopicToFirestore(updated.id, updated.subject, updated.topic, updated.currentLevel)
             val context = getApplication<android.app.Application>()
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
             SyncWorker.enqueueImmediateSync(context)
         }
     }
@@ -341,6 +342,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             if (insertedId > 0L) {
                 syncTopicToFirestore(insertedId, subject, topic, 1)
             }
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
             SyncWorker.enqueueImmediateSync(context)
         }
     }
@@ -356,6 +358,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                     collectionName = "topics"
                 )
             )
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
             SyncWorker.enqueueImmediateSync(context)
         }
     }
@@ -375,6 +378,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             }
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
             SyncWorker.enqueueImmediateSync(context)
         }
     }
@@ -387,6 +391,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             )
             dao?.updateResource(updated)
             val synced = syncResourceToFirestore(updated)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             if (!synced) {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
@@ -408,6 +413,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 lastModifiedMillis = now
             )
             dao?.updateResource(updated)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             if (!syncResourceToFirestore(updated)) {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
@@ -429,6 +435,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 lastModifiedMillis = now
             )
             dao?.updateResource(updated)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             if (!syncResourceToFirestore(updated)) {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
@@ -447,6 +454,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 lastModifiedMillis = now
             )
             dao?.updateResource(updated)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             if (!syncResourceToFirestore(updated)) {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
@@ -484,6 +492,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
         }
     }
 
@@ -501,6 +510,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             )
             val insertedId = dao?.insertResource(entity) ?: 0L
             val entityWithId = if (insertedId > 0L) entity.copy(id = insertedId) else entity
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
             if (insertedId > 0L) {
                 if (!syncResourceToFirestore(entityWithId)) {
                     SyncWorker.enqueueImmediateSync(context)
@@ -541,6 +551,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                             syncTopicToFirestore(topicId, topicEntity.subject, topicEntity.topic, topicEntity.currentLevel)
                         }
                     }
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
                     SyncWorker.enqueueImmediateSync(context)
                 }
 
@@ -604,6 +615,8 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                     db.collection("users").document(uid).set(targetData, SetOptions.merge())
                     db.collection("students").document(uid).set(targetData, SetOptions.merge())
                 }
+                com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             }
             
             _isAnalyzingTarget.value = false
@@ -613,6 +626,8 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTarget() {
         viewModelScope.launch(Dispatchers.IO) {
             targetDao?.clearTarget()
+            com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
         }
     }
 
@@ -634,6 +649,8 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                         updatedAtMillis = System.currentTimeMillis()
                     )
                 )
+                com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             }.onFailure {
                 // Keep existing target data, clear analysis error flag
             }

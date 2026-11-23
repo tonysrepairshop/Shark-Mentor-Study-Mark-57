@@ -121,6 +121,11 @@ class SharkMentorApplication : Application() {
             } catch (e: Throwable) {
                 Log.w("SharkMentorApp", "Student dossier worker schedule bypassed: ${e.message}")
             }
+            try {
+                com.example.sharkmentor.worker.WeeklyMasteryCheckInWorker.schedule(applicationContext)
+            } catch (e: Throwable) {
+                Log.w("SharkMentorApp", "Sunday weekly check-in worker schedule bypassed: ${e.message}")
+            }
         }
     }
 

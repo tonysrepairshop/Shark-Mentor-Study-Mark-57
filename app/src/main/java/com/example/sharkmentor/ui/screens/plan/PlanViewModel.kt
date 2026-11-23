@@ -44,7 +44,8 @@ data class PlanUiState(
 class PlanViewModel @JvmOverloads constructor(
     application: Application,
     private val repository: PlanRepositoryImpl = PlanRepositoryImpl(
-        SharkMentorDatabase.getDatabase(application).planDao()
+        SharkMentorDatabase.getDatabase(application).planDao(),
+        SharkMentorDatabase.getDatabase(application).pendingDeletionDao()
     ),
     private val scannerEngine: ScheduleScannerEngine = ScheduleScannerEngine()
 ) : AndroidViewModel(application) {
@@ -59,9 +60,10 @@ class PlanViewModel @JvmOverloads constructor(
     private val _showAddTaskDialog = MutableStateFlow(false)
     val showAddTaskDialog: StateFlow<Boolean> = _showAddTaskDialog.asStateFlow()
 
-    // PlanSyncListener
+    // PlanSyncListener with tombstone awareness
     private val planSyncListener = PlanSyncListener(
-        SharkMentorDatabase.getDatabase(application).planDao()
+        SharkMentorDatabase.getDatabase(application).planDao(),
+        SharkMentorDatabase.getDatabase(application).pendingDeletionDao()
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -163,6 +165,7 @@ class PlanViewModel @JvmOverloads constructor(
                 endTimestamp = end
             )
             repository.insertFolder(newFolder)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
             _showCreateFolderDialog.value = false
             // Automatically open the freshly created folder
             selectFolder(newFolder)
@@ -209,7 +212,7 @@ class PlanViewModel @JvmOverloads constructor(
             subject = subject.ifBlank { "Ders" },
             topic = topic,
             dayOfWeek = dayOfWeek.coerceIn(1, 7),
-            scheduledTime = scheduledTime.ifBlank { "09:00" },
+            scheduledTime = scheduledTime.ifBlank { "Esnek • 90 dk" },
             targetQuestions = if (targetQuestions > 0) targetQuestions else 30,
             orderIndex = currentTasks.value.size,
             createdAt = System.currentTimeMillis()
@@ -217,6 +220,8 @@ class PlanViewModel @JvmOverloads constructor(
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.insertTasks(listOf(task))
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
         }
 
         _showAddTaskDialog.value = false
@@ -235,6 +240,8 @@ class PlanViewModel @JvmOverloads constructor(
                 val folderTitle = "Tarama: ${sdf.format(Date(now))} Planı"
 
                 val newFolder = repository.saveScannedSchedule(folderTitle, dtoList)
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+                com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
                 selectFolder(newFolder)
             }.onFailure { err ->
                 Log.e("PlanViewModel", "Scan error: ${err.message}")
@@ -249,6 +256,8 @@ class PlanViewModel @JvmOverloads constructor(
                 customTitle = folderTitle,
                 tasks = scannedTasks
             )
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
 
             // Auto-select the newly created folder by passing its ID to selectFolder
             val newFolder = PlanFolderEntity(
@@ -310,18 +319,24 @@ class PlanViewModel @JvmOverloads constructor(
     fun deleteFolder(folderId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteFolder(folderId)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
         }
     }
 
     fun deleteTask(task: PlanEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteTask(task)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
         }
     }
 
     fun toggleTaskCompletion(task: PlanEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateTaskCompletion(task.id, !task.isCompleted)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
         }
     }
 
@@ -331,6 +346,7 @@ class PlanViewModel @JvmOverloads constructor(
         val organized = PlanOrganizer.organizePlans(currentTasksList)
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateTasks(organized)
+            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
         }
     }
 }

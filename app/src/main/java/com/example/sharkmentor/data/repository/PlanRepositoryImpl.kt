@@ -33,6 +33,26 @@ class PlanRepositoryImpl(
         planDao
     )
 ) {
+    companion object {
+        /**
+         * Deduplication key for plan tasks. Includes normalized topic/title so multiple
+         * flexible-duration blocks ("Esnek • 90 dk") of the same subject on the same day
+         * with different topics are NEVER silently dropped.
+         */
+        fun buildPlanDistinctKey(
+            dayOfWeek: Int,
+            scheduledTime: String,
+            subject: String,
+            topic: String,
+            title: String = ""
+        ): String {
+            val normSubject = subject.trim().lowercase(Locale("tr"))
+            val normTopic = topic.ifBlank { title }.trim().lowercase(Locale("tr"))
+            val normSlot = scheduledTime.trim().lowercase(Locale("tr"))
+            return "${dayOfWeek}_${normSlot}_${normSubject}_${normTopic}"
+        }
+    }
+
     val activeFolders: Flow<List<PlanFolderEntity>> = planDao.getAllActiveFolders()
 
     fun getTasksForFolder(folderId: String): Flow<List<PlanEntity>> =
@@ -105,7 +125,13 @@ class PlanRepositoryImpl(
                 val firestore = GoogleServicesHelper.getFirebaseFirestore()
                 if (firestore != null) {
                     firestore.collection("users").document(uid).collection("plans").document(taskId)
-                        .update("isCompleted", isCompleted).await()
+                        .set(
+                            mapOf(
+                                "isCompleted" to isCompleted,
+                                "completed" to isCompleted
+                            ),
+                            com.google.firebase.firestore.SetOptions.merge()
+                        ).await()
                 }
             } catch (e: Exception) {
                 Log.e("PlanRepository", "Remote update task completion failed: ${e.message}")
@@ -187,18 +213,28 @@ class PlanRepositoryImpl(
         // 2. Wipe old tasks
         planDao.deleteTasksByFolder(folderId)
 
-        // 3. Map & Deduplicate
+        // 3. Map & Deduplicate (preserving distinct topics sharing the same flexible duration slot)
         val entities = tasks
             .sortedWith(compareBy({ it.dayOfWeek }, { it.scheduledTime }))
-            .distinctBy { "${it.dayOfWeek}_${it.scheduledTime}_${it.subject}" }
+            .distinctBy {
+                buildPlanDistinctKey(
+                    dayOfWeek = it.dayOfWeek,
+                    scheduledTime = it.scheduledTime.ifBlank { "Esnek • 90 dk" },
+                    subject = it.subject,
+                    topic = it.topic
+                )
+            }
             .mapIndexed { index, dto ->
+                val cleanTopic = dto.topic.trim()
+                val cleanSubject = dto.subject.trim().ifBlank { "Ders" }
                 PlanEntity(
                     id = UUID.randomUUID().toString(),
                     folderId = folderId,
                     dayOfWeek = if (dto.dayOfWeek in 1..7) dto.dayOfWeek else 1,
-                    scheduledTime = dto.scheduledTime.ifBlank { "08:30 - 09:30" },
-                    title = dto.topic.ifBlank { dto.subject },
-                    subject = dto.subject.ifBlank { "Ders" },
+                    scheduledTime = dto.scheduledTime.ifBlank { "Esnek • 90 dk" },
+                    title = cleanTopic.ifBlank { cleanSubject },
+                    subject = cleanSubject,
+                    topic = cleanTopic,
                     targetQuestions = if (dto.targetQuestions > 0) dto.targetQuestions else 30,
                     orderIndex = index
                 )
@@ -241,11 +277,20 @@ class PlanRepositoryImpl(
         )
 
         val boundTasks = tasks
-            .distinctBy { "${it.dayOfWeek}_${it.scheduledTime}_${it.subject}" }
+            .distinctBy {
+                buildPlanDistinctKey(
+                    dayOfWeek = it.dayOfWeek,
+                    scheduledTime = it.scheduledTime,
+                    subject = it.subject,
+                    topic = it.topic,
+                    title = it.title
+                )
+            }
             .mapIndexed { index, task ->
                 task.copy(
                     id = if (task.id.isNotBlank()) task.id else UUID.randomUUID().toString(),
                     folderId = newFolderId,
+                    scheduledTime = task.scheduledTime.ifBlank { "Esnek • 90 dk" },
                     orderIndex = index,
                     targetQuestions = if (task.targetQuestions > 0) task.targetQuestions else 30
                 )
@@ -287,13 +332,16 @@ class PlanRepositoryImpl(
         val entities = tasks
             .sortedWith(compareBy({ it.dayOfWeek }, { it.scheduledTime }))
             .mapIndexed { index, task ->
+                val cleanTopic = task.topic.trim()
+                val cleanSubject = task.subject.trim().ifBlank { "Ders" }
                 PlanEntity(
                     id = UUID.randomUUID().toString(),
                     folderId = folder.id,
                     dayOfWeek = if (task.dayOfWeek in 1..7) task.dayOfWeek else 1,
-                    scheduledTime = task.scheduledTime.ifBlank { "08:30 - 09:30" },
-                    title = task.topic.ifBlank { task.subject },
-                    subject = task.subject.ifBlank { "Ders" },
+                    scheduledTime = task.scheduledTime.ifBlank { "Esnek • 90 dk" },
+                    title = cleanTopic.ifBlank { cleanSubject },
+                    subject = cleanSubject,
+                    topic = cleanTopic,
                     targetQuestions = if (task.targetQuestions > 0) task.targetQuestions else 30,
                     orderIndex = index
                 )
@@ -337,6 +385,7 @@ class PlanRepositoryImpl(
             task.copy(
                 id = if (task.id.isNotBlank()) task.id else UUID.randomUUID().toString(),
                 folderId = newFolderId,
+                scheduledTime = task.scheduledTime.ifBlank { "Esnek • 90 dk" },
                 orderIndex = index,
                 targetQuestions = if (task.targetQuestions > 0) task.targetQuestions else 30
             )
@@ -372,11 +421,20 @@ class PlanRepositoryImpl(
             )
 
             val boundTasks = tasks
-                .distinctBy { "${it.dayOfWeek}_${it.scheduledTime}_${it.subject}" }
+                .distinctBy {
+                    buildPlanDistinctKey(
+                        dayOfWeek = it.dayOfWeek,
+                        scheduledTime = it.scheduledTime,
+                        subject = it.subject,
+                        topic = it.topic,
+                        title = it.title
+                    )
+                }
                 .mapIndexed { index, task ->
                     task.copy(
                         id              = task.id.ifBlank { UUID.randomUUID().toString() },
                         folderId        = folderId,
+                        scheduledTime   = task.scheduledTime.ifBlank { "Esnek • 90 dk" },
                         orderIndex      = index,
                         targetQuestions = if (task.targetQuestions > 0) task.targetQuestions else 30
                     )

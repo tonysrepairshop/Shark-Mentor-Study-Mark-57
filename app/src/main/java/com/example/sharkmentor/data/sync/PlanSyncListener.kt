@@ -33,7 +33,8 @@ import kotlinx.coroutines.launch
  * Call stop() in ViewModel.onCleared().
  */
 class PlanSyncListener(
-    private val planDao: PlanDao
+    private val planDao: PlanDao,
+    private val pendingDeletionDao: com.example.sharkmentor.data.local.dao.PendingDeletionDao? = null
 ) {
     private val TAG = "PlanSyncListener"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -108,11 +109,15 @@ class PlanSyncListener(
 
                 scope.launch {
                     try {
-                        folders.forEach { folder ->
+                        val tombstones = runCatching {
+                            pendingDeletionDao?.getAllPendingDeletions()?.map { it.entityId }?.toSet().orEmpty()
+                        }.getOrDefault(emptySet())
+                        val safeFolders = folders.filterNot { it.id in tombstones }
+                        safeFolders.forEach { folder ->
                             planDao.insertFolder(folder)
                             _onNewFolderArrived.tryEmit(folder.id)
                         }
-                        Log.d(TAG, "Upserted ${folders.size} plan folders into Room.")
+                        Log.d(TAG, "Upserted ${safeFolders.size} plan folders into Room (skipped ${folders.size - safeFolders.size} tombstoned).")
                     } catch (e: Exception) {
                         Log.e(TAG, "Room folder upsert failed: ${e.message}", e)
                     }
@@ -163,8 +168,8 @@ class PlanSyncListener(
                                 subject        = doc.getString("subject") ?: "Ders",
                                 topic          = doc.getString("topic") ?: "",
                                 dayOfWeek      = (doc.getLong("dayOfWeek") ?: 1L).toInt().coerceIn(1, 7),
-                                scheduledTime  = doc.getString("scheduledTime")
-                                    ?: doc.getString("timeSlot") ?: "09:00",
+                                scheduledTime  = (doc.getString("scheduledTime")
+                                    ?: doc.getString("timeSlot")).orEmpty().ifBlank { "Esnek • 90 dk" },
                                 targetQuestions = (doc.getLong("targetQuestions") ?: 30L)
                                     .toInt().let { if (it > 0) it else 30 },
                                 isCompleted    = doc.getBoolean("isCompleted")
@@ -184,9 +189,13 @@ class PlanSyncListener(
 
                 scope.launch {
                     try {
-                        if (tasks.isNotEmpty()) {
-                            planDao.insertTasks(tasks)
-                            Log.d(TAG, "Upserted ${tasks.size} plan tasks into Room.")
+                        val tombstones = runCatching {
+                            pendingDeletionDao?.getAllPendingDeletions()?.map { it.entityId }?.toSet().orEmpty()
+                        }.getOrDefault(emptySet())
+                        val safeTasks = tasks.filterNot { it.id in tombstones || it.folderId in tombstones }
+                        if (safeTasks.isNotEmpty()) {
+                            planDao.insertTasks(safeTasks)
+                            Log.d(TAG, "Upserted ${safeTasks.size} plan tasks into Room (skipped ${tasks.size - safeTasks.size} tombstoned).")
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Room task upsert failed: ${e.message}", e)

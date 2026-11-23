@@ -225,6 +225,43 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     private val _pendingDossierAction = MutableStateFlow<PendingDossierAction?>(null)
     val pendingDossierAction: StateFlow<PendingDossierAction?> = _pendingDossierAction.asStateFlow()
 
+    data class PendingPlanRebuildRequest(
+        val userInput: String,
+        val attachmentUri: Uri? = null,
+        val attachmentName: String? = null,
+        val capabilityOverride: SharkAiCapability? = null,
+        val engineOverride: SharkAiEngine? = null
+    )
+
+    private val _pendingPlanRebuildRequest = MutableStateFlow<PendingPlanRebuildRequest?>(null)
+    val pendingPlanRebuildRequest: StateFlow<PendingPlanRebuildRequest?> = _pendingPlanRebuildRequest.asStateFlow()
+
+    fun confirmPendingPlanRebuild() {
+        val pending = _pendingPlanRebuildRequest.value ?: return
+        _pendingPlanRebuildRequest.value = null
+        sendMessage(
+            userInput = pending.userInput,
+            attachmentUri = pending.attachmentUri,
+            attachmentName = pending.attachmentName,
+            capabilityOverride = pending.capabilityOverride,
+            engineOverride = pending.engineOverride ?: SharkAiEngine.PLANNER_OR_ORGANIZER,
+            bypassReadinessCheck = true,
+            appendUserMessage = false
+        )
+    }
+
+    fun cancelPendingPlanRebuild() {
+        if (_pendingPlanRebuildRequest.value == null) return
+        _pendingPlanRebuildRequest.value = null
+        val aiMsg = AiChatMessage(
+            sender = "ai",
+            text = "Tamamdır, konu hakimiyetini ve kitaplarını dilediğin zaman güncelleyip planını yeniden kurgulayabilirsin.",
+            personaTag = _uiState.value.currentPersona.id
+        )
+        _uiState.value = _uiState.value.copy(messages = _uiState.value.messages + aiMsg, isLoading = false)
+        persistCurrentChatState()
+    }
+
     private fun normalizeFlexibleTimeSlot(raw: String?): String {
         val clean = raw?.trim().orEmpty()
         if (clean.isBlank()) return "Esnek • 90 dk"
@@ -677,7 +714,9 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         attachmentUri: Uri? = _selectedAttachmentUri.value,
         attachmentName: String? = _attachmentPreview.value?.displayName,
         capabilityOverride: SharkAiCapability? = _activeCapability.value,
-        engineOverride: SharkAiEngine? = _lockedEngine.value
+        engineOverride: SharkAiEngine? = _lockedEngine.value,
+        bypassReadinessCheck: Boolean = false,
+        appendUserMessage: Boolean = true
     ) {
         val text = userInput.trim()
         if ((text.isBlank() && attachmentUri == null) || _uiState.value.isLoading) return
@@ -719,8 +758,13 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         SharkAiChatSessionStore.saveDraftState(getApplication(), "", null)
         refreshAutoDetectedEngine()
 
+        val nextMessages = if (appendUserMessage) {
+            _uiState.value.messages + userMsg
+        } else {
+            _uiState.value.messages
+        }
         _uiState.value = _uiState.value.copy(
-            messages = _uiState.value.messages + userMsg,
+            messages = nextMessages,
             isLoading = true,
             error = null
         )
@@ -764,13 +808,42 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             }
         }
 
+        // Pre-plan readiness check-in card whenever student requests building/rebuilding a plan in chat
+        if (!bypassReadinessCheck &&
+            attachmentUri == null &&
+            text.isNotBlank() &&
+            resolvedEngine != SharkAiEngine.SOLVER_ENGINE &&
+            resolvedEngine != SharkAiEngine.TWIN_QUESTION_ENGINE &&
+            com.example.sharkmentor.core.coaching.PlanProgressAuditor.isPlanRebuildOrCreateIntent(text)
+        ) {
+            _pendingPlanRebuildRequest.value = PendingPlanRebuildRequest(
+                userInput = text,
+                attachmentUri = attachmentUri,
+                attachmentName = resolvedAttachmentName,
+                capabilityOverride = capabilityOverride,
+                engineOverride = engineOverride
+            )
+            val readinessPrompt = AiChatMessage(
+                sender = "ai",
+                text = "Yeni planını eksiklerini devredip tamamladıklarını tekrar etmeden en sağlıklı şekilde kurgulayabilmem için açılan karttan konu hakimiyetini ve kitaplarında çözdüğün noktaları son haline getirmeni rica ediyorum. Onayladığında planını anlık durumuna göre oluşturacağım.",
+                personaTag = currentPersona.id
+            )
+            _uiState.value = _uiState.value.copy(
+                messages = _uiState.value.messages + readinessPrompt,
+                isLoading = false
+            )
+            persistCurrentChatState()
+            return
+        }
+
         val streamingMsgId = UUID.randomUUID().toString()
         val originatingSessionId = _activeChatSessionId.value
 
         activeAiJob?.cancel()
         activeAiJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                val (memorySnapshot, concrete, shortTargets, longTargets, allResources, allTopics, schedules) = coroutineScope {
+                val appCtx = getApplication<Application>()
+                val (memorySnapshot, concrete, shortTargets, longTargets, allResources, allTopics, schedules, planAudit) = coroutineScope {
                     val memoryDef = async { memoryRepository.buildSemanticSnapshot() }
                     val concreteDef = async { database.concreteTargetDao().getTargetRaw() }
                     val shortDef = async { database.targetDao().getTargetsWithTasksSync(TargetType.SHORT_TERM) }
@@ -778,6 +851,9 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     val resourcesDef = async { database.goalsDao().getAllResourcesRaw() }
                     val topicsDef = async { database.goalsDao().getAllTopicsRaw() }
                     val schedulesDef = async { database.institutionScheduleDao().getAllSchedules() }
+                    val planAuditDef = async {
+                        com.example.sharkmentor.core.coaching.PlanProgressAuditor.captureFromDatabase(appCtx)
+                    }
                     ContextSnapshotBundle(
                         memorySnapshot = memoryDef.await(),
                         concrete = concreteDef.await(),
@@ -785,7 +861,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         longTargets = longDef.await(),
                         resources = resourcesDef.await(),
                         topics = topicsDef.await(),
-                        schedules = schedulesDef.await()
+                        schedules = schedulesDef.await(),
+                        planAudit = planAuditDef.await()
                     )
                 }
 
@@ -827,6 +904,64 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 - [MEVCUT HEDEFLER (targets)]: $targetSummary
                 - [KONU HAKİMİYETİ ÖZETİ]: $topicSummary
                 """.trimIndent()
+
+                // Selective anonymized Student Dossier + Live Plan Progress Audit injection
+                val dossierChannel = when {
+                    resolvedEngine == SharkAiEngine.SOLVER_ENGINE || resolvedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE ->
+                        com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING
+                    resolvedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER || currentPersona == AiPersona.STUDY_PLANNER ->
+                        com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI
+                    currentPersona == AiPersona.ZEN_CALM ->
+                        com.example.sharkmentor.core.coaching.DossierAiChannel.ZEN_COACH
+                    currentPersona == AiPersona.SHARK_COACH || currentPersona == AiPersona.GOAL_SETTER ->
+                        if (com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(text)) {
+                            com.example.sharkmentor.core.coaching.DossierAiChannel.COACHING_DIRECT
+                        } else {
+                            com.example.sharkmentor.core.coaching.DossierAiChannel.AUTO_CHAT
+                        }
+                    else -> com.example.sharkmentor.core.coaching.DossierAiChannel.AUTO_CHAT
+                }
+                com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
+                val shouldAttachDossier = com.example.sharkmentor.core.coaching.StudentDossierManager.shouldAttachDossier(
+                    channel = dossierChannel,
+                    userMessage = text
+                )
+                val dossierAndAuditBlock = if (shouldAttachDossier) {
+                    val baseDossier = com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.value
+                    val liveDossier = if (planAudit.hasAnyTasks) {
+                        baseDossier.copy(
+                            activePlanTitle = planAudit.folderTitle,
+                            completedPlanTasks = planAudit.completedTasks.take(60).map { item ->
+                                com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                    dayOfWeek = item.dayOfWeek,
+                                    subject = item.subject,
+                                    topic = item.topic,
+                                    targetQuestions = item.targetQuestions,
+                                    isCompleted = true
+                                )
+                            },
+                            incompletePlanTasks = planAudit.incompleteTasks.take(60).map { item ->
+                                com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                    dayOfWeek = item.dayOfWeek,
+                                    subject = item.subject,
+                                    topic = item.topic,
+                                    targetQuestions = item.targetQuestions,
+                                    isCompleted = false
+                                )
+                            }
+                        )
+                    } else baseDossier
+                    "\n\n" + com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt(liveDossier)
+                } else if (
+                    dossierChannel != com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING &&
+                    planAudit.hasAnyTasks &&
+                    (dossierChannel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
+                        com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(text))
+                ) {
+                    "\n\n" + com.example.sharkmentor.core.coaching.PlanProgressAuditor.buildAiPlanAuditPrompt(planAudit)
+                } else {
+                    ""
+                }
 
                 val projectionReport = if (currentPersona == AiPersona.GOAL_SETTER) {
                     val wizardState = netWizardState.value
@@ -896,10 +1031,10 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
 
                     [SİSTEMİK KİMLİK: SharkMentor Otonom Hub - Motor: ${resolvedEngine.displayName} - Mod: ${currentPersona.title}]
                     [ÖĞRENCİ, KÜTÜPHANE VE HEDEF BAĞLAMI]:
-                    $userStatsAndLibrarySnapshot
+                    $userStatsAndLibrarySnapshot$dossierAndAuditBlock
                     [AKTİF HAFIZA: $memorySnapshot]$attachmentContext
                     $projectionReport$scheduleConstraintPrompt$conversationHistoryPrompt
-                    Talimat: Öğrencinin mevcut kütüphane kitaplarına, ders ve konu eşleşmelerine, hedeflerine ve geçmiş kararlarına sadık kal. Mevcut bir kitabın ilerlemesi söylendiğinde yeni kitap açma, UPDATE_RESOURCE_PROGRESS ile doğru `resourceId`, tam kitap adı ve dersini kullan. Kullanıcı toplam sayfa/test sayısını belirtmediyse asla `totalUnits` uydurma (`0` bırak).
+                    Talimat: Öğrencinin mevcut kütüphane kitaplarına, ders ve konu eşleşmelerine, hedeflerine, tamamlanan/eksik kalan plan görevlerine ve geçmiş kararlarına sadık kal. Mevcut bir kitabın ilerlemesi söylendiğinde yeni kitap açma, UPDATE_RESOURCE_PROGRESS ile doğru `resourceId`, tam kitap adı ve dersini kullan. Kullanıcı toplam sayfa/test sayısını belirtmediyse asla `totalUnits` uydurma (`0` bırak).
                 """.trimIndent()
 
                 val effectivePrompt = if (attachmentUri != null && text.isBlank()) {
@@ -1141,7 +1276,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val longTargets: List<TargetWithTasks>,
         val resources: List<ResourceEntity>,
         val topics: List<TopicGoalEntity>,
-        val schedules: List<InstitutionScheduleEntity>
+        val schedules: List<InstitutionScheduleEntity>,
+        val planAudit: com.example.sharkmentor.core.coaching.PlanAuditSnapshot
     )
 
     private fun extractActionsFromResponse(rawResponse: String): List<Pair<String, Map<String, Any>>> {
@@ -1332,7 +1468,6 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                             }
                                         )
                                         firestore.collection("students").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
-                                        firestore.collection("users").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
                                     }
                                 }
                                 SyncWorker.enqueueImmediateSync(getApplication())
@@ -2249,7 +2384,6 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                             }
                                         )
                                         firestore.collection("students").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
-                                        firestore.collection("users").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
                                     }
                                 }
                                 SyncWorker.enqueueImmediateSync(getApplication())
@@ -2272,6 +2406,11 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         Log.w("SharkAiViewModel", "Fallback schedule parsing error: ${e.message}")
                     }
                 }
+            }
+
+            if (actionPairs.isNotEmpty() || isPlan) {
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+                com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
             }
 
             if (persona.isTemporaryMemory) {
@@ -2733,9 +2872,10 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                         }
                                     )
                                     firestore.collection("students").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
-                                    firestore.collection("users").document(uid).collection("plans").document("CURRENT_ACTIVE_PLAN").set(planMap, SetOptions.merge())
                                 }
                             }
+                            com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+                            com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
                             SyncWorker.enqueueImmediateSync(getApplication())
                             savedFolderId
                         }
@@ -2781,7 +2921,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val actionInstruction = if (includeActionInstructions) """
 
             AKSİYON VE EYLEM TALİMATLARI (HEM METİN HEM GÖRSEL ANALİZİNDE GEÇERLİDİR):
-            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa 7 güne ve çoklu derse dengeli, katı saat aralığı olmadan esnek sürelerle (`"Esnek • 90 dk"`) mesajının EN SONUNA plan eylemini ekle:
+            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa 7 güne ve çoklu derse dengeli, katı saat aralığı olmadan esnek sürelerle (`"Esnek • 90 dk"`) mesajının EN SONUNA plan eylemini ekle. KRİTİK KURAL: Önceki plandan EKSİK/TAMAMLANMAMIŞ görevleri mutlaka yeni planın ilk günlerine devret; TAMAMLANMIŞ görevleri (konu hakimiyeti ≤ 2/5 değilse) tekrar tekrar yazma:
             #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Haftalık odak stratejisi","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
             - Eğer öğrenci "TYT tüm konular", "AYT tüm konular" veya bir dersin tüm konularını/müfredatını eklemek istiyorsa ASLA ders başına tek boş klasör açma; INSERT_TOPICS_BATCH kullan:
             #ACTION:{"type":"INSERT_TOPICS_BATCH","exam":"TYT","preset":"TYT_ALL","topics":[{"subject":"TYT Türkçe","topic":"Sözcükte Anlam","targetLevel":5},{"subject":"TYT Matematik","topic":"Temel Kavramlar","targetLevel":5}]}#
@@ -2830,7 +2970,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             AiPersona.STUDY_PLANNER -> if (includeActionInstructions) {
                 """
                     Sen SharkMentor Otonom Çalışma Planlayıcısısın.
-                    GÖREV: Öğrencinin talebine dayanarak 7 günlük (Pazartesi-Pazar) operasyonel çalışma planı hazırla.
+                    GÖREV: Öğrencinin talebine ve [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ] kaydına dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
+                    KÜMÜLATİF KURAL: Önceki plandan tamamlanmayan/eksik kalan görevleri mutlaka öncelikli olarak yeni plana devret; halihazırda tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) gereksiz yere tekrar ettirme.
                     1. Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini nasıl toparlayacağını açıkla.
                     2. Ardından mesajın en sonuna çalışma programını aşağıdaki sistem eylem formatında ekle:
                     #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Bu haftaki stratejik yönelim özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40,"focusStrategy":"Konu Pekiştirme"}]}#$rulesBlock
@@ -2838,7 +2979,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             } else {
                 """
                     Sen SharkMentor Otonom Çalışma Planlayıcısısın.
-                    GÖREV: Öğrencinin talebine dayanarak 7 günlük (Pazartesi-Pazar) operasyonel çalışma planı hazırla.
+                    GÖREV: Öğrencinin talebine ve [MEVCUT PLAN İLERLEME VE EKSİK DENETİMİ] kaydına dayanarak 7 günlük (Pazartesi-Pazar) esnek çalışma planı hazırla.
+                    KÜMÜLATİF KURAL: Önceki plandan tamamlanmayan/eksik kalan görevleri mutlaka öncelikli olarak yeni plana devret; halihazırda tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) tekrar ettirme.
                     Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini nasıl toparlayacağını açıkla.$rulesBlock
                 """.trimIndent()
             }

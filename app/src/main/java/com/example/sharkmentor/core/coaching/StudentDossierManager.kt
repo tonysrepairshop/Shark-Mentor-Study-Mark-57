@@ -72,6 +72,15 @@ data class DossierBookSnapshot(
 )
 
 @Immutable
+data class DossierPlanTaskSnapshot(
+    val dayOfWeek: Int,
+    val subject: String,
+    val topic: String,
+    val targetQuestions: Int = 30,
+    val isCompleted: Boolean = false
+)
+
+@Immutable
 data class EfficiencySuggestion(
     val currentWeekdayHours: Int,
     val currentWeekendHours: Int,
@@ -100,6 +109,9 @@ data class StudentDossier(
     val weekendGoalMinutes: Int = 300,
     val topics: List<DossierTopicSnapshot> = emptyList(),
     val books: List<DossierBookSnapshot> = emptyList(),
+    val activePlanTitle: String = "",
+    val completedPlanTasks: List<DossierPlanTaskSnapshot> = emptyList(),
+    val incompletePlanTasks: List<DossierPlanTaskSnapshot> = emptyList(),
     val interviewAnswers: Map<String, String> = emptyMap(),
     val coachingInsights: List<String> = emptyList(),
     val efficiencyTrialDeclined: Boolean = false,
@@ -111,6 +123,43 @@ data class StudentDossier(
 
     val weakTopicsCount: Int
         get() = topics.count { it.currentLevel in 0..2 }
+
+    val totalPlanTasksCount: Int
+        get() = completedPlanTasks.size + incompletePlanTasks.size
+
+    fun toPlanAuditSnapshot(): PlanAuditSnapshot {
+        val doneItems = completedPlanTasks.mapIndexed { idx, t ->
+            PlanTaskAuditItem(
+                id = "dossier_done_$idx",
+                dayOfWeek = t.dayOfWeek,
+                subject = t.subject,
+                topic = t.topic,
+                scheduledTime = "Esnek • 90 dk",
+                targetQuestions = t.targetQuestions,
+                isCompleted = true,
+                isOverdueOrDueToday = false
+            )
+        }
+        val missedItems = incompletePlanTasks.mapIndexed { idx, t ->
+            PlanTaskAuditItem(
+                id = "dossier_inc_$idx",
+                dayOfWeek = t.dayOfWeek,
+                subject = t.subject,
+                topic = t.topic,
+                scheduledTime = "Esnek • 90 dk",
+                targetQuestions = t.targetQuestions,
+                isCompleted = false,
+                isOverdueOrDueToday = true
+            )
+        }
+        return PlanAuditSnapshot(
+            folderTitle = activePlanTitle,
+            totalTasks = doneItems.size + missedItems.size,
+            completedTasks = doneItems,
+            incompleteTasks = missedItems,
+            capturedAtMillis = lastSyncedAtMillis
+        )
+    }
 }
 
 /**
@@ -406,8 +455,49 @@ object StudentDossierManager {
     }
 
     /**
-     * Full clean sync of Goals, ALL Topic Mastery items, ALL Library Books, and Daily Hours.
-     * Replaces lists cleanly so deleted goals/topics/books are automatically removed from the dossier.
+     * Triggers an immediate non-blocking background refresh of the encrypted Student Dossier
+     * whenever topics, books, plans, or targets are modified across the app.
+     */
+    fun syncInBackground(context: Context) {
+        val appCtx = context.applicationContext
+        bgScope.launch {
+            runCatching {
+                ensureLoaded(appCtx)
+                val cur = _dossier.value
+                if (cur.consentAccepted || cur.isCompleted) {
+                    syncFromDatabase(appCtx, force = true)
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "syncInBackground failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Immediately propagates updated weekday/weekend daily goal hours from [CoachingEngine]
+     * into the encrypted dossier so AI models never see stale hour targets.
+     */
+    fun syncDailyGoalsFromEngine(context: Context, weekdayMinutes: Int, weekendMinutes: Int) {
+        ensureLoaded(context)
+        val cur = _dossier.value
+        if (!cur.consentAccepted && !cur.isCompleted) return
+        val wd = weekdayMinutes.coerceIn(30, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
+        val we = weekendMinutes.coerceIn(30, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
+        if (cur.weekdayGoalMinutes == wd && cur.weekendGoalMinutes == we) return
+        persistDossier(
+            context,
+            cur.copy(
+                weekdayGoalMinutes = wd,
+                weekendGoalMinutes = we,
+                updatedAtMillis = System.currentTimeMillis()
+            )
+        )
+    }
+
+    /**
+     * Full clean sync of Goals, ALL Topic Mastery items, ALL Library Books, Daily Hours,
+     * AND Active Plan Completed vs. Incomplete/Missed Tasks.
+     * Replaces lists cleanly so deleted goals/topics/books/tasks are automatically removed from the dossier.
      */
     suspend fun syncFromDatabase(context: Context, force: Boolean = true): StudentDossier = withContext(Dispatchers.IO) {
         ensureLoaded(context)
@@ -425,6 +515,7 @@ object StudentDossierManager {
         val concrete = runCatching { db.concreteTargetDao().getTargetRaw() }.getOrNull()
         val rawTopics = runCatching { db.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
         val rawBooks = runCatching { db.goalsDao().getAllResourcesRaw() }.getOrDefault(emptyList())
+        val planAudit = runCatching { PlanProgressAuditor.captureFromDatabase(appCtx) }.getOrDefault(PlanAuditSnapshot())
 
         val profileExam = userPrefs.studentTargetExam?.takeIf { it.isNotBlank() }
             ?: concrete?.examType?.takeIf { it.isNotBlank() }
@@ -474,6 +565,25 @@ object StudentDossierManager {
             }
             .sortedWith(compareBy<DossierBookSnapshot> { it.subject }.thenBy { it.title })
 
+        val completedPlanSnapshots = planAudit.completedTasks.take(60).map { item ->
+            DossierPlanTaskSnapshot(
+                dayOfWeek = item.dayOfWeek,
+                subject = item.subject,
+                topic = item.topic,
+                targetQuestions = item.targetQuestions,
+                isCompleted = true
+            )
+        }
+        val incompletePlanSnapshots = planAudit.incompleteTasks.take(60).map { item ->
+            DossierPlanTaskSnapshot(
+                dayOfWeek = item.dayOfWeek,
+                subject = item.subject,
+                topic = item.topic,
+                targetQuestions = item.targetQuestions,
+                isCompleted = false
+            )
+        }
+
         val updated = cur.copy(
             examType = profileExam,
             studentGrade = grade,
@@ -484,20 +594,16 @@ object StudentDossierManager {
             weekendGoalMinutes = CoachingEngine.weekendGoalMinutes.value,
             topics = topicSnapshots,
             books = bookSnapshots,
+            activePlanTitle = planAudit.folderTitle,
+            completedPlanTasks = completedPlanSnapshots,
+            incompletePlanTasks = incompletePlanSnapshots,
             lastSyncedAtMillis = now,
             updatedAtMillis = now
         )
         persistDossier(appCtx, updated)
 
-        // Evaluate adaptive efficiency feedback silently
-        val missedTasks = runCatching {
-            val activeFolder = db.planDao().getAllFoldersSync().firstOrNull()
-            if (activeFolder != null) {
-                db.planDao().getTasksForFolder(activeFolder.id).firstOrNull().orEmpty().count { !it.isCompleted }
-            } else {
-                db.studyPlanDao().observeAllTasks().firstOrNull().orEmpty().count { !it.isCompleted }
-            }
-        }.getOrDefault(0)
+        // Evaluate adaptive efficiency feedback silently using accurate audited missed tasks
+        val missedTasks = planAudit.incompleteCount
         val suggestion = evaluateEfficiencySuggestion(
             dossier = updated,
             recentLedger = CoachingEngine.recentLedger.value,
@@ -650,6 +756,11 @@ object StudentDossierManager {
             }
         }
 
+        val planAuditBlock = PlanProgressAuditor.buildAiPlanAuditPrompt(d.toPlanAuditSnapshot())
+        if (planAuditBlock.isNotBlank()) {
+            sb.appendLine(planAuditBlock)
+        }
+
         if (d.interviewAnswers.isNotEmpty()) {
             sb.appendLine("• Öğrenci Tanıma Yanıtları:")
             INTERVIEW_QUESTIONS.forEach { q ->
@@ -722,6 +833,7 @@ object StudentDossierManager {
         root.put("targetAnalysisSummary", d.targetAnalysisSummary)
         root.put("weekdayGoalMinutes", d.weekdayGoalMinutes)
         root.put("weekendGoalMinutes", d.weekendGoalMinutes)
+        root.put("activePlanTitle", d.activePlanTitle)
         root.put("efficiencyTrialDeclined", d.efficiencyTrialDeclined)
         root.put("lastSyncedAtMillis", d.lastSyncedAtMillis)
         root.put("updatedAtMillis", d.updatedAtMillis)
@@ -748,6 +860,28 @@ object StudentDossierManager {
             })
         }
         root.put("books", booksArr)
+
+        val donePlanArr = JSONArray()
+        d.completedPlanTasks.forEach { pt ->
+            donePlanArr.put(JSONObject().apply {
+                put("d", pt.dayOfWeek)
+                put("s", pt.subject)
+                put("t", pt.topic)
+                put("q", pt.targetQuestions)
+            })
+        }
+        root.put("donePlan", donePlanArr)
+
+        val incPlanArr = JSONArray()
+        d.incompletePlanTasks.forEach { pt ->
+            incPlanArr.put(JSONObject().apply {
+                put("d", pt.dayOfWeek)
+                put("s", pt.subject)
+                put("t", pt.topic)
+                put("q", pt.targetQuestions)
+            })
+        }
+        root.put("incPlan", incPlanArr)
 
         val answersObj = JSONObject()
         d.interviewAnswers.forEach { (k, v) -> answersObj.put(k, v) }
@@ -793,6 +927,38 @@ object StudentDossierManager {
                     )
                 }
             }
+            val donePlan = mutableListOf<DossierPlanTaskSnapshot>()
+            val dpArr = root.optJSONArray("donePlan")
+            if (dpArr != null) {
+                for (i in 0 until dpArr.length()) {
+                    val o = dpArr.optJSONObject(i) ?: continue
+                    donePlan.add(
+                        DossierPlanTaskSnapshot(
+                            dayOfWeek = o.optInt("d", 1).coerceIn(1, 7),
+                            subject = o.optString("s"),
+                            topic = o.optString("t"),
+                            targetQuestions = o.optInt("q", 30),
+                            isCompleted = true
+                        )
+                    )
+                }
+            }
+            val incPlan = mutableListOf<DossierPlanTaskSnapshot>()
+            val ipArr = root.optJSONArray("incPlan")
+            if (ipArr != null) {
+                for (i in 0 until ipArr.length()) {
+                    val o = ipArr.optJSONObject(i) ?: continue
+                    incPlan.add(
+                        DossierPlanTaskSnapshot(
+                            dayOfWeek = o.optInt("d", 1).coerceIn(1, 7),
+                            subject = o.optString("s"),
+                            topic = o.optString("t"),
+                            targetQuestions = o.optInt("q", 30),
+                            isCompleted = false
+                        )
+                    )
+                }
+            }
             val answers = LinkedHashMap<String, String>()
             val aObj = root.optJSONObject("answers")
             if (aObj != null) {
@@ -824,6 +990,9 @@ object StudentDossierManager {
                 weekendGoalMinutes = root.optInt("weekendGoalMinutes", 300).coerceIn(30, CoachingEngine.MAX_DAILY_GOAL_MINUTES),
                 topics = topics,
                 books = books,
+                activePlanTitle = root.optString("activePlanTitle", ""),
+                completedPlanTasks = donePlan,
+                incompletePlanTasks = incPlan,
                 interviewAnswers = answers,
                 coachingInsights = insights,
                 efficiencyTrialDeclined = root.optBoolean("efficiencyTrialDeclined", false),

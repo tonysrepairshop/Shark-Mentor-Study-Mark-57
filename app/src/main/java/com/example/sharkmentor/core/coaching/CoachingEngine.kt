@@ -341,6 +341,7 @@ object CoachingEngine {
             .putInt(KEY_WEEKEND_GOAL_MINS, clampedWeekend)
             .putBoolean(KEY_USE_AI_GOAL, useAiRecommendation)
             .apply()
+        StudentDossierManager.syncDailyGoalsFromEngine(context, clampedWeekday, clampedWeekend)
         refreshTargetAndLedgerAsync(context)
     }
 

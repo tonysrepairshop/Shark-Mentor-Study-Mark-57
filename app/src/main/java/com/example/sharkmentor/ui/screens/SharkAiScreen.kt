@@ -176,6 +176,7 @@ fun SharkAiScreen(
     val lockedEngine by viewModel.lockedEngine.collectAsStateWithLifecycle()
     val pendingHandoff by SharkAiHandoffManager.pendingHandoff.collectAsStateWithLifecycle()
     val pendingDossierAction by viewModel.pendingDossierAction.collectAsStateWithLifecycle()
+    val pendingPlanRebuildRequest by viewModel.pendingPlanRebuildRequest.collectAsStateWithLifecycle()
     val openInterviewRequested by com.example.sharkmentor.core.coaching.StudentDossierNavBus.openInterviewRequested.collectAsStateWithLifecycle()
     val studentDossier by com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.collectAsStateWithLifecycle()
 
@@ -1897,6 +1898,17 @@ fun SharkAiScreen(
                         Text("İptal")
                     }
                 }
+            )
+        }
+
+        // Pre-Plan Readiness Check-In Card when student requests building/rebuilding a plan via Shark AI
+        pendingPlanRebuildRequest?.let {
+            com.example.sharkmentor.ui.coaching.PlanReadinessCheckInDialog(
+                title = "Plan Öncesi Güncellik Kontrolü",
+                subtitle = "Yeni planının geçmiş eksiklerini öne alıp tamamladıklarını tekrar etmemesi için konu hakimiyetini ve kitaplarında çözdüğün noktaları son haline getir.",
+                confirmButtonLabel = "Güncel, Planı Kurgula",
+                onConfirmProceed = { viewModel.confirmPendingPlanRebuild() },
+                onDismiss = { viewModel.cancelPendingPlanRebuild() }
             )
         }
 

@@ -209,6 +209,14 @@ fun MainScreen(
     }
     val errorBankViewModel: ErrorBankViewModel = viewModel()
     val dueQuestionsCount by errorBankViewModel.dueQuestionsCount.collectAsStateWithLifecycle(initialValue = 0)
+    val sundayCheckInRequested by com.example.sharkmentor.core.coaching.PlanReadinessNavBus.openSundayCheckInRequested.collectAsStateWithLifecycle()
+    var showSundayCheckInDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(sundayCheckInRequested, showSplash) {
+        if (sundayCheckInRequested && !showSplash) {
+            com.example.sharkmentor.core.coaching.PlanReadinessNavBus.consumeOpenSundayCheckIn()
+            showSundayCheckInDialog = true
+        }
+    }
     val primaryTabRoutes = remember {
         setOf(
             Screen.Focus.route,
@@ -222,6 +230,10 @@ fun MainScreen(
 
     val performCleanLogout: () -> Unit = remember(context, navController) {
         {
+            com.example.sharkmentor.core.coaching.CoachingEngine.updateLivePresenceOfflineFirst(
+                context = context,
+                isStudying = false
+            )
             GoogleServicesHelper.signOut()
             com.example.sharkmentor.core.util.AvatarHelper.clearLocalAvatar(context)
             com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context).clearSessionProfile()
@@ -596,6 +608,45 @@ fun MainScreen(
                         settings = weatherSettings,
                         onRefresh = { scope.launch { weatherRepository.refreshWeather(force = true) } },
                         onDismiss = { showWeatherDialog = false }
+                    )
+                }
+
+                if (showSundayCheckInDialog) {
+                    com.example.sharkmentor.ui.coaching.PlanReadinessCheckInDialog(
+                        title = "Pazar Günü Haftalık Kontrol",
+                        subtitle = "Yeni haftanın planı esnek ve eksiksiz kurgulansın diye bu haftaki konu hakimiyetini ve kitap ilerlemeni güncelle.",
+                        confirmButtonLabel = "Güncelle ve Yeni Haftayı Kurgula",
+                        secondarySaveOnlyLabel = "Sadece Kaydet",
+                        onOpenGoalsOrLibrary = {
+                            showSundayCheckInDialog = false
+                            navController.navigate(Screen.Resources.route) { launchSingleTop = true }
+                        },
+                        onSaveOnly = {
+                            showSundayCheckInDialog = false
+                            android.widget.Toast.makeText(
+                                context,
+                                "Konu hakimiyeti ve kitap durumun yeni haftaya kaydedildi.",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        onConfirmProceed = {
+                            showSundayCheckInDialog = false
+                            scope.launch {
+                                val count = runCatching {
+                                    com.example.sharkmentor.ui.coaching.rebalanceWeeklyPlanWithAiCoach(context)
+                                }.getOrDefault(0)
+                                val msg = if (count > 0) {
+                                    "Yeni haftanın planı eksiklerini devrederek $count blok halinde kurgulandı."
+                                } else {
+                                    "Güncel durumun kaydedildi."
+                                }
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+                                if (count > 0) {
+                                    navController.navigate(Screen.Dashboard.route) { launchSingleTop = true }
+                                }
+                            }
+                        },
+                        onDismiss = { showSundayCheckInDialog = false }
                     )
                 }
 

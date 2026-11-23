@@ -88,7 +88,13 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
         val uid = GoogleServicesHelper.getCurrentUser(auth, getApplication())?.uid ?: return
         firestore?.collection("students")?.document(uid)
             ?.collection("plans")?.document(planId)
-            ?.update("completed", nextStatus)
+            ?.set(
+                mapOf("completed" to nextStatus, "isCompleted" to nextStatus),
+                com.google.firebase.firestore.SetOptions.merge()
+            )
+            ?.addOnSuccessListener {
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            }
             ?.addOnFailureListener {
                 _activePlans.value = previousPlans
             }
@@ -113,14 +119,6 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 _isOrganizing.value = false
                 return@launch
             }
-
-            val timeSlots = listOf(
-                "09:00 - 10:30",
-                "11:00 - 12:30",
-                "14:00 - 15:30",
-                "16:30 - 18:00",
-                "19:00 - 20:30"
-            )
 
             // Sort each subject's topics across the week in canonical curriculum order (e.g. Fonksiyonlar before Türev)
             val localTopicGoals = runCatching { database.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
@@ -156,20 +154,37 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 .flatMap { (_, dayTasks) ->
                     dayTasks
                         .sortedWith(
-                            compareBy<PlanItem> {
-                                com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic)
-                            }.thenByDescending { it.targetQuestions }
+                            compareBy<PlanItem> { it.isCompleted }
+                                .thenBy {
+                                    com.example.sharkmentor.core.coaching.BookCampManager.canonicalTopicIndex(it.subject, it.topic)
+                                }.thenByDescending { it.targetQuestions }
                                 .thenBy { it.subject }
                         )
-                        .mapIndexed { index, item ->
-                            item.copy(timeSlot = timeSlots[index.coerceAtMost(timeSlots.lastIndex)])
+                        .map { item ->
+                            item.copy(timeSlot = normalizeToFlexibleDurationSlot(item.timeSlot))
                         }
                 }
 
             // 1. Instant local update
             _activePlans.value = organized
 
-            // 2. Persist to Firestore
+            // 2. Mirror organized flexible schedule into Room PlanDao & StudentDossier
+            runCatching {
+                val planRepoImpl = PlanRepositoryImpl(database.planDao(), database.pendingDeletionDao())
+                val dtos = organized.map { item ->
+                    ScannedTaskDto(
+                        dayOfWeek = item.dayOfWeek.coerceIn(1, 7),
+                        scheduledTime = normalizeToFlexibleDurationSlot(item.timeSlot),
+                        subject = item.subject,
+                        topic = item.topic,
+                        targetQuestions = if (item.targetQuestions > 0) item.targetQuestions else 30
+                    )
+                }
+                planRepoImpl.saveAiPlannerSchedule(dtos)
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
+            }
+
+            // 3. Persist to Firestore
             try {
                 val plansCollection = db
                     .collection("students").document(uid)
@@ -188,7 +203,8 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 }
 
                 batch.commit().await()
-                _uiState.value = PlannerUiState.Success("Plan başarıyla organize edildi.")
+                com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(getApplication())
+                _uiState.value = PlannerUiState.Success("Plan esnek bloklarla başarıyla organize edildi.")
             } catch (e: Exception) {
                 _uiState.value = PlannerUiState.Error("Plan organize edilirken hata: ${e.localizedMessage}")
             } finally {
@@ -242,7 +258,8 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
             }
 
             try {
-                // 1. Fetch competencies, local Room topic mastery, goal, and past schedules in parallel
+                // 1. Fetch competencies, local Room topic mastery, goal, live plan audit, and past schedules in parallel
+                val appCtx = getApplication<Application>()
                 val scheduleDao = database.institutionScheduleDao()
                 val localTopicGoals = runCatching { database.goalsDao().getAllTopicsRaw() }.getOrDefault(emptyList())
                 val (compDocs, goalDoc, currentSchedules) = coroutineScope {
@@ -275,8 +292,32 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
 
                 val activeGoal = goalDoc.toObject(UserGoal::class.java) ?: UserGoal()
 
-                // Optimization: Limit previous plan items payload context
-                val previousPlanItems = _activePlans.value.take(15)
+                // Capture COMPLETE live plan completion audit (Room PlanDao / StudyPlanDao / Targets + fallback _activePlans)
+                val rawRoomAudit = com.example.sharkmentor.core.coaching.PlanProgressAuditor.captureFromDatabase(appCtx)
+                val effectivePlanAudit = if (rawRoomAudit.hasAnyTasks) {
+                    rawRoomAudit
+                } else if (_activePlans.value.isNotEmpty()) {
+                    val fallbackEntities = _activePlans.value.mapIndexed { idx, p ->
+                        PlanEntity(
+                            id = p.id,
+                            folderId = "active_plans_cloud",
+                            title = p.topic.ifBlank { p.subject },
+                            subject = p.subject,
+                            topic = p.topic,
+                            dayOfWeek = p.dayOfWeek.coerceIn(1, 7),
+                            scheduledTime = p.timeSlot,
+                            targetQuestions = p.targetQuestions,
+                            isCompleted = p.isCompleted,
+                            orderIndex = idx
+                        )
+                    }
+                    com.example.sharkmentor.core.coaching.PlanProgressAuditor.auditPlanEntities(
+                        folderTitle = "Aktif Çalışma Planı",
+                        tasks = fallbackEntities
+                    )
+                } else {
+                    rawRoomAudit
+                }
 
                 val scheduleConstraintsPrompt = (1..7).map { dayIndex ->
                     val dayName = getDayName(dayIndex)
@@ -285,16 +326,41 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     "GÜN $dayIndex ($dayName): ${if (blockedTimes.isEmpty()) "Serbest Gün" else blockedTimes.joinToString(", ")}"
                 }.joinToString("\n")
 
-                val appCtx = getApplication<Application>()
                 com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
                 val targetCompassPrompt = runCatching {
                     if (com.example.sharkmentor.core.coaching.StudentDossierManager.shouldAttachDossier(
                             com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI
                         )
                     ) {
-                        com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt()
+                        val baseDossier = com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.value
+                        val liveDossier = if (effectivePlanAudit.hasAnyTasks) {
+                            baseDossier.copy(
+                                activePlanTitle = effectivePlanAudit.folderTitle,
+                                completedPlanTasks = effectivePlanAudit.completedTasks.take(60).map { item ->
+                                    com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                        dayOfWeek = item.dayOfWeek,
+                                        subject = item.subject,
+                                        topic = item.topic,
+                                        targetQuestions = item.targetQuestions,
+                                        isCompleted = true
+                                    )
+                                },
+                                incompletePlanTasks = effectivePlanAudit.incompleteTasks.take(60).map { item ->
+                                    com.example.sharkmentor.core.coaching.DossierPlanTaskSnapshot(
+                                        dayOfWeek = item.dayOfWeek,
+                                        subject = item.subject,
+                                        topic = item.topic,
+                                        targetQuestions = item.targetQuestions,
+                                        isCompleted = false
+                                    )
+                                }
+                            )
+                        } else baseDossier
+                        com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt(liveDossier)
                     } else {
-                        com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(appCtx)
+                        val compass = com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(appCtx)
+                        val auditBlock = com.example.sharkmentor.core.coaching.PlanProgressAuditor.buildAiPlanAuditPrompt(effectivePlanAudit)
+                        if (auditBlock.isNotBlank()) "$compass\n\n$auditBlock" else compass
                     }
                 }.getOrDefault("")
 
@@ -306,7 +372,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 // 2. System Instruction
                 val systemPrompt = """
                     Sen SharkMentor'un kıdemli pedagojik planlama motorusun.
-                    GÖREV: Öğrencinin konu yetkinliklerine, anonim öğrenci dosyasına, hedef üniversite/bölüm/sıralama pusulasına ve seçtiği günlük çalışma saatine dayanarak 7 günlük (Pazartesi=1 .. Pazar=7) dengeli ve esnek çalışma planı hazırla.
+                    GÖREV: Öğrencinin konu yetkinliklerine, anonim öğrenci dosyasına, mevcut plan tamamlama/eksik denetimine, hedef üniversite/bölüm/sıralama pusulasına ve seçtiği günlük çalışma saatine dayanarak 7 günlük (Pazartesi=1 .. Pazar=7) dengeli ve esnek çalışma planı hazırla.
 
                     $targetCompassPrompt
 
@@ -317,12 +383,14 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     1. ESNEK SÜRE ZORUNLULUĞU: 'timeSlot' alanına ASLA '09:00 - 10:30' veya '10:00 - 11:30' gibi katı saat aralığı YAZMA! Her görev için yalnızca esnek süre etiketi yaz: örn. "Esnek • 90 dk", "Esnek • 60 dk", "Esnek • 75 dk". Öğrenci gün içinde kendi müsait anında esnek olarak tamamlayabilsin.
                     2. SEÇİLEN HEDEF SAATİNE MUTLAK SAYGI: Öğrencinin günlük hedefi hafta içi ${wdGoalMins / 60} saat (~$wdBlocksTarget etüt bloğu), hafta sonu ${weGoalMins / 60} saat (~$weBlocksTarget etüt bloğu). Bu saat hedefini ASLA sessizce 4-5 saate düşürme!
                     3. 7 GÜN & ÇOKLU DERS DENGESİ: Görevleri Pazartesi'den Pazar'a (1..7) tüm haftaya dengeli dağıt. Görevleri ASLA tek güne (örn. sadece Pazar) veya tek derse (örn. sadece Kimya) yığma! Her gün en az 2-3 farklı ders dengesi kur.
+                    4. KÜMÜLATİF EKSİK DEVRİ VE TEKRAR YASAĞI:
+                       - 'incompleteCarryOverTasks' listesindeki tamamlanmamış/eksik görevleri ASLA yapılmış varsayma; temel eksiklik kalmaması için yeni haftanın ilk günlerine (Gün 1-3) öncelikli olarak devret.
+                       - 'completedPlanTasks' listesindeki tamamlanmış görevleri (konu hakimiyeti ≤ 2/5 değilse) yeni plana tekrar tekrar yazma; ilerleyen konulara geç.
 
                     EK KURALLAR (Müfredat Bütünlüğü, Ön Koşul Zemini ve Eksik Konu Takibi):
                     - MÜFREDAT SIRALAMASI VE DERS BÜTÜNLÜĞÜ: Konuları ders içindeki pedagojik sırasına göre diz. Asla ilk güne Fonksiyonlar veya Limit'ten önce Türev/İntegral yazma.
                     - EKSİK KONUNUN PEŞİNİ BIRAKMA: Konu hakimiyetinde seviyesi 1 veya 2 olan zayıf konulara hafta içinde birden fazla etüt bloğu vererek ağırlık tanı.
                     - ZEMİN OTURTMADAN GEÇİRTME: Temel ön koşul konunun hakimiyeti düşükse ileri konuyu yazma, önce ön koşulu sağlamlaştır.
-                    - KLON PLAN YASAKTIR: 'previousPlanItems' içinde 'isCompleted=true' ve hakimiyeti yüksek konuları tekrar ana odak yapma.
                     - Her çalışma bloğunda net konu başlığı ve minimum 30 soru hedefi belirt.
 
                     ÇIKTI FORMATI:
@@ -343,17 +411,27 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     }
                 """.trimIndent()
 
-                // 3. Prepare payload context with pruned items
+                // 3. Prepare payload context with FULL structured completed vs incomplete carry-over lists
                 val promptPayload = mapOf(
                     "userGoal" to activeGoal,
                     "weekdayTargetMinutes" to wdGoalMins,
                     "weekendTargetMinutes" to weGoalMins,
                     "competencies" to prunedCompetencies,
-                    "previousPlanItems" to previousPlanItems.map {
+                    "planCompletionPercent" to effectivePlanAudit.completionPercent,
+                    "incompleteCarryOverTasks" to effectivePlanAudit.incompleteTasks.take(40).map {
                         mapOf(
+                            "dayOfWeek" to it.dayOfWeek,
                             "subject" to it.subject,
                             "topic" to it.topic,
-                            "isCompleted" to it.isCompleted
+                            "targetQuestions" to it.targetQuestions,
+                            "isOverdueOrDueToday" to it.isOverdueOrDueToday
+                        )
+                    },
+                    "completedPlanTasks" to effectivePlanAudit.completedTasks.take(40).map {
+                        mapOf(
+                            "dayOfWeek" to it.dayOfWeek,
+                            "subject" to it.subject,
+                            "topic" to it.topic
                         )
                     },
                     "institutionSchedules" to currentSchedules.map {
@@ -431,7 +509,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
 
                 // Save directly into PlanFolder & PlanEntity tables for the 2-level Plan Workspace
                 val planDao = database.planDao()
-                val planRepoImpl = PlanRepositoryImpl(planDao)
+                val planRepoImpl = PlanRepositoryImpl(planDao, database.pendingDeletionDao())
                 val scannedTasks = validatedSchedule.map { raw ->
                     val safeDay = when {
                         raw.dayOfWeek in 1..7 -> raw.dayOfWeek
@@ -451,7 +529,32 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 }
                 planRepoImpl.saveAiPlannerSchedule(scannedTasks)
 
-                // 6. SECONDARY PERSISTENCE: Save to Firestore
+                // Mirror to StudyPlanDao for full cross-screen synchronization
+                runCatching {
+                    val activeStudyPlan = com.example.sharkmentor.data.local.entity.ActivePlanEntity(
+                        id = "CURRENT_ACTIVE_PLAN",
+                        title = "AI Haftalık Plan",
+                        strategyNote = parsedResponse.weeklyFocusSummary,
+                        totalTargetQuestions = scannedTasks.sumOf { it.targetQuestions },
+                        updatedAtTimestamp = System.currentTimeMillis()
+                    )
+                    val studyTasks = scannedTasks.map { dto ->
+                        com.example.sharkmentor.data.local.entity.StudyTaskEntity(
+                            localId = 0,
+                            planId = "CURRENT_ACTIVE_PLAN",
+                            dayName = getDayName(dto.dayOfWeek),
+                            dayIndex = (dto.dayOfWeek - 1).coerceIn(0, 6),
+                            time = dto.scheduledTime,
+                            subject = dto.subject,
+                            topic = dto.topic.ifBlank { dto.subject },
+                            goal = "${dto.targetQuestions} Soru Hedefi",
+                            isCompleted = false
+                        )
+                    }
+                    database.studyPlanDao().replaceActivePlanWithTasks(activeStudyPlan, studyTasks)
+                }
+
+                // 6. SECONDARY PERSISTENCE: Save to Firestore & update local activePlans StateFlow immediately
                 val batch = db.batch()
                 val plansCollection = db.collection("students").document(uid).collection("plans")
 
@@ -461,21 +564,27 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 }
 
                 // Insert newly minted intelligent items into Firestore
-                validatedSchedule.forEach { raw ->
+                val newlyCreatedPlanItems = validatedSchedule.map { raw ->
                     val newId = UUID.randomUUID().toString()
                     val entity = PlanItem(
                         id = newId,
-                        dayOfWeek = raw.dayOfWeek,
-                        timeSlot = raw.timeSlot,
+                        dayOfWeek = raw.dayOfWeek.coerceIn(1, 7),
+                        timeSlot = normalizeToFlexibleDurationSlot(raw.timeSlot),
                         subject = raw.subject,
                         topic = raw.topic,
-                        targetQuestions = raw.targetQuestions,
+                        targetQuestions = if (raw.targetQuestions > 0) raw.targetQuestions else 30,
                         focusStrategy = raw.focusStrategy,
                         isCompleted = false
                     )
                     batch.set(plansCollection.document(newId), entity)
+                    entity
                 }
+                _activePlans.value = newlyCreatedPlanItems
                 batch.commit().await()
+
+                com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(appCtx)
+                com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(appCtx)
+                com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(appCtx)
 
                 _uiState.value = PlannerUiState.Success(parsedResponse.weeklyFocusSummary)
 
