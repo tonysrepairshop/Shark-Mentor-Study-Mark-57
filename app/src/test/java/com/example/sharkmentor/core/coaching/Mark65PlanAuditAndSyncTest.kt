@@ -184,7 +184,7 @@ class Mark65PlanAuditAndSyncTest {
     }
 
     @Test
-    fun testStudentDossierJsonRoundTripPreservesPlanTasksAndEmitsPromptAudit() {
+    fun testStudentDossierPlanAuditSnapshotAndAnonymizedPromptEmission() {
         val dossier = StudentDossier(
             consentAccepted = true,
             isCompleted = true,
@@ -200,19 +200,21 @@ class Mark65PlanAuditAndSyncTest {
             )
         )
 
-        val serialized = StudentDossierManager.serializeDossierToJson(dossier)
-        val restored = StudentDossierManager.parseJsonToDossier(serialized)
+        val audit = dossier.toPlanAuditSnapshot()
+        assertEquals("Hafta 4 Planı", audit.folderTitle)
+        assertEquals(2, audit.totalTasks)
+        assertEquals(1, audit.completedCount)
+        assertEquals(1, audit.incompleteCount)
+        assertEquals(50, audit.completionPercent)
+        assertEquals("Polinomlar", audit.completedTasks.first().topic)
+        assertEquals("Basit Harmonik Hareket", audit.incompleteTasks.first().topic)
 
-        assertEquals("Hafta 4 Planı", restored.activePlanTitle)
-        assertEquals(1, restored.completedPlanTasks.size)
-        assertEquals("Polinomlar", restored.completedPlanTasks.first().topic)
-        assertEquals(1, restored.incompletePlanTasks.size)
-        assertEquals("Basit Harmonik Hareket", restored.incompletePlanTasks.first().topic)
-
-        val prompt = StudentDossierManager.buildAnonymizedDossierPrompt(restored)
+        val prompt = StudentDossierManager.buildAnonymizedDossierPrompt(dossier)
         assertTrue(prompt.contains("MEVCUT PLAN & GÖREV DENETİMİ"))
         assertTrue(prompt.contains("Basit Harmonik Hareket"))
         assertTrue(prompt.contains("Polinomlar"))
+        assertTrue(StudentDossierManager.shouldAttachDossier(DossierAiChannel.PLAN_ADD_AI, "", dossier))
+        assertFalse(StudentDossierManager.shouldAttachDossier(DossierAiChannel.OTHER_NON_COACHING, "plan yap", dossier))
     }
 
     @Test
