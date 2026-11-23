@@ -152,7 +152,8 @@ fun SharkMentorBrandTitle(modifier: Modifier = Modifier) {
 fun HomeScreen(
     modifier           : Modifier           = Modifier,
     viewModel          : TimerViewModel     = viewModel(),
-    analyticsViewModel : AnalyticsViewModel = viewModel()
+    analyticsViewModel : AnalyticsViewModel = viewModel(),
+    onNavigateToSharkAi: () -> Unit         = {}
 ) {
     val context = LocalContext.current
     LaunchedEffect(context) {
@@ -305,7 +306,8 @@ fun HomeScreen(
                 },
                 onPauseFocus = viewModel::pauseTimer,
                 onResumeFocus = viewModel::resumeTimer,
-                onStopFocus = viewModel::resetTimer
+                onStopFocus = viewModel::resetTimer,
+                onNavigateToSharkAi = onNavigateToSharkAi
             )
         } else {
             Column(

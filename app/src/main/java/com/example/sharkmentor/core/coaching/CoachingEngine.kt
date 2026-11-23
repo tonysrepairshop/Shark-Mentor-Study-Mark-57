@@ -184,6 +184,7 @@ object CoachingEngine {
 
     private const val TAG = "CoachingEngine"
     private const val PREFS_NAME = "shark_mark57_coaching_prefs"
+    const val MAX_DAILY_GOAL_MINUTES = 960 // 16 hours/day max (supports 12h weekday / 15h weekend)
 
     private const val KEY_COMPREHENSIVE_SUPPORT_ENABLED = "comprehensive_support_enabled"
     private const val KEY_STUDY_MODE = "study_mode"
@@ -264,8 +265,8 @@ object CoachingEngine {
             }.getOrDefault(AppStudyMode.FREE_TRACKING)
             _studyMode.value = if (supportEnabled) parsedMode else AppStudyMode.FREE_TRACKING
 
-            _weekdayGoalMinutes.value = sp.getInt(KEY_WEEKDAY_GOAL_MINS, 240).coerceIn(30, 720)
-            _weekendGoalMinutes.value = sp.getInt(KEY_WEEKEND_GOAL_MINS, 300).coerceIn(30, 720)
+            _weekdayGoalMinutes.value = sp.getInt(KEY_WEEKDAY_GOAL_MINS, 240).coerceIn(30, MAX_DAILY_GOAL_MINUTES)
+            _weekendGoalMinutes.value = sp.getInt(KEY_WEEKEND_GOAL_MINS, 300).coerceIn(30, MAX_DAILY_GOAL_MINUTES)
             _useAiRecommendedGoal.value = sp.getBoolean(KEY_USE_AI_GOAL, false)
 
             _customFocusTitles.value = parseStringListJson(sp.getString(KEY_CUSTOM_FOCUS_TITLES, null))
@@ -330,8 +331,8 @@ object CoachingEngine {
         useAiRecommendation: Boolean
     ) {
         ensureInitialized(context)
-        val clampedWeekday = weekdayMinutes.coerceIn(30, 720)
-        val clampedWeekend = weekendMinutes.coerceIn(30, 720)
+        val clampedWeekday = weekdayMinutes.coerceIn(30, MAX_DAILY_GOAL_MINUTES)
+        val clampedWeekend = weekendMinutes.coerceIn(30, MAX_DAILY_GOAL_MINUTES)
         _weekdayGoalMinutes.value = clampedWeekday
         _weekendGoalMinutes.value = clampedWeekend
         _useAiRecommendedGoal.value = useAiRecommendation

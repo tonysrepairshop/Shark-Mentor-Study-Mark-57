@@ -72,9 +72,82 @@ enum class NoteFontOption(
 
 object NoteRichTextHelper {
 
+    const val PAGE_SENTINEL_CHAR: Char = '\u200B'
+    const val PAGE_SENTINEL: String = "\u200B"
     const val DEFAULT_FONT_SIZE_SP: Float = 16f
     const val MIN_FONT_SIZE_SP: Float = 10f
     const val MAX_FONT_SIZE_SP: Float = 40f
+
+    fun stripPageSentinel(raw: String): String =
+        if (raw.indexOf(PAGE_SENTINEL_CHAR) >= 0) raw.replace(PAGE_SENTINEL, "") else raw
+
+    /**
+     * Determines what list prefix (bullet `• `, next numbered `N. `, or checkbox `[ ] `) should
+     * carry over onto Page N+1 when Page N overflows or a new page is opened.
+     */
+    fun extractTrailingListContinuationPrefix(
+        prevPageText: String,
+        isBulletActive: Boolean,
+        isNumberedActive: Boolean,
+        isCheckboxActive: Boolean
+    ): String {
+        val clean = stripPageSentinel(prevPageText)
+        val lastLine = clean.substringAfterLast('\n', clean)
+        val numMatch = Regex("""^(\d+)\.\s+.*""").find(lastLine)
+        return when {
+            lastLine.startsWith("• ") || isBulletActive -> "• "
+            numMatch != null -> {
+                val nextNum = (numMatch.groupValues[1].toIntOrNull() ?: 1) + 1
+                "$nextNum. "
+            }
+            isNumberedActive -> "1. "
+            lastLine.startsWith("[ ] ") || lastLine.startsWith("[✓] ") ||
+                lastLine.startsWith("[x] ") || lastLine.startsWith("[X] ") ||
+                lastLine.startsWith("☐ ") || lastLine.startsWith("☑ ") ||
+                isCheckboxActive -> "[ ] "
+            else -> ""
+        }
+    }
+
+    /**
+     * Fast O(N) span coalescing: merges touching/overlapping ranges with identical [SpanStyle]
+     * so typing thousands of characters NEVER explodes span count into thousands of 1-char spans.
+     */
+    fun coalesceSpans(
+        spans: List<AnnotatedString.Range<SpanStyle>>,
+        textLength: Int
+    ): List<AnnotatedString.Range<SpanStyle>> {
+        if (spans.size <= 1) return spans
+        val byStyle = LinkedHashMap<SpanStyle, MutableList<AnnotatedString.Range<SpanStyle>>>()
+        for (r in spans) {
+            val s = r.start.coerceIn(0, textLength)
+            val e = r.end.coerceIn(0, textLength)
+            if (e <= s) continue
+            byStyle.getOrPut(r.item) { mutableListOf() }.add(AnnotatedString.Range(r.item, s, e))
+        }
+        val merged = ArrayList<AnnotatedString.Range<SpanStyle>>(byStyle.size * 2)
+        for ((style, list) in byStyle) {
+            if (list.size == 1) {
+                merged.add(list[0])
+                continue
+            }
+            list.sortBy { it.start }
+            var curStart = list[0].start
+            var curEnd = list[0].end
+            for (i in 1 until list.size) {
+                val nxt = list[i]
+                if (nxt.start <= curEnd) {
+                    if (nxt.end > curEnd) curEnd = nxt.end
+                } else {
+                    merged.add(AnnotatedString.Range(style, curStart, curEnd))
+                    curStart = nxt.start
+                    curEnd = nxt.end
+                }
+            }
+            merged.add(AnnotatedString.Range(style, curStart, curEnd))
+        }
+        return merged
+    }
 
     val FontSizePresets: List<Int> = listOf(10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36)
 
@@ -231,96 +304,115 @@ object NoteRichTextHelper {
     }
 
     /**
-     * Serializes an AnnotatedString with all its SpanStyles into human-readable, cleanly nested tags.
+     * Serializes an AnnotatedString with all its SpanStyles into human-readable, cleanly nested tags
+     * using an O(N log N) event sweep-line (eliminates O(N^2) freezes on long multi-page notes).
+     * Automatically strips internal [PAGE_SENTINEL] characters without breaking span offsets.
      */
     fun toTaggedString(annotatedString: AnnotatedString): String {
-        val text = annotatedString.text
-        if (text.isEmpty()) return ""
-        val spanStyles = annotatedString.spanStyles
-        if (spanStyles.isEmpty()) return text
+        val rawText = annotatedString.text
+        if (rawText.isEmpty()) return ""
+        val hasSentinel = rawText.indexOf(PAGE_SENTINEL_CHAR) >= 0
+        val cleanText = if (hasSentinel) rawText.replace(PAGE_SENTINEL, "") else rawText
+        if (cleanText.isEmpty()) return ""
+        val rawSpans = annotatedString.spanStyles
+        if (rawSpans.isEmpty()) return cleanText
 
-        data class AtomicSpan(
+        // Map raw character index -> cleaned character index when PAGE_SENTINEL is present
+        val indexMap: IntArray? = if (hasSentinel) {
+            IntArray(rawText.length + 1).also { map ->
+                var outIdx = 0
+                for (i in rawText.indices) {
+                    map[i] = outIdx
+                    if (rawText[i] != PAGE_SENTINEL_CHAR) outIdx++
+                }
+                map[rawText.length] = outIdx
+            }
+        } else null
+
+        data class SpanEvent(
+            val pos: Int,
+            val isStart: Boolean,
             val type: String,
             val attrVal: String?,
-            val start: Int,
-            val end: Int
+            val order: Int
         )
 
-        val atomicSpans = mutableListOf<AtomicSpan>()
-        for (range in spanStyles) {
-            val s = range.start.coerceIn(0, text.length)
-            val e = range.end.coerceIn(0, text.length)
+        val events = ArrayList<SpanEvent>(rawSpans.size * 2)
+        var orderCounter = 0
+        for (range in rawSpans) {
+            val rawS = range.start.coerceIn(0, rawText.length)
+            val rawE = range.end.coerceIn(0, rawText.length)
+            val s = if (indexMap != null) indexMap[rawS] else rawS
+            val e = if (indexMap != null) indexMap[rawE] else rawE
             if (e <= s) continue
             val style = range.item
 
-            if (style.fontWeight == FontWeight.Bold) {
-                atomicSpans.add(AtomicSpan("b", null, s, e))
+            fun emit(type: String, attr: String?) {
+                val ord = orderCounter++
+                events.add(SpanEvent(s, true, type, attr, ord))
+                events.add(SpanEvent(e, false, type, attr, ord))
             }
-            if (style.fontStyle == FontStyle.Italic) {
-                atomicSpans.add(AtomicSpan("i", null, s, e))
-            }
-            if (style.textDecoration?.contains(TextDecoration.Underline) == true) {
-                atomicSpans.add(AtomicSpan("u", null, s, e))
-            }
-            if (style.textDecoration?.contains(TextDecoration.LineThrough) == true) {
-                atomicSpans.add(AtomicSpan("s", null, s, e))
-            }
+
+            if (style.fontWeight == FontWeight.Bold) emit("b", null)
+            if (style.fontStyle == FontStyle.Italic) emit("i", null)
+            if (style.textDecoration?.contains(TextDecoration.Underline) == true) emit("u", null)
+            if (style.textDecoration?.contains(TextDecoration.LineThrough) == true) emit("s", null)
             if (style.color != Color.Unspecified && style.color != Color.Transparent) {
-                atomicSpans.add(AtomicSpan("color", colorToHex(style.color), s, e))
+                emit("color", colorToHex(style.color))
             }
             if (style.background != Color.Unspecified && style.background != Color.Transparent) {
-                atomicSpans.add(AtomicSpan("mark", colorToHex(style.background), s, e))
+                emit("mark", colorToHex(style.background))
             }
             if (style.fontSize != TextUnit.Unspecified && style.fontSize.isSp) {
                 val pt = style.fontSize.value.coerceIn(MIN_FONT_SIZE_SP, MAX_FONT_SIZE_SP)
                 val ptLabel = if (pt % 1f == 0f) pt.toInt().toString() else String.format(Locale.US, "%.1f", pt)
-                atomicSpans.add(AtomicSpan("size", ptLabel, s, e))
+                emit("size", ptLabel)
             }
             if (style.fontFamily != null) {
                 val fontOpt = NoteFontOption.fromFontFamily(style.fontFamily)
                 if (fontOpt != null && fontOpt != NoteFontOption.DEFAULT) {
-                    atomicSpans.add(AtomicSpan("font", fontOpt.name, s, e))
+                    emit("font", fontOpt.name)
                 }
             }
         }
 
-        if (atomicSpans.isEmpty()) return text
+        if (events.isEmpty()) return cleanText
+        events.sortWith(compareBy<SpanEvent> { it.pos }.thenBy { if (it.isStart) 1 else 0 }.thenBy { it.order })
 
-        val boundaries = sortedSetOf(0, text.length)
-        for (span in atomicSpans) {
-            boundaries.add(span.start)
-            boundaries.add(span.end)
-        }
-        val boundaryList = boundaries.toList()
+        var boldCount = 0
+        var italicCount = 0
+        var underlineCount = 0
+        var strikeCount = 0
+        val colorStack = ArrayList<Pair<Int, String>>()
+        val markStack = ArrayList<Pair<Int, String>>()
+        val sizeStack = ArrayList<Pair<Int, String>>()
+        val fontStack = ArrayList<Pair<Int, String>>()
 
-        val sb = StringBuilder()
-        for (idx in 0 until boundaryList.size - 1) {
-            val bStart = boundaryList[idx]
-            val bEnd = boundaryList[idx + 1]
-            if (bEnd <= bStart) continue
+        val sb = StringBuilder(cleanText.length + events.size * 6)
+        var cursor = 0
+        var evIdx = 0
 
-            val segmentText = text.substring(bStart, bEnd)
-            val activeSpans = atomicSpans.filter { it.start <= bStart && it.end >= bEnd }
-
-            val bActive = activeSpans.any { it.type == "b" }
-            val iActive = activeSpans.any { it.type == "i" }
-            val uActive = activeSpans.any { it.type == "u" }
-            val sActive = activeSpans.any { it.type == "s" }
-            val colorHex = activeSpans.lastOrNull { it.type == "color" }?.attrVal
-            val markHex = activeSpans.lastOrNull { it.type == "mark" }?.attrVal
-            val sizePt = activeSpans.lastOrNull { it.type == "size" }?.attrVal
-            val fontName = activeSpans.lastOrNull { it.type == "font" }?.attrVal
+        fun emitSegment(segStart: Int, segEnd: Int) {
+            if (segEnd <= segStart) return
+            val bActive = boldCount > 0
+            val iActive = italicCount > 0
+            val uActive = underlineCount > 0
+            val sActive = strikeCount > 0
+            val colorHex = colorStack.lastOrNull()?.second
+            val markHex = markStack.lastOrNull()?.second
+            val sizePt = sizeStack.lastOrNull()?.second
+            val fontName = fontStack.lastOrNull()?.second
 
             if (bActive) sb.append("<b>")
             if (iActive) sb.append("<i>")
             if (uActive) sb.append("<u>")
             if (sActive) sb.append("<s>")
-            if (fontName != null) sb.append("<font name=\"$fontName\">")
-            if (sizePt != null) sb.append("<size pt=\"$sizePt\">")
-            if (colorHex != null) sb.append("<color hex=\"$colorHex\">")
-            if (markHex != null) sb.append("<mark hex=\"$markHex\">")
+            if (fontName != null) sb.append("<font name=\"").append(fontName).append("\">")
+            if (sizePt != null) sb.append("<size pt=\"").append(sizePt).append("\">")
+            if (colorHex != null) sb.append("<color hex=\"").append(colorHex).append("\">")
+            if (markHex != null) sb.append("<mark hex=\"").append(markHex).append("\">")
 
-            sb.append(segmentText)
+            sb.append(cleanText, segStart, segEnd)
 
             if (markHex != null) sb.append("</mark>")
             if (colorHex != null) sb.append("</color>")
@@ -332,6 +424,49 @@ object NoteRichTextHelper {
             if (bActive) sb.append("</b>")
         }
 
+        while (evIdx < events.size) {
+            val pos = events[evIdx].pos
+            if (pos > cursor) {
+                emitSegment(cursor, pos)
+                cursor = pos
+            }
+            while (evIdx < events.size && events[evIdx].pos == pos) {
+                val ev = events[evIdx++]
+                when (ev.type) {
+                    "b" -> boldCount = (boldCount + if (ev.isStart) 1 else -1).coerceAtLeast(0)
+                    "i" -> italicCount = (italicCount + if (ev.isStart) 1 else -1).coerceAtLeast(0)
+                    "u" -> underlineCount = (underlineCount + if (ev.isStart) 1 else -1).coerceAtLeast(0)
+                    "s" -> strikeCount = (strikeCount + if (ev.isStart) 1 else -1).coerceAtLeast(0)
+                    "color" -> if (ev.isStart && ev.attrVal != null) {
+                        colorStack.add(ev.order to ev.attrVal)
+                    } else {
+                        val idx = colorStack.indexOfLast { it.first == ev.order }
+                        if (idx >= 0) colorStack.removeAt(idx)
+                    }
+                    "mark" -> if (ev.isStart && ev.attrVal != null) {
+                        markStack.add(ev.order to ev.attrVal)
+                    } else {
+                        val idx = markStack.indexOfLast { it.first == ev.order }
+                        if (idx >= 0) markStack.removeAt(idx)
+                    }
+                    "size" -> if (ev.isStart && ev.attrVal != null) {
+                        sizeStack.add(ev.order to ev.attrVal)
+                    } else {
+                        val idx = sizeStack.indexOfLast { it.first == ev.order }
+                        if (idx >= 0) sizeStack.removeAt(idx)
+                    }
+                    "font" -> if (ev.isStart && ev.attrVal != null) {
+                        fontStack.add(ev.order to ev.attrVal)
+                    } else {
+                        val idx = fontStack.indexOfLast { it.first == ev.order }
+                        if (idx >= 0) fontStack.removeAt(idx)
+                    }
+                }
+            }
+        }
+        if (cursor < cleanText.length) {
+            emitSegment(cursor, cleanText.length)
+        }
         return sb.toString()
     }
 
@@ -652,7 +787,7 @@ object NoteRichTextHelper {
     /**
      * Automatically continues bullet, numbered, or checkbox lists when Enter is pressed,
      * or cancels the list if Enter is pressed on an empty list prefix — while strictly
-     * preserving ALL existing note SpanStyles (colors, highlights, fonts, sizes, bold/italic/underline).
+     * preserving ALL existing note SpanStyles and respecting [PAGE_SENTINEL] on Page 2+.
      */
     fun handleEnterOnListItem(
         oldValue: TextFieldValue,
@@ -673,10 +808,12 @@ object NoteRichTextHelper {
         if (insertPos !in 0 until newText.length) return null
         if (newText[insertPos] != '\n') return null
 
-        val lineStart = oldText.lastIndexOf('\n', (insertPos - 1).coerceAtLeast(0)).let {
+        val rawLineStart = oldText.lastIndexOf('\n', (insertPos - 1).coerceAtLeast(0)).let {
             if (it == -1) 0 else it + 1
         }
-        val prevLine = oldText.substring(lineStart, insertPos)
+        val sentinelOffset = if (rawLineStart < oldText.length && oldText[rawLineStart] == PAGE_SENTINEL_CHAR) 1 else 0
+        val effectiveLineStart = (rawLineStart + sentinelOffset).coerceAtMost(insertPos)
+        val prevLine = oldText.substring(effectiveLineStart, insertPos)
         val oldSpans = oldValue.annotatedString.spanStyles
 
         fun buildWithPrefix(prefix: String): TextFieldValue {
@@ -697,17 +834,19 @@ object NoteRichTextHelper {
                 activeFontSizeSp = activeFontSizeSp,
                 activeFontOption = activeFontOption
             )
+            val coalesced = coalesceSpans(updatedSpans, updated.length)
             val newCursor = (insertPos + totalInserted).coerceIn(0, updated.length)
-            return TextFieldValue(AnnotatedString(updated, updatedSpans), TextRange(newCursor))
+            return TextFieldValue(AnnotatedString(updated, coalesced), TextRange(newCursor))
         }
 
         fun buildCancelledPrefix(prefixLen: Int): TextFieldValue {
-            val removeEnd = (lineStart + prefixLen).coerceAtMost(newText.length)
-            val updated = newText.removeRange(lineStart, removeEnd)
+            val removeEnd = (effectiveLineStart + prefixLen).coerceAtMost(newText.length)
+            val updated = newText.removeRange(effectiveLineStart, removeEnd)
             val afterInsertSpans = shiftSpansForInsertion(oldSpans, insertPos, 1, newText.length)
-            val updatedSpans = shiftSpansForDeletion(afterInsertSpans, lineStart, removeEnd, updated.length)
-            val newCursor = lineStart.coerceIn(0, updated.length)
-            return TextFieldValue(AnnotatedString(updated, updatedSpans), TextRange(newCursor))
+            val updatedSpans = shiftSpansForDeletion(afterInsertSpans, effectiveLineStart, removeEnd, updated.length)
+            val coalesced = coalesceSpans(updatedSpans, updated.length)
+            val newCursor = effectiveLineStart.coerceIn(0, updated.length)
+            return TextFieldValue(AnnotatedString(updated, coalesced), TextRange(newCursor))
         }
 
         // Bullet list (•)
@@ -749,7 +888,8 @@ object NoteRichTextHelper {
     }
 
     /**
-     * Toggles line prefix for bullet (• ), numbering (1. ), or checkbox (☐ ).
+     * Toggles line prefix for bullet (• ), numbering (1. ), or checkbox ([ ] ),
+     * preserving any leading [PAGE_SENTINEL] on Page 2+.
      */
     fun toggleLinePrefix(
         value: TextFieldValue,
@@ -757,9 +897,11 @@ object NoteRichTextHelper {
     ): TextFieldValue {
         val currentText = value.text
         val cursor = value.selection.start.coerceIn(0, currentText.length)
-        val lineStart = currentText.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)).let {
+        val rawLineStart = currentText.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)).let {
             if (it == -1) 0 else it + 1
         }
+        val sentinelOffset = if (rawLineStart < currentText.length && currentText[rawLineStart] == PAGE_SENTINEL_CHAR) 1 else 0
+        val lineStart = (rawLineStart + sentinelOffset).coerceAtMost(currentText.length)
         val lineEnd = currentText.indexOf('\n', lineStart).let {
             if (it == -1) currentText.length else it
         }
@@ -803,16 +945,17 @@ object NoteRichTextHelper {
             }
         }
 
-        val newCursor = (cursor + cursorShift).coerceIn(0, updatedText.length)
+        val newCursor = (cursor + cursorShift).coerceIn(sentinelOffset, updatedText.length)
         return TextFieldValue(
-            annotatedString = AnnotatedString(updatedText, updatedSpans),
+            annotatedString = AnnotatedString(updatedText, coalesceSpans(updatedSpans, updatedText.length)),
             selection = TextRange(newCursor)
         )
     }
 
     /**
      * Preserves and expands/contracts existing styles when text is typed or deleted,
-     * applying any currently active styles ONLY to newly inserted characters (never overwriting prior text).
+     * applying active styles ONLY to newly inserted characters and coalescing adjacent spans in O(N)
+     * so typing never degrades on low-RAM devices.
      */
     fun handleTextChange(
         oldValue: TextFieldValue,
@@ -854,7 +997,7 @@ object NoteRichTextHelper {
             )
 
             return newValue.copy(
-                annotatedString = AnnotatedString(newText, updatedSpans)
+                annotatedString = AnnotatedString(newText, coalesceSpans(updatedSpans, newText.length))
             )
         }
 
@@ -866,7 +1009,7 @@ object NoteRichTextHelper {
         val updatedSpans = shiftSpansForDeletion(oldSpans, deleteStart, deleteEnd, newText.length)
 
         return newValue.copy(
-            annotatedString = AnnotatedString(newText, updatedSpans)
+            annotatedString = AnnotatedString(newText, coalesceSpans(updatedSpans, newText.length))
         )
     }
 
@@ -904,9 +1047,9 @@ object NoteRichTextHelper {
             NoteFontOption.fromFontFamily(it)
         }
 
-        val lineStart = text.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
-        val lineEnd = text.indexOf('\n', lineStart).let { if (it == -1) text.length else it }
-        val line = text.substring(lineStart, lineEnd)
+        val rawLineStart = text.lastIndexOf('\n', (cursor - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', rawLineStart).let { if (it == -1) text.length else it }
+        val line = stripPageSentinel(text.substring(rawLineStart, lineEnd))
 
         val isBullet = line.startsWith("• ")
         val isNumbered = line.matches(Regex("""^\d+\.\s+.*"""))
@@ -945,9 +1088,11 @@ object NoteRichTextHelper {
             return TextFieldValue(AnnotatedString("[ ] "), TextRange(4))
         }
         val targetPos = offset.coerceIn(0, currentText.length)
-        val lineStart = currentText.lastIndexOf('\n', (targetPos - 1).coerceAtLeast(0)).let {
+        val rawLineStart = currentText.lastIndexOf('\n', (targetPos - 1).coerceAtLeast(0)).let {
             if (it == -1) 0 else it + 1
         }
+        val sentinelOffset = if (rawLineStart < currentText.length && currentText[rawLineStart] == PAGE_SENTINEL_CHAR) 1 else 0
+        val lineStart = (rawLineStart + sentinelOffset).coerceAtMost(currentText.length)
         val lineEnd = currentText.indexOf('\n', lineStart).let {
             if (it == -1) currentText.length else it
         }

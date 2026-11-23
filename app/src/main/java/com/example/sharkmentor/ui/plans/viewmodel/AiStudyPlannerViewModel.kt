@@ -285,31 +285,45 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                     "GÜN $dayIndex ($dayName): ${if (blockedTimes.isEmpty()) "Serbest Gün" else blockedTimes.joinToString(", ")}"
                 }.joinToString("\n")
 
+                val appCtx = getApplication<Application>()
+                com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
                 val targetCompassPrompt = runCatching {
-                    com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(getApplication())
+                    if (com.example.sharkmentor.core.coaching.StudentDossierManager.shouldAttachDossier(
+                            com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI
+                        )
+                    ) {
+                        com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt()
+                    } else {
+                        com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(appCtx)
+                    }
                 }.getOrDefault("")
+
+                val wdGoalMins = com.example.sharkmentor.core.coaching.CoachingEngine.weekdayGoalMinutes.value
+                val weGoalMins = com.example.sharkmentor.core.coaching.CoachingEngine.weekendGoalMinutes.value
+                val wdBlocksTarget = (wdGoalMins / 90).coerceIn(2, 10)
+                val weBlocksTarget = (weGoalMins / 90).coerceIn(2, 11)
 
                 // 2. System Instruction
                 val systemPrompt = """
                     Sen SharkMentor'un kıdemli pedagojik planlama motorusun.
-                    GÖREV: Öğrencinin konu yetkinliklerine, hedef üniversite/bölüm/sıralama pusulasına, günlük çalışma hedefi sapmalarına ve önceki hafta verilerine dayanarak 7 günlük (Pazartesi-Pazar) operasyonel çalışma planı hazırla.
+                    GÖREV: Öğrencinin konu yetkinliklerine, anonim öğrenci dosyasına, hedef üniversite/bölüm/sıralama pusulasına ve seçtiği günlük çalışma saatine dayanarak 7 günlük (Pazartesi=1 .. Pazar=7) dengeli ve esnek çalışma planı hazırla.
 
                     $targetCompassPrompt
 
-                    ÖĞRENCİNİN KİLİTLİ OKUL/DERS SAATLERİ:
+                    ÖĞRENCİNİN KİLİTLİ OKUL/DERS SAATLERİ (Yalnızca yoğunluk dengelemesi için referans):
                     $scheduleConstraintsPrompt
 
                     KESİN TALİMATLAR:
-                    1. Yukarıdaki ders saatlerine ASLA çalışma görevi, etüt veya soru hedefi YAZMA.
-                    2. Eğer okul 13:00'te bitiyorsa, 13:30 - 17:00 aralığını ve akşam saatlerini değerlendir.
-                    3. Görevleri sadece öğrencinin TAMAMEN BOŞ olduğu saat pencerelerine yerleştir.
+                    1. ESNEK SÜRE ZORUNLULUĞU: 'timeSlot' alanına ASLA '09:00 - 10:30' veya '10:00 - 11:30' gibi katı saat aralığı YAZMA! Her görev için yalnızca esnek süre etiketi yaz: örn. "Esnek • 90 dk", "Esnek • 60 dk", "Esnek • 75 dk". Öğrenci gün içinde kendi müsait anında esnek olarak tamamlayabilsin.
+                    2. SEÇİLEN HEDEF SAATİNE MUTLAK SAYGI: Öğrencinin günlük hedefi hafta içi ${wdGoalMins / 60} saat (~$wdBlocksTarget etüt bloğu), hafta sonu ${weGoalMins / 60} saat (~$weBlocksTarget etüt bloğu). Bu saat hedefini ASLA sessizce 4-5 saate düşürme!
+                    3. 7 GÜN & ÇOKLU DERS DENGESİ: Görevleri Pazartesi'den Pazar'a (1..7) tüm haftaya dengeli dağıt. Görevleri ASLA tek güne (örn. sadece Pazar) veya tek derse (örn. sadece Kimya) yığma! Her gün en az 2-3 farklı ders dengesi kur.
 
                     EK KURALLAR (Müfredat Bütünlüğü, Ön Koşul Zemini ve Eksik Konu Takibi):
-                    - MÜFREDAT SIRALAMASI VE DERS BÜTÜNLÜĞÜ: Konuları ders içindeki pedagojik sırasına göre diz. Asla ilk güne Fonksiyonlar veya Limit'ten önce Türev/İntegral yazma. Her ders kendi içinde temelden ileriye doğru sıralanmalıdır.
-                    - EKSİK KONUNUN PEŞİNİ BIRAKMA: Konu hakimiyetinde (competencies) seviyesi 1 veya 2 olan zayıf konulara hafta içinde birden fazla etüt bloğu vererek ağırlık tanı; o konu sağlamlaşmadan geçiştirme.
-                    - ZEMİN OTURTMADAN GEÇİRTME: Birbiriyle bağlantılı konularda (Örn: Fonksiyonlar -> Limit -> Türev -> İntegral veya Mol -> Kimyasal Hesaplamalar) temel ön koşul konunun hakimiyeti düşükse ileri konuyu yazma, önce ön koşul konunun zeminini sağlamlaştır.
-                    - KLON PLAN YASAKTIR: Öğrencinin 'previousPlanItems' listesini analiz et. Eğer bir konu geçen hafta planlanmış ve 'isCompleted=true' ve hakimiyeti yüksekse, bu konuyu ana odak bloğu yapma.
-                    - Her çalışma bloğunda öğrencinin seviyesine uygun net konu başlığı ve minimum 30 soru hedefi belirtilmelidir.
+                    - MÜFREDAT SIRALAMASI VE DERS BÜTÜNLÜĞÜ: Konuları ders içindeki pedagojik sırasına göre diz. Asla ilk güne Fonksiyonlar veya Limit'ten önce Türev/İntegral yazma.
+                    - EKSİK KONUNUN PEŞİNİ BIRAKMA: Konu hakimiyetinde seviyesi 1 veya 2 olan zayıf konulara hafta içinde birden fazla etüt bloğu vererek ağırlık tanı.
+                    - ZEMİN OTURTMADAN GEÇİRTME: Temel ön koşul konunun hakimiyeti düşükse ileri konuyu yazma, önce ön koşulu sağlamlaştır.
+                    - KLON PLAN YASAKTIR: 'previousPlanItems' içinde 'isCompleted=true' ve hakimiyeti yüksek konuları tekrar ana odak yapma.
+                    - Her çalışma bloğunda net konu başlığı ve minimum 30 soru hedefi belirt.
 
                     ÇIKTI FORMATI:
                     Yalnızca belirtilen JSON şemasında çıktı ver. Fazlalık metin ekleme.
@@ -319,7 +333,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                       "schedule": [
                         {
                           "dayOfWeek": 1,
-                          "timeSlot": "17:00 - 18:30",
+                          "timeSlot": "Esnek • 90 dk",
                           "subject": "Matematik",
                           "topic": "Fonksiyonlar",
                           "targetQuestions": 40,
@@ -332,6 +346,8 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 // 3. Prepare payload context with pruned items
                 val promptPayload = mapOf(
                     "userGoal" to activeGoal,
+                    "weekdayTargetMinutes" to wdGoalMins,
+                    "weekendTargetMinutes" to weGoalMins,
                     "competencies" to prunedCompetencies,
                     "previousPlanItems" to previousPlanItems.map {
                         mapOf(
@@ -358,35 +374,18 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                 val parsedResponse = gson.fromJson(jsonString, AiWeeklyPlanResponse::class.java)
 
                 // Programmatic Validation:
-                // (a) Time collisions
+                // (a) Normalize any accidental rigid clock range (e.g. "09:00 - 10:30") into flexible duration ("Esnek • 90 dk")
                 // (b) Prerequisite Foundation Gatekeeping (don't allow Türev if Fonksiyonlar/Limit mastery <= 2)
                 // (c) Canonical Curriculum Ordering across days within each subject (Fonksiyonlar always before Türev)
                 val collisionChecked = parsedResponse.schedule.map { task ->
-                    var adjustedTimeSlot = task.timeSlot
-                    val dayClasses = currentSchedules.filter { it.dayOfWeek == task.dayOfWeek }
-                    val parts = adjustedTimeSlot.split(" - ")
-                    if (parts.size == 2) {
-                        val taskStart = parts[0].replace(":", "").toIntOrNull() ?: 0
-                        val taskEnd = parts[1].replace(":", "").toIntOrNull() ?: 0
-                        
-                        val hasCollision = dayClasses.any { cls ->
-                            val clsStart = cls.startTime.replace(":", "").toIntOrNull() ?: 0
-                            val clsEnd = cls.endTime.replace(":", "").toIntOrNull() ?: 0
-                            Math.max(taskStart, clsStart) < Math.min(taskEnd, clsEnd)
-                        }
-                        
-                        if (hasCollision) {
-                            val availableSlots = calculateAvailableStudySlots(dayClasses)
-                            adjustedTimeSlot = availableSlots.firstOrNull() ?: "21:00 - 22:30"
-                        }
-                    }
+                    val normalizedSlot = normalizeToFlexibleDurationSlot(task.timeSlot)
                     val gate = com.example.sharkmentor.core.coaching.BookCampManager.enforcePrerequisiteFoundationGate(
                         subject = task.subject,
                         requestedTopic = task.topic,
                         studentTopicGoals = localTopicGoals
                     )
                     task.copy(
-                        timeSlot = adjustedTimeSlot,
+                        timeSlot = normalizedSlot,
                         topic = gate.effectiveTopic
                     )
                 }
@@ -439,7 +438,7 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
                         raw.dayOfWeek == 0 -> 1
                         else -> ((raw.dayOfWeek % 7) + 1).coerceIn(1, 7)
                     }
-                    val timeStr = raw.timeSlot.ifBlank { "08:30 - 09:30" }
+                    val timeStr = normalizeToFlexibleDurationSlot(raw.timeSlot)
                     val safeQuestions = if (raw.targetQuestions > 0) raw.targetQuestions else 30
 
                     ScannedTaskDto(
@@ -565,5 +564,17 @@ class AiStudyPlannerViewModel(application: Application) : AndroidViewModel(appli
         } catch (e: Exception) {
             0
         }
+    }
+
+    private fun normalizeToFlexibleDurationSlot(rawSlot: String): String {
+        val clean = rawSlot.trim()
+        if (clean.isBlank()) return "Esnek • 90 dk"
+        val rangeMatch = Regex("""(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})""").find(clean)
+        if (rangeMatch != null) {
+            val mins = getMinutesBetween(rangeMatch.groupValues[1], rangeMatch.groupValues[2])
+                .let { if (it in 20..240) it else 90 }
+            return "Esnek • $mins dk"
+        }
+        return clean
     }
 }

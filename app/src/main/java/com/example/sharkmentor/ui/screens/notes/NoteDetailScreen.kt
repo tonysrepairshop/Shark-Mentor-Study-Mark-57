@@ -368,17 +368,36 @@ fun NoteDetailScreen(
         stripPdfPageTags(initialNote?.content ?: initialContent)
     }
 
+    fun buildSentinelAwarePageValue(
+        pageIndex: Int,
+        parsed: AnnotatedString,
+        cursorAtEnd: Boolean = true
+    ): TextFieldValue {
+        if (pageIndex <= 0) {
+            val pos = if (cursorAtEnd) parsed.text.length else 0
+            return TextFieldValue(annotatedString = parsed, selection = TextRange(pos))
+        }
+        val withSentinel = if (parsed.text.startsWith(NoteRichTextHelper.PAGE_SENTINEL)) {
+            parsed
+        } else {
+            val shiftedSpans = parsed.spanStyles.map { r ->
+                AnnotatedString.Range(r.item, r.start + 1, r.end + 1)
+            }
+            AnnotatedString(
+                text = NoteRichTextHelper.PAGE_SENTINEL + parsed.text,
+                spanStyles = shiftedSpans
+            )
+        }
+        val pos = if (cursorAtEnd) withSentinel.text.length else 1
+        return TextFieldValue(annotatedString = withSentinel, selection = TextRange(pos))
+    }
+
     val pageFieldValues = remember(activeNoteId) {
         val rawPages = NoteDetailViewModel.splitContentIntoPages(initialCleanRaw)
         mutableStateListOf<TextFieldValue>().apply {
-            rawPages.forEach { pageRaw ->
+            rawPages.forEachIndexed { idx, pageRaw ->
                 val parsed = NoteRichTextHelper.parseTaggedText(pageRaw)
-                add(
-                    TextFieldValue(
-                        annotatedString = parsed,
-                        selection = TextRange(parsed.text.length)
-                    )
-                )
+                add(buildSentinelAwarePageValue(idx, parsed, cursorAtEnd = true))
             }
             if (isEmpty()) {
                 add(TextFieldValue(annotatedString = AnnotatedString(""), selection = TextRange(0)))
@@ -391,8 +410,9 @@ fun NoteDetailScreen(
     var pageChangeTick by remember { mutableIntStateOf(0) }
     var pendingDeletePageIndex by remember { mutableStateOf<Int?>(null) }
 
-    val pageDrawingControllers = remember(vmNoteId) { mutableStateMapOf<Int, DrawingController>() }
-    val pageFocusRequesters = remember(vmNoteId) { mutableStateMapOf<Int, FocusRequester>() }
+    // Non-snapshot HashMaps avoid mutating Compose state during composition (prevents crash on low-RAM Android 9)
+    val pageDrawingControllers = remember(vmNoteId) { HashMap<Int, DrawingController>() }
+    val pageFocusRequesters = remember(vmNoteId) { HashMap<Int, FocusRequester>() }
 
     fun getOrCreatePageFocusRequester(pageIdx: Int): FocusRequester {
         return pageFocusRequesters.getOrPut(pageIdx) { FocusRequester() }
@@ -427,15 +447,6 @@ fun NoteDetailScreen(
                     ctrl.eraserRadius = template.eraserRadius
                     ctrl.pressureSensitivityEnabled = template.pressureSensitivityEnabled
                 }
-                if (vmNoteId.isNotBlank()) {
-                    drawingScope.launch(Dispatchers.IO) {
-                        val loaded = DrawingSerializer.loadNotePageAnnotations(context, vmNoteId, pageIdx)
-                        withContext(Dispatchers.Main) {
-                            ctrl.setInitialStrokes(loaded.strokes)
-                            ctrl.setInitialTextBoxes(loaded.textBoxes)
-                        }
-                    }
-                }
             }
         }
     }
@@ -452,7 +463,7 @@ fun NoteDetailScreen(
         drawingController.alpha,
         drawingController.eraserRadius,
         drawingController.pressureSensitivityEnabled,
-        pageDrawingControllers.size
+        pageFieldValues.size
     ) {
         pageDrawingControllers.values.forEach { ctrl ->
             if (ctrl !== drawingController) {
@@ -470,7 +481,8 @@ fun NoteDetailScreen(
 
     LaunchedEffect(vmNoteId, pageFieldValues.size) {
         if (vmNoteId.isNotBlank()) {
-            for (idx in 0 until pageFieldValues.size) {
+            val totalPages = pageFieldValues.size
+            for (idx in 0 until totalPages) {
                 val ctrl = getOrCreatePageDrawingController(idx)
                 val loaded = withContext(Dispatchers.IO) {
                     DrawingSerializer.loadNotePageAnnotations(context, vmNoteId, idx)
@@ -561,14 +573,9 @@ fun NoteDetailScreen(
     fun populatePagesFromCleanText(cleanText: String) {
         val rawPages = NoteDetailViewModel.splitContentIntoPages(cleanText)
         pageFieldValues.clear()
-        rawPages.forEach { pageRaw ->
+        rawPages.forEachIndexed { idx, pageRaw ->
             val parsed = NoteRichTextHelper.parseTaggedText(pageRaw)
-            pageFieldValues.add(
-                TextFieldValue(
-                    annotatedString = parsed,
-                    selection = TextRange(parsed.text.length)
-                )
-            )
+            pageFieldValues.add(buildSentinelAwarePageValue(idx, parsed, cursorAtEnd = true))
         }
         if (pageFieldValues.isEmpty()) {
             pageFieldValues.add(TextFieldValue(annotatedString = AnnotatedString(""), selection = TextRange(0)))
@@ -579,15 +586,17 @@ fun NoteDetailScreen(
         pageChangeTick++
     }
 
-    fun buildJoinedTaggedText(): String {
-        val taggedPages = pageFieldValues.map { tfv ->
-            NoteRichTextHelper.toTaggedString(tfv.annotatedString)
+    fun buildJoinedTaggedText(pagesSnapshot: List<AnnotatedString> = pageFieldValues.map { it.annotatedString }): String {
+        val taggedPages = pagesSnapshot.map { annotated ->
+            NoteRichTextHelper.toTaggedString(annotated)
         }
         return NoteDetailViewModel.joinPagesToContent(taggedPages)
     }
 
     fun buildJoinedPlainText(): String {
-        return pageFieldValues.joinToString(separator = "\n\n") { it.text }
+        return pageFieldValues.joinToString(separator = "\n\n") {
+            NoteRichTextHelper.stripPageSentinel(it.text)
+        }
     }
 
     fun performDeleteNotePage(targetIdx: Int) {
@@ -608,22 +617,31 @@ fun NoteDetailScreen(
             activePageIndex = (pageFieldValues.size - 1).coerceAtLeast(0)
         }
         pageChangeTick++
-        val taggedText = buildJoinedTaggedText()
-        val fullContent = composeContentWithPdfPageTags(taggedText, pdfPagePaths, preservedPdfFileTag)
-        viewModel.onContentChanged(fullContent)
-        viewModel.saveImmediately(overrideContent = fullContent)
-        drawingScope.launch(Dispatchers.IO) {
-            DrawingSerializer.deleteNotePageDrawingAndShift(
-                context = context,
-                noteId = vmNoteId,
-                deletedPageIndex = targetIdx,
-                totalPagesBeforeDelete = oldTotalCount
-            )
+        val snapshot = pageFieldValues.map { it.annotatedString }
+        val pathsCopy = pdfPagePaths.toList()
+        val fileTagCopy = preservedPdfFileTag
+        val noteIdCopy = vmNoteId
+        drawingScope.launch(Dispatchers.Default) {
+            val taggedText = buildJoinedTaggedText(snapshot)
+            val fullContent = composeContentWithPdfPageTags(taggedText, pathsCopy, fileTagCopy)
+            withContext(Dispatchers.Main) {
+                viewModel.onContentChanged(fullContent)
+                viewModel.saveImmediately(overrideContent = fullContent)
+            }
+            withContext(Dispatchers.IO) {
+                DrawingSerializer.deleteNotePageDrawingAndShift(
+                    context = context,
+                    noteId = noteIdCopy,
+                    deletedPageIndex = targetIdx,
+                    totalPagesBeforeDelete = oldTotalCount
+                )
+            }
         }
     }
 
     var textLayoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
     var isNoteLoaded by remember(activeNoteId) { mutableStateOf(false) }
+    var isAutoPaginating by remember(activeNoteId) { mutableStateOf(false) }
 
     var isBoldActive by remember { mutableStateOf(false) }
     var isItalicActive by remember { mutableStateOf(false) }
@@ -652,31 +670,42 @@ fun NoteDetailScreen(
     }
     val showFloatingFocusTimer by NoteDrawingPreferences.showFloatingFocusTimer.collectAsStateWithLifecycle()
 
-    // Real foreground active time spent in this note (persisted via NoteTimeTracker)
+    // Real foreground active time spent in this note (wall-clock based; zero per-second recompositions!)
     val lifecycleOwner = LocalLifecycleOwner.current
-    var isScreenResumed by remember { mutableStateOf(true) }
     var storedNoteSeconds by remember(vmNoteId) {
         mutableLongStateOf(if (vmNoteId.isNotBlank()) NoteTimeTracker.getTotalSeconds(context, vmNoteId) else 0L)
     }
-    var pendingSessionSeconds by remember(vmNoteId) { mutableLongStateOf(0L) }
+    val sessionResumeWallMsRef = remember(vmNoteId) {
+        longArrayOf(android.os.SystemClock.elapsedRealtime())
+    }
+
+    fun flushNoteSessionTime() {
+        val startMs = sessionResumeWallMsRef[0]
+        if (startMs <= 0L) return
+        val nowMs = android.os.SystemClock.elapsedRealtime()
+        val elapsedSec = ((nowMs - startMs) / 1000L).coerceAtLeast(0L)
+        sessionResumeWallMsRef[0] = nowMs
+        if (vmNoteId.isNotBlank() && elapsedSec > 0L) {
+            storedNoteSeconds = NoteTimeTracker.addSeconds(context, vmNoteId, elapsedSec)
+        }
+    }
 
     LaunchedEffect(vmNoteId) {
         if (vmNoteId.isNotBlank()) {
             storedNoteSeconds = NoteTimeTracker.getTotalSeconds(context, vmNoteId)
-            pendingSessionSeconds = 0L
+            sessionResumeWallMsRef[0] = android.os.SystemClock.elapsedRealtime()
         }
     }
 
     DisposableEffect(lifecycleOwner, vmNoteId) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> isScreenResumed = true
+                Lifecycle.Event.ON_RESUME -> {
+                    sessionResumeWallMsRef[0] = android.os.SystemClock.elapsedRealtime()
+                }
                 Lifecycle.Event.ON_PAUSE -> {
-                    isScreenResumed = false
-                    if (vmNoteId.isNotBlank() && pendingSessionSeconds > 0L) {
-                        storedNoteSeconds = NoteTimeTracker.addSeconds(context, vmNoteId, pendingSessionSeconds)
-                        pendingSessionSeconds = 0L
-                    }
+                    flushNoteSessionTime()
+                    sessionResumeWallMsRef[0] = 0L
                 }
                 else -> {}
             }
@@ -684,26 +713,11 @@ fun NoteDetailScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            if (vmNoteId.isNotBlank() && pendingSessionSeconds > 0L) {
-                NoteTimeTracker.addSeconds(context, vmNoteId, pendingSessionSeconds)
-                pendingSessionSeconds = 0L
-            }
+            flushNoteSessionTime()
         }
     }
 
-    LaunchedEffect(vmNoteId, isScreenResumed) {
-        if (vmNoteId.isBlank() || !isScreenResumed) return@LaunchedEffect
-        while (true) {
-            kotlinx.coroutines.delay(1_000L)
-            pendingSessionSeconds++
-            if (pendingSessionSeconds >= 10L) {
-                storedNoteSeconds = NoteTimeTracker.addSeconds(context, vmNoteId, pendingSessionSeconds)
-                pendingSessionSeconds = 0L
-            }
-        }
-    }
-
-    val totalNoteSpentSeconds = storedNoteSeconds + pendingSessionSeconds
+    val totalNoteSpentSeconds = storedNoteSeconds
 
     var activeColorPanel by remember { mutableStateOf(ActiveColorPanel.NONE) }
     var showCustomColorDialog by remember { mutableStateOf(false) }
@@ -815,11 +829,16 @@ fun NoteDetailScreen(
         }
     }
 
-    LaunchedEffect(noteFieldValue.annotatedString, pageFieldValues.size, pageChangeTick) {
+    LaunchedEffect(pageFieldValues.size, pageChangeTick) {
         if (!isNoteLoaded) return@LaunchedEffect
-        kotlinx.coroutines.delay(350L)
-        val taggedText = buildJoinedTaggedText()
-        val fullContent = composeContentWithPdfPageTags(taggedText, pdfPagePaths, preservedPdfFileTag)
+        kotlinx.coroutines.delay(750L)
+        val pagesSnapshot = pageFieldValues.map { it.annotatedString }
+        val pathsCopy = pdfPagePaths.toList()
+        val fileTagCopy = preservedPdfFileTag
+        val fullContent = withContext(Dispatchers.Default) {
+            val taggedText = buildJoinedTaggedText(pagesSnapshot)
+            composeContentWithPdfPageTags(taggedText, pathsCopy, fileTagCopy)
+        }
         viewModel.onContentChanged(fullContent)
     }
 
@@ -877,32 +896,43 @@ fun NoteDetailScreen(
         noteTextColor
     }
 
-    val allPlainText = remember(noteFieldValue.text, pageFieldValues.size, pageChangeTick) {
-        buildJoinedPlainText()
-    }
-    val chars = allPlainText.length
-    val lineCount = remember(allPlainText) {
-        if (allPlainText.isEmpty()) 1 else allPlainText.count { it == '\n' } + 1
-    }
-    val words = remember(allPlainText) {
-        val text = allPlainText
-        if (text.isBlank()) 0
-        else if (text.length > 20_000) {
-            text.count { it == ' ' || it == '\n' } + 1
-        } else {
-            var count = 0
-            var inWord = false
-            for (i in 0 until text.length) {
-                val isWs = text[i].isWhitespace()
-                if (!isWs && !inWord) {
-                    inWord = true
-                    count++
-                } else if (isWs) {
-                    inWord = false
-                }
+    var chars by remember(activeNoteId) { mutableIntStateOf(0) }
+    var lineCount by remember(activeNoteId) { mutableIntStateOf(1) }
+    var words by remember(activeNoteId) { mutableIntStateOf(0) }
+
+    LaunchedEffect(pageFieldValues.size, pageChangeTick, isNoteLoaded) {
+        if (!isNoteLoaded) return@LaunchedEffect
+        kotlinx.coroutines.delay(600L)
+        val rawPageTexts = pageFieldValues.map { it.text }
+        val (computedChars, computedLines, computedWords) = withContext(Dispatchers.Default) {
+            val joined = rawPageTexts.joinToString(separator = "\n\n") {
+                NoteRichTextHelper.stripPageSentinel(it)
             }
-            count
+            val cCount = joined.length
+            val lCount = if (joined.isEmpty()) 1 else joined.count { it == '\n' } + 1
+            val wCount = if (joined.isBlank()) {
+                0
+            } else if (joined.length > 20_000) {
+                joined.count { it == ' ' || it == '\n' } + 1
+            } else {
+                var count = 0
+                var inWord = false
+                for (i in 0 until joined.length) {
+                    val isWs = joined[i].isWhitespace()
+                    if (!isWs && !inWord) {
+                        inWord = true
+                        count++
+                    } else if (isWs) {
+                        inWord = false
+                    }
+                }
+                count
+            }
+            Triple(cCount, lCount, wCount)
         }
+        chars = computedChars
+        lineCount = computedLines
+        words = computedWords
     }
 
     val aiPrefs = remember(context) { UserAiPreferences.initialize(context) }
@@ -990,6 +1020,74 @@ fun NoteDetailScreen(
     }
 
     val noteListState = rememberLazyListState()
+
+    fun mergeOrDeletePageIntoPrevious(pageIndex: Int) {
+        if (pageIndex <= 0 || pageIndex !in pageFieldValues.indices) return
+        val prevIdx = pageIndex - 1
+        val prevTfv = pageFieldValues[prevIdx]
+        val curTfv = pageFieldValues[pageIndex]
+        val curCtrl = pageDrawingControllers[pageIndex]
+        val curHasInk = curCtrl?.hasAnyAnnotations == true
+
+        // Strip sentinel from current page while shifting its SpanStyles accurately
+        val curRawText = curTfv.text
+        val sentinelOffset = if (curRawText.startsWith(NoteRichTextHelper.PAGE_SENTINEL)) 1 else 0
+        val cleanCurText = NoteRichTextHelper.stripPageSentinel(curRawText)
+        val cleanCurSpans = if (cleanCurText.isEmpty()) {
+            emptyList()
+        } else {
+            curTfv.annotatedString.spanStyles.mapNotNull { r ->
+                val ns = (r.start - sentinelOffset).coerceIn(0, cleanCurText.length)
+                val ne = (r.end - sentinelOffset).coerceIn(0, cleanCurText.length)
+                if (ne > ns) AnnotatedString.Range(r.item, ns, ne) else null
+            }
+        }
+
+        val junctionPos = prevTfv.text.length
+        if (cleanCurText.isNotEmpty()) {
+            val mergedText = prevTfv.text + cleanCurText
+            val shiftedCurSpans = cleanCurSpans.map { r ->
+                AnnotatedString.Range(r.item, r.start + junctionPos, r.end + junctionPos)
+            }
+            val mergedSpans = NoteRichTextHelper.coalesceSpans(
+                prevTfv.annotatedString.spanStyles + shiftedCurSpans,
+                mergedText.length
+            )
+            pageFieldValues[prevIdx] = TextFieldValue(
+                annotatedString = AnnotatedString(mergedText, mergedSpans),
+                selection = TextRange(junctionPos)
+            )
+        } else {
+            pageFieldValues[prevIdx] = prevTfv.copy(selection = TextRange(junctionPos))
+        }
+
+        if (!curHasInk && pageFieldValues.size > 1) {
+            performDeleteNotePage(pageIndex)
+        } else if (pageIndex in pageFieldValues.indices) {
+            // Page has ink drawings; keep empty page with sentinel so drawings aren't lost
+            pageFieldValues[pageIndex] = TextFieldValue(
+                annotatedString = AnnotatedString(NoteRichTextHelper.PAGE_SENTINEL),
+                selection = TextRange(1)
+            )
+            pageChangeTick++
+        }
+
+        activePageIndex = prevIdx
+        val pageOffset = 1 +
+            (if (localPdfFilePath != null) 1 else 0) +
+            (if (pdfPagePaths.isNotEmpty() || pdfPreviewBitmap != null) 1 else 0)
+        drawingScope.launch {
+            kotlinx.coroutines.delay(35L)
+            runCatching {
+                noteListState.animateScrollToItem(pageOffset + prevIdx)
+            }
+            if (!drawingController.isDrawingActive) {
+                runCatching {
+                    getOrCreatePageFocusRequester(prevIdx).requestFocus()
+                }
+            }
+        }
+    }
 
     val onBoldToggled: () -> Unit = {
         styleLockedByUserPick = true
@@ -1152,10 +1250,7 @@ fun NoteDetailScreen(
     }
 
     val saveCurrentNote: () -> Unit = {
-        if (vmNoteId.isNotBlank() && pendingSessionSeconds > 0L) {
-            storedNoteSeconds = NoteTimeTracker.addSeconds(context, vmNoteId, pendingSessionSeconds)
-            pendingSessionSeconds = 0L
-        }
+        flushNoteSessionTime()
         val taggedText = buildJoinedTaggedText()
         val fullContent = composeContentWithPdfPageTags(taggedText, pdfPagePaths, preservedPdfFileTag)
         val anyAnnotations = pageDrawingControllers.values.any { it.hasAnyAnnotations }
@@ -1529,6 +1624,7 @@ fun NoteDetailScreen(
                             },
                             onClick = {
                                 showMoreMenu = false
+                                flushNoteSessionTime()
                                 showStatsDialog = true
                             }
                         )
@@ -2763,10 +2859,38 @@ fun NoteDetailScreen(
                                         if (activePageIndex != pageIndex) {
                                             activePageIndex = pageIndex
                                         }
-                                        val grew = updatedValue.text.length > pageTfv.text.length
+                                        // Soft-keyboard Backspace at start of Page 2+: user deleted leading PAGE_SENTINEL
+                                        if (pageIndex > 0 &&
+                                            pageTfv.text.startsWith(NoteRichTextHelper.PAGE_SENTINEL) &&
+                                            !updatedValue.text.startsWith(NoteRichTextHelper.PAGE_SENTINEL)
+                                        ) {
+                                            if (updatedValue.text.length < pageTfv.text.length && pageTfv.selection.collapsed) {
+                                                mergeOrDeletePageIntoPrevious(pageIndex)
+                                                return@BasicTextField
+                                            }
+                                        }
+
+                                        val normalizedUpdated = if (pageIndex > 0 && !updatedValue.text.startsWith(NoteRichTextHelper.PAGE_SENTINEL)) {
+                                            val clean = NoteRichTextHelper.stripPageSentinel(updatedValue.text)
+                                            val newText = NoteRichTextHelper.PAGE_SENTINEL + clean
+                                            val newStart = (updatedValue.selection.start + 1).coerceIn(1, newText.length)
+                                            val newEnd = (updatedValue.selection.end + 1).coerceIn(1, newText.length)
+                                            updatedValue.copy(
+                                                annotatedString = AnnotatedString(newText, updatedValue.annotatedString.spanStyles.mapNotNull { r ->
+                                                    val s = (r.start + 1).coerceIn(1, newText.length)
+                                                    val e = (r.end + 1).coerceIn(1, newText.length)
+                                                    if (e > s) AnnotatedString.Range(r.item, s, e) else null
+                                                }),
+                                                selection = TextRange(newStart, newEnd)
+                                            )
+                                        } else {
+                                            updatedValue
+                                        }
+
+                                        val grew = normalizedUpdated.text.length > pageTfv.text.length
                                         val enterHandled = NoteRichTextHelper.handleEnterOnListItem(
                                             oldValue = pageTfv,
-                                            newValue = updatedValue,
+                                            newValue = normalizedUpdated,
                                             isBoldActive = isBoldActive,
                                             isItalicActive = isItalicActive,
                                             isUnderlineActive = isUnderlineActive,
@@ -2775,12 +2899,12 @@ fun NoteDetailScreen(
                                             activeFontSizeSp = selectedFontSizeSp,
                                             activeFontOption = selectedFontOption
                                         )
-                                        val nextTfv = if (enterHandled != null) {
+                                        val rawNextTfv = if (enterHandled != null) {
                                             enterHandled
                                         } else {
                                             NoteRichTextHelper.handleTextChange(
                                                 oldValue = pageTfv,
-                                                newValue = updatedValue,
+                                                newValue = normalizedUpdated,
                                                 isBoldActive = isBoldActive,
                                                 isItalicActive = isItalicActive,
                                                 isUnderlineActive = isUnderlineActive,
@@ -2789,6 +2913,16 @@ fun NoteDetailScreen(
                                                 activeFontSizeSp = selectedFontSizeSp,
                                                 activeFontOption = selectedFontOption
                                             )
+                                        }
+                                        val nextTfv = if (pageIndex > 0 && !rawNextTfv.text.startsWith(NoteRichTextHelper.PAGE_SENTINEL)) {
+                                            buildSentinelAwarePageValue(pageIndex, rawNextTfv.annotatedString, cursorAtEnd = false).copy(
+                                                selection = TextRange(
+                                                    (rawNextTfv.selection.start + 1).coerceIn(1, rawNextTfv.text.length + 1),
+                                                    (rawNextTfv.selection.end + 1).coerceIn(1, rawNextTfv.text.length + 1)
+                                                )
+                                            )
+                                        } else {
+                                            rawNextTfv
                                         }
                                         if (pageIndex in pageFieldValues.indices) {
                                             pageFieldValues[pageIndex] = nextTfv
@@ -2803,8 +2937,8 @@ fun NoteDetailScreen(
                                         if (isPageActive) {
                                             textLayoutResult = layout
                                         }
-                                        // Auto-pagination 1 line before reaching bottom of page
-                                        if (isNoteLoaded && isPageActive && lastTypedGrowthPage == pageIndex && layout.lineCount >= 2) {
+                                        // Auto-pagination 1 line before reaching bottom of page (deferred safely out of layout pass)
+                                        if (isNoteLoaded && isPageActive && !isAutoPaginating && lastTypedGrowthPage == pageIndex && layout.lineCount >= 2) {
                                             val lastLineIdx = layout.lineCount - 1
                                             val lineH = (layout.getLineBottom(lastLineIdx) - layout.getLineTop(lastLineIdx))
                                                 .coerceAtLeast(with(density) { 20.dp.toPx() })
@@ -2813,30 +2947,75 @@ fun NoteDetailScreen(
                                             val cursorLine = layout.getLineForOffset(cursorPos)
                                             if (layout.getLineBottom(lastLineIdx) >= triggerBottomPx && cursorLine >= lastLineIdx) {
                                                 lastTypedGrowthPage = -1
+                                                isAutoPaginating = true
+                                                val sourcePageText = pageTfv.text
+                                                val bulletSnap = isBulletActive
+                                                val numberedSnap = isNumberedActive
+                                                val checkboxSnap = isCheckboxActive
                                                 val nextPageIdx = pageIndex + 1
-                                                if (nextPageIdx >= pageFieldValues.size) {
-                                                    pageFieldValues.add(
-                                                        TextFieldValue(
-                                                            annotatedString = AnnotatedString(""),
-                                                            selection = TextRange(0)
-                                                        )
-                                                    )
-                                                    getOrCreatePageDrawingController(nextPageIdx)
-                                                }
-                                                activePageIndex = nextPageIdx
-                                                pageChangeTick++
                                                 val pageStartOffset = 1 +
                                                     (if (localPdfFilePath != null) 1 else 0) +
                                                     (if (pdfPagePaths.isNotEmpty() || pdfPreviewBitmap != null) 1 else 0)
                                                 drawingScope.launch {
-                                                    kotlinx.coroutines.delay(45L)
-                                                    runCatching {
-                                                        noteListState.animateScrollToItem(pageStartOffset + nextPageIdx)
-                                                    }
-                                                    if (!drawingController.isDrawingActive) {
-                                                        runCatching {
-                                                            getOrCreatePageFocusRequester(nextPageIdx).requestFocus()
+                                                    try {
+                                                        // If Enter just appended an empty list prefix at bottom of prev page, move it cleanly to Page N+1
+                                                        var carriedPrefix = NoteRichTextHelper.extractTrailingListContinuationPrefix(
+                                                            prevPageText = sourcePageText,
+                                                            isBulletActive = bulletSnap,
+                                                            isNumberedActive = numberedSnap,
+                                                            isCheckboxActive = checkboxSnap
+                                                        )
+                                                        val emptyTrailingPrefixMatch = Regex("""\n(• |\d+\.\s|\[ \] )$""").find(sourcePageText)
+                                                        if (emptyTrailingPrefixMatch != null && pageIndex in pageFieldValues.indices) {
+                                                            carriedPrefix = emptyTrailingPrefixMatch.groupValues[1]
+                                                            val trimmedText = sourcePageText.substring(0, emptyTrailingPrefixMatch.range.first)
+                                                            val trimmedSpans = pageFieldValues[pageIndex].annotatedString.spanStyles.mapNotNull { r ->
+                                                                val s = r.start.coerceIn(0, trimmedText.length)
+                                                                val e = r.end.coerceIn(0, trimmedText.length)
+                                                                if (e > s) AnnotatedString.Range(r.item, s, e) else null
+                                                            }
+                                                            pageFieldValues[pageIndex] = TextFieldValue(
+                                                                annotatedString = AnnotatedString(trimmedText, trimmedSpans),
+                                                                selection = TextRange(trimmedText.length)
+                                                            )
                                                         }
+
+                                                        if (nextPageIdx >= pageFieldValues.size) {
+                                                            val seedText = NoteRichTextHelper.PAGE_SENTINEL + carriedPrefix
+                                                            pageFieldValues.add(
+                                                                TextFieldValue(
+                                                                    annotatedString = AnnotatedString(seedText),
+                                                                    selection = TextRange(seedText.length)
+                                                                )
+                                                            )
+                                                            getOrCreatePageDrawingController(nextPageIdx)
+                                                        }
+                                                        activePageIndex = nextPageIdx
+                                                        if (carriedPrefix.startsWith("• ")) {
+                                                            isBulletActive = true
+                                                            isNumberedActive = false
+                                                            isCheckboxActive = false
+                                                        } else if (Regex("""^\d+\.\s""").containsMatchIn(carriedPrefix)) {
+                                                            isNumberedActive = true
+                                                            isBulletActive = false
+                                                            isCheckboxActive = false
+                                                        } else if (carriedPrefix.startsWith("[ ] ")) {
+                                                            isCheckboxActive = true
+                                                            isBulletActive = false
+                                                            isNumberedActive = false
+                                                        }
+                                                        pageChangeTick++
+                                                        kotlinx.coroutines.delay(45L)
+                                                        runCatching {
+                                                            noteListState.animateScrollToItem(pageStartOffset + nextPageIdx)
+                                                        }
+                                                        if (!drawingController.isDrawingActive) {
+                                                            runCatching {
+                                                                getOrCreatePageFocusRequester(nextPageIdx).requestFocus()
+                                                            }
+                                                        }
+                                                    } finally {
+                                                        isAutoPaginating = false
                                                     }
                                                 }
                                             }
@@ -2849,6 +3028,20 @@ fun NoteDetailScreen(
                                         .defaultMinSize(minHeight = minBodyHeight)
                                         .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 40.dp)
                                         .focusRequester(pageFocusRequester)
+                                        .onPreviewKeyEvent { keyEvent ->
+                                            if (pageIndex > 0 &&
+                                                keyEvent.type == KeyEventType.KeyDown &&
+                                                (keyEvent.key == Key.Backspace ||
+                                                    keyEvent.nativeKeyEvent.keyCode == android.view.KeyEvent.KEYCODE_DEL) &&
+                                                pageTfv.selection.collapsed &&
+                                                pageTfv.selection.start <= 1
+                                            ) {
+                                                mergeOrDeletePageIntoPrevious(pageIndex)
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        }
                                         .onFocusChanged { focusState ->
                                             if (focusState.isFocused && activePageIndex != pageIndex) {
                                                 activePageIndex = pageIndex
@@ -2856,7 +3049,7 @@ fun NoteDetailScreen(
                                         },
                                     decorationBox = { innerTextField ->
                                         Box(modifier = Modifier.fillMaxWidth()) {
-                                            if (pageTfv.text.isEmpty()) {
+                                            if (NoteRichTextHelper.stripPageSentinel(pageTfv.text).isEmpty()) {
                                                 Text(
                                                     text = if (pageIndex == 0) {
                                                         "Notunuzu yazın..."
@@ -2872,22 +3065,24 @@ fun NoteDetailScreen(
                                     }
                                 )
 
-                                // Kalem & Çizim Stüdyosu Katmanı (sayfa bazlı)
-                                DrawingCanvasOverlay(
-                                    controller = pageCtrl,
-                                    modifier = Modifier.matchParentSize(),
-                                    defaultTextBoxColor = noteTextColor,
-                                    onTwoFingerScroll = { dy, _ -> noteListState.dispatchRawDelta(-dy) },
-                                    onLassoAskAi = if (drawingAiEnabled) {
-                                        { cropBmp ->
-                                            lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
-                                            lassoAiSourceLabel = "Not • Sayfa ${pageIndex + 1}"
-                                            lassoAiCropBitmap = cropBmp
+                                // Kalem & Çizim Stüdyosu Katmanı — yalnızca çizim aktifken veya çizim varsa mount edilir (3GB RAM optimizasyonu)
+                                if (pageCtrl.isDrawingActive || pageCtrl.hasAnyAnnotations) {
+                                    DrawingCanvasOverlay(
+                                        controller = pageCtrl,
+                                        modifier = Modifier.matchParentSize(),
+                                        defaultTextBoxColor = noteTextColor,
+                                        onTwoFingerScroll = { dy, _ -> noteListState.dispatchRawDelta(-dy) },
+                                        onLassoAskAi = if (drawingAiEnabled) {
+                                            { cropBmp ->
+                                                lassoAiCropBitmap?.let { if (!it.isRecycled) runCatching { it.recycle() } }
+                                                lassoAiSourceLabel = "Not • Sayfa ${pageIndex + 1}"
+                                                lassoAiCropBitmap = cropBmp
+                                            }
+                                        } else {
+                                            null
                                         }
-                                    } else {
-                                        null
-                                    }
-                                )
+                                    )
+                                }
 
                                 // Sayfa altında tam ortada sayfa numarası
                                 Text(
@@ -2932,18 +3127,22 @@ fun NoteDetailScreen(
                                     val newPageIdx = pageFieldValues.size
                                     pageFieldValues.add(
                                         TextFieldValue(
-                                            annotatedString = AnnotatedString(""),
-                                            selection = TextRange(0)
+                                            annotatedString = AnnotatedString(NoteRichTextHelper.PAGE_SENTINEL),
+                                            selection = TextRange(1)
                                         )
                                     )
                                     getOrCreatePageDrawingController(newPageIdx)
                                     activePageIndex = newPageIdx
                                     pageChangeTick++
-                                    val taggedText = buildJoinedTaggedText()
-                                    val fullContent = composeContentWithPdfPageTags(taggedText, pdfPagePaths, preservedPdfFileTag)
-                                    viewModel.onContentChanged(fullContent)
+                                    val snapshot = pageFieldValues.map { it.annotatedString }
+                                    val pathsCopy = pdfPagePaths.toList()
+                                    val fileTagCopy = preservedPdfFileTag
                                     drawingScope.launch {
-                                        kotlinx.coroutines.delay(80L)
+                                        val fullContent = withContext(Dispatchers.Default) {
+                                            composeContentWithPdfPageTags(buildJoinedTaggedText(snapshot), pathsCopy, fileTagCopy)
+                                        }
+                                        viewModel.onContentChanged(fullContent)
+                                        kotlinx.coroutines.delay(65L)
                                         runCatching {
                                             val targetItem = (noteListState.layoutInfo.totalItemsCount - 2).coerceAtLeast(0)
                                             noteListState.animateScrollToItem(targetItem)

@@ -1,8 +1,10 @@
 package com.example.sharkmentor.ui.coaching
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -11,13 +13,22 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -28,13 +39,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -50,10 +64,11 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EditNote
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -78,6 +93,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,23 +105,32 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.core.ai.MultiProviderAiClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.coaching.BookCampManager
+import com.example.sharkmentor.core.coaching.BookVideoCandidate
 import com.example.sharkmentor.core.coaching.CampDayEpisode
 import com.example.sharkmentor.core.coaching.CoachingEngine
+import com.example.sharkmentor.core.coaching.DossierAiChannel
 import com.example.sharkmentor.core.coaching.ResourceCampBinding
+import com.example.sharkmentor.core.coaching.StudentDossierManager
 import com.example.sharkmentor.core.service.FocusTimerService
 import com.example.sharkmentor.core.timer.TimerMode
 import com.example.sharkmentor.core.timer.TimerPhase
@@ -116,9 +141,13 @@ import com.example.sharkmentor.ui.components.MathSymbolCatalog
 import com.example.sharkmentor.ui.components.MathSymbolKeyboardPanel
 import com.example.sharkmentor.ui.components.MathSymbolToggleButton
 import com.example.sharkmentor.ui.components.RichSolutionContent
+import com.example.sharkmentor.ui.components.WellnessReminderBus
+import com.example.sharkmentor.ui.components.WellnessReminderSmartwatchOverlay
+import com.example.sharkmentor.ui.components.WellnessReminderType
 import com.example.sharkmentor.ui.components.formatMathAsPlainText
 import java.io.ByteArrayInputStream
 import java.util.UUID
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -132,12 +161,12 @@ ANLAŞILIRLIK VE MATEMATİKSEL YAZIM KURALLARI:
 """
 
 /**
- * Balanced Split-Screen In-App Video Study Studio (Mark 62):
- * - Direct exact-episode playback (never restarts at playlist intro video #1).
- * - Screen-height bounded, collapsible video viewport with clipToBounds() so the AI Tutor canvas
- *   ALWAYS has spacious visibility and bottom-docked input across all phone screen sizes & IME states.
- * - Real playlist episode selector tab ("Bölümler") for 1-tap switching between real lessons.
- * - Opera-style toggleable Video Ad Blocker + live timestamp & caption transcript AI context.
+ * Mark 63 Redesigned Video Study Studio:
+ * - Full-area distraction-free YouTube video player cleanly bounded below a slim header (NO cramped split-screen chat).
+ * - True WebView Fullscreen (`WebChromeClient.onShowCustomView` / `onHideCustomView`) + immersive mode toggle.
+ * - Always-on-top draggable Floating AI Orb (matching PdfReaderActivity physics) visible in BOTH normal & fullscreen modes.
+ * - Tapping the AI Orb opens/closes a compact floating AI Chat / Quick Note / Episodes popup card right next to the orb.
+ * - Auto-pauses video playback when a Posture Wellness Reminder fires; displays the smartwatch overlay seamlessly.
  */
 @Composable
 fun CampVideoStudyStudioDialog(
@@ -152,13 +181,15 @@ fun CampVideoStudyStudioDialog(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
-    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val density = LocalDensity.current
 
     LaunchedEffect(context) {
         UserAiPreferences.initialize(context)
+        StudentDossierManager.ensureLoaded(context)
     }
     val studioAiEnabled by UserAiPreferences.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val adBlockerEnabled by UserAiPreferences.videoAdBlockerEnabled.collectAsStateWithLifecycle()
+    val wellnessEvent by WellnessReminderBus.activeEvent.collectAsStateWithLifecycle()
 
     val safeEpisodes = remember(allEpisodes, initialEpisode) {
         allEpisodes.ifEmpty { listOf(initialEpisode) }
@@ -166,9 +197,32 @@ fun CampVideoStudyStudioDialog(
     var activeEpisode by remember(initialEpisode.dayNumber, initialEpisode.videoId, initialEpisode.topicTitle) {
         mutableStateOf(initialEpisode)
     }
-    // 0 = AI Asistan, 1 = Hızlı Not, 2 = Bölümler (when playlist has >1 episodes)
-    var activeTab by remember(studioAiEnabled) { mutableIntStateOf(if (studioAiEnabled) 0 else 1) }
-    var isVideoCollapsed by remember { mutableStateOf(false) }
+
+    // Floating AI Orb & Popup state (0 = AI Asistan, 1 = Hızlı Not, 2 = Bölümler)
+    var isAiPopupOpen by remember { mutableStateOf(false) }
+    var popupTab by remember(studioAiEnabled) { mutableIntStateOf(if (studioAiEnabled) 0 else 1) }
+
+    // True Fullscreen state (supports both YouTube native fullscreen button AND our top-bar fullscreen toggle)
+    var customFullscreenView by remember { mutableStateOf<View?>(null) }
+    var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    var manualFullscreen by remember { mutableStateOf(false) }
+    val isInFullscreen = customFullscreenView != null || manualFullscreen
+
+    // Direct WebView handle for programmatic pause on Posture Reminder
+    var activeWebViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    // Auto-pause video when Posture Reminder fires (NEVER touches Focus Timer!)
+    LaunchedEffect(wellnessEvent?.id) {
+        val ev = wellnessEvent
+        if (ev != null && ev.type == WellnessReminderType.POSTURE) {
+            runCatching {
+                activeWebViewRef?.evaluateJavascript(
+                    "(function(){try{document.querySelectorAll('video').forEach(function(v){v.pause();});}catch(e){}})();",
+                    null
+                )
+            }
+        }
+    }
 
     var isResolvingVideo by remember(activeEpisode.dayNumber, activeEpisode.videoId) {
         mutableStateOf(activeEpisode.videoId.length != 11)
@@ -236,6 +290,13 @@ fun CampVideoStudyStudioDialog(
     var showPasteLinkDialog by remember { mutableStateOf(false) }
     var customUrlInput by remember { mutableStateOf(activeEpisode.customUrl) }
 
+    fun exitFullscreen() {
+        customFullscreenCallback?.onCustomViewHidden()
+        customFullscreenView = null
+        customFullscreenCallback = null
+        manualFullscreen = false
+    }
+
     fun selectEpisode(ep: CampDayEpisode) {
         activeEpisode = ep
         liveActiveVideoId = ep.videoId
@@ -264,7 +325,11 @@ fun CampVideoStudyStudioDialog(
         aiSavedToNotes = false
         showMathPanel = false
         scope.launch {
-            val compass = CoachingEngine.buildAiSystemCompassPrompt(context)
+            val dossierBlock = if (StudentDossierManager.shouldAttachDossier(DossierAiChannel.COACHING_DIRECT)) {
+                StudentDossierManager.buildAnonymizedDossierPrompt()
+            } else {
+                CoachingEngine.buildAiSystemCompassPrompt(context)
+            }
             val mentionedSec = BookCampManager.extractMentionedTimestampSeconds(cleanQ)
             val effectiveSec = mentionedSec ?: livePlaybackSeconds
             val formattedTime = BookCampManager.formatSecondsAsTimestamp(effectiveSec)
@@ -303,7 +368,7 @@ fun CampVideoStudyStudioDialog(
                 Öğrencinin belirttiği dakika/formül veya kavramı doğrudan, adım adım, sade ve eksiksiz açıkla.
             """.trimIndent()
 
-            val systemInstruction = "$compass\n\n$STUDIO_MATH_FORMAT_RULES"
+            val systemInstruction = "$dossierBlock\n\n$STUDIO_MATH_FORMAT_RULES"
 
             val response = withContext(Dispatchers.IO) {
                 runCatching {
@@ -423,806 +488,862 @@ fun CampVideoStudyStudioDialog(
         )
     }
 
-    // Bounded responsive video height so AI Assistant always gets generous, balanced screen real estate
-    val videoHeightDp = remember(screenHeightDp, isVideoCollapsed) {
-        if (isVideoCollapsed) {
-            64.dp
-        } else {
-            (screenHeightDp * 0.29f).dp.coerceIn(156.dp, 218.dp)
-        }
-    }
-
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (isInFullscreen) {
+                exitFullscreen()
+            } else if (isAiPopupOpen) {
+                isAiPopupOpen = false
+            } else {
+                onDismiss()
+            }
+        },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             dismissOnClickOutside = false,
             decorFitsSystemWindows = false
         )
     ) {
+        // Immersive system bars toggle when in true Fullscreen
+        val dialogView = LocalView.current
+        DisposableEffect(isInFullscreen) {
+            val window = (dialogView.context as? Activity)?.window
+            if (window != null) {
+                val controller = WindowCompat.getInsetsController(window, dialogView)
+                if (isInFullscreen) {
+                    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                } else {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+            onDispose {
+                val w = (dialogView.context as? Activity)?.window
+                if (w != null) {
+                    WindowCompat.getInsetsController(w, dialogView).show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+        }
+
+        BackHandler(enabled = isInFullscreen || isAiPopupOpen) {
+            if (isAiPopupOpen) {
+                isAiPopupOpen = false
+            } else if (isInFullscreen) {
+                exitFullscreen()
+            }
+        }
+
         Surface(
             modifier = Modifier.fillMaxSize(),
-            color = colorScheme.background,
+            color = if (isInFullscreen) Color.Black else colorScheme.background,
             contentColor = colorScheme.onBackground
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .imePadding()
-            ) {
-                // ── 1. Slim Studio Top Bar (Title + Focus Timer + Close) ──
-                Surface(
-                    color = colorScheme.surface,
-                    tonalElevation = 2.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            IconButton(
-                                onClick = onDismiss,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Kapat",
-                                    tint = colorScheme.onSurface,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = campTitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = colorScheme.primary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
+            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                val containerWidthPx = with(density) { maxWidth.toPx() }
+                val containerHeightPx = with(density) { maxHeight.toPx() }
+                val orbSizeDp = 54.dp
+                val orbSizePx = with(density) { orbSizeDp.toPx() }
+                val edgePadPx = with(density) { 12.dp.toPx() }
 
-                        Spacer(modifier = Modifier.width(6.dp))
+                var orbOffsetX by remember { mutableFloatStateOf(-1f) }
+                var orbOffsetY by remember { mutableFloatStateOf(-1f) }
 
-                        // Compact Live Focus Timer Pill
-                        Surface(
-                            onClick = { toggleFocusTimerFromStudio() },
-                            shape = RoundedCornerShape(50),
-                            color = if (isFocusing) colorScheme.primaryContainer else colorScheme.surfaceVariant,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isFocusing) colorScheme.primary else colorScheme.outlineVariant
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isFocusing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isFocusing) "Duraklat" else "Odak Başlat",
-                                    tint = if (isFocusing) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = if (isFocusing || isPaused) formattedTimer else "Odak",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isFocusing) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
-                                )
-                            }
+                // Initialize floating AI orb at comfortable bottom-right spot
+                LaunchedEffect(containerWidthPx, containerHeightPx) {
+                    if (containerWidthPx > orbSizePx && containerHeightPx > orbSizePx) {
+                        if (orbOffsetX < 0f || orbOffsetY < 0f) {
+                            orbOffsetX = (containerWidthPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx)
+                            orbOffsetY = (containerHeightPx - orbSizePx - with(density) { 84.dp.toPx() })
+                                .coerceIn(edgePadPx, (containerHeightPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx))
+                        } else {
+                            orbOffsetX = orbOffsetX.coerceIn(edgePadPx, (containerWidthPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx))
+                            orbOffsetY = orbOffsetY.coerceIn(edgePadPx, (containerHeightPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx))
                         }
                     }
                 }
 
-                // ── 2. Bounded, Clipped & Collapsible Video Player Viewport ──
-                val playerUrl = remember(activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.dayNumber, adBlockerEnabled, useMobileWatchFallback) {
-                    if (useMobileWatchFallback && activeEpisode.videoId.length == 11) {
-                        activeEpisode.buildMobileWatchUrl(livePlaybackSeconds)
-                    } else {
-                        activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true)
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(videoHeightDp)
-                        .clipToBounds()
-                        .background(Color.Black),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isResolvingVideo) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                color = colorScheme.primary,
-                                strokeWidth = 2.dp
-                            )
-                            Text(
-                                text = "Ders videosu hazırlanıyor...",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.9f)
-                            )
-                        }
-                    } else {
-                        DistractionFreeYouTubeWebView(
-                            url = playerUrl,
-                            adBlockerEnabled = adBlockerEnabled,
-                            onPlaybackTelemetry = { seconds, title, currentUrl ->
-                                if (seconds >= 0) livePlaybackSeconds = seconds
-                                if (title.isNotBlank() && !title.equals("YouTube", ignoreCase = true)) {
-                                    liveVideoTitle = title.removeSuffix(" - YouTube").trim()
-                                }
-                                val (parsedVid, _) = BookCampManager.parseYouTubeUrlIds(currentUrl)
-                                if (parsedVid.length == 11) {
-                                    liveActiveVideoId = parsedVid
-                                }
-                            },
-                            onEmbedRestricted = {
-                                if (!useMobileWatchFallback && activeEpisode.videoId.length == 11) {
-                                    useMobileWatchFallback = true
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-
-                // ── 3. Slim Controls Strip (Prev/Next Episode + Collapse + AdBlock + Mode + Done + YouTube) ──
-                Surface(
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 8.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val currentIdx = safeEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
-                        IconButton(
-                            onClick = {
-                                if (currentIdx > 0) selectEpisode(safeEpisodes[currentIdx - 1])
-                            },
-                            enabled = currentIdx > 0,
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.ChevronLeft, contentDescription = "Önceki Ders", modifier = Modifier.size(18.dp))
-                        }
-                        Text(
-                            text = "${activeEpisode.dayNumber}/${safeEpisodes.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
-                        )
-                        IconButton(
-                            onClick = {
-                                if (currentIdx in 0 until safeEpisodes.lastIndex) selectEpisode(safeEpisodes[currentIdx + 1])
-                            },
-                            enabled = currentIdx in 0 until safeEpisodes.lastIndex,
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(Icons.Default.ChevronRight, contentDescription = "Sonraki Ders", modifier = Modifier.size(18.dp))
-                        }
-
-                        // Collapse / Expand video player toggle for maximum AI reading comfort
-                        Surface(
-                            onClick = { isVideoCollapsed = !isVideoCollapsed },
-                            shape = RoundedCornerShape(8.dp),
-                            color = colorScheme.surface,
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isVideoCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                                    contentDescription = if (isVideoCollapsed) "Videoyu Büyüt" else "Videoyu Küçült",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = if (isVideoCollapsed) "Büyüt" else "Küçült",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 10.sp,
-                                    color = colorScheme.onSurface
-                                )
-                            }
-                        }
-
-                        // Ad Blocker quick toggle
-                        Surface(
-                            onClick = {
-                                val nextVal = !adBlockerEnabled
-                                UserAiPreferences.setVideoAdBlockerEnabled(context, nextVal)
-                                Toast.makeText(
-                                    context,
-                                    if (nextVal) "Reklam engelleyici açıldı" else "Reklam engelleyici kapatıldı",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surface,
-                            border = BorderStroke(
-                                1.dp,
-                                if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.5f) else colorScheme.outlineVariant
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Shield,
-                                    contentDescription = "Reklam Engelleyici",
-                                    tint = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Text(
-                                    text = if (adBlockerEnabled) "Reklamsız" else "Reklam",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        // Embed <-> Mobile Watch mode switch
-                        if (activeEpisode.videoId.length == 11) {
-                            Surface(
-                                onClick = { useMobileWatchFallback = !useMobileWatchFallback },
-                                shape = RoundedCornerShape(8.dp),
-                                color = colorScheme.surface,
-                                border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SwapHoriz,
-                                        contentDescription = "Oynatıcı",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Text(
-                                        text = if (useMobileWatchFallback) "Sade" else "Tam",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontSize = 10.sp,
-                                        color = colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-
-                        // Paste custom link
-                        Surface(
-                            onClick = {
-                                customUrlInput = activeVideoUrlWithTimestamp(0)
-                                showPasteLinkDialog = true
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = colorScheme.surface,
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(Icons.Default.Link, contentDescription = "Link", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
-                                Text("Link", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
-                            }
-                        }
-
-                        if (onMarkCompleted != null) {
-                            Surface(
-                                onClick = { onMarkCompleted(activeEpisode) },
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFF10B981).copy(alpha = 0.14f),
-                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.45f))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Icon(Icons.Default.Check, contentDescription = "Tamamla", tint = Color(0xFF10B981), modifier = Modifier.size(12.dp))
-                                    Text("Bitti", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
-                                }
-                            }
-                        }
-
-                        Surface(
-                            onClick = {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds)))
-                                    )
-                                }
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = colorScheme.primary,
-                            contentColor = colorScheme.onPrimary
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
-                            ) {
-                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "YouTube", modifier = Modifier.size(12.dp))
-                                Text("YouTube", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-
-                // ── 4. Spacious Lower Workspace (AI Asistan | Hızlı Not | Bölümler) ──
+                // ── LAYER 1: Main Full-Area Video Player Layout ──
                 Column(
                     modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxSize()
+                        .then(
+                            if (!isInFullscreen) Modifier.statusBarsPadding().navigationBarsPadding()
+                            else Modifier
+                        )
                 ) {
-                    // Compact Tab Row
-                    val tabItems = remember(safeEpisodes.size) {
-                        buildList {
-                            add(Triple(0, "AI Asistan", Icons.Default.AutoAwesome))
-                            add(Triple(1, "Hızlı Not", Icons.Default.EditNote))
-                            if (safeEpisodes.size > 1) {
-                                add(Triple(2, "Bölümler (${safeEpisodes.size})", Icons.Default.PlaylistPlay))
-                            }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        tabItems.forEach { (tabId, label, icon) ->
-                            val selected = activeTab == tabId
-                            Surface(
-                                onClick = { activeTab = tabId },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (selected) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
-                                )
+                    // Slim Top Bar (hidden cleanly in Fullscreen)
+                    if (!isInFullscreen) {
+                        Surface(
+                            color = colorScheme.surface,
+                            tonalElevation = 2.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    IconButton(
+                                        onClick = onDismiss,
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                            contentDescription = "Kapat",
+                                            tint = colorScheme.onSurface,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = campTitle,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // Compact Live Focus Timer Pill
+                                Surface(
+                                    onClick = { toggleFocusTimerFromStudio() },
+                                    shape = RoundedCornerShape(50),
+                                    color = if (isFocusing) colorScheme.primaryContainer else colorScheme.surfaceVariant,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isFocusing) colorScheme.primary else colorScheme.outlineVariant
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isFocusing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                            contentDescription = if (isFocusing) "Duraklat" else "Odak Başlat",
+                                            tint = if (isFocusing) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = if (isFocusing || isPaused) formattedTimer else "Odak",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isFocusing) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                IconButton(
+                                    onClick = { manualFullscreen = true },
+                                    modifier = Modifier.size(34.dp)
                                 ) {
                                     Icon(
-                                        imageVector = icon,
-                                        contentDescription = null,
-                                        tint = if (selected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (selected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        imageVector = Icons.Default.Fullscreen,
+                                        contentDescription = "Tam Ekran",
+                                        tint = colorScheme.onSurface,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
                         }
-                    }
 
-                    when (activeTab) {
-                        0 -> {
-                            if (!studioAiEnabled) {
-                                Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth(),
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
+                        // Slim Controls Strip (Prev/Next + Episodes + AdBlock + Player Mode + Link + Done + YouTube)
+                        Surface(
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val currentIdx = safeEpisodes.indexOfFirst { it.dayNumber == activeEpisode.dayNumber }
+                                IconButton(
+                                    onClick = { if (currentIdx > 0) selectEpisode(safeEpisodes[currentIdx - 1]) },
+                                    enabled = currentIdx > 0,
+                                    modifier = Modifier.size(24.dp)
                                 ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(18.dp),
-                                        verticalArrangement = Arrangement.Center,
-                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    Icon(Icons.Default.ChevronLeft, contentDescription = "Önceki Ders", modifier = Modifier.size(18.dp))
+                                }
+                                Text(
+                                    text = "${activeEpisode.dayNumber}/${safeEpisodes.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                IconButton(
+                                    onClick = { if (currentIdx in 0 until safeEpisodes.lastIndex) selectEpisode(safeEpisodes[currentIdx + 1]) },
+                                    enabled = currentIdx in 0 until safeEpisodes.lastIndex,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.ChevronRight, contentDescription = "Sonraki Ders", modifier = Modifier.size(18.dp))
+                                }
+
+                                if (safeEpisodes.size > 1) {
+                                    Surface(
+                                        onClick = {
+                                            popupTab = 2
+                                            isAiPopupOpen = true
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = colorScheme.surface,
+                                        border = BorderStroke(1.dp, colorScheme.outlineVariant)
                                     ) {
-                                        Text(
-                                            text = "Video Stüdyosu AI Asistanı Kapalı",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = "Ayarlar > Yapay Zeka, API & Video Stüdyosu bölümünden dilediğin zaman açabilirsin.",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        OutlinedButton(
-                                            onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
-                                            shape = RoundedCornerShape(10.dp)
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
                                         ) {
-                                            Text("Stüdyo AI'yı Şimdi Aç")
+                                            Icon(Icons.Default.PlaylistPlay, contentDescription = "Bölümler", tint = colorScheme.primary, modifier = Modifier.size(13.dp))
+                                            Text("Bölümler", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
                                         }
                                     }
                                 }
-                            } else {
-                                val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
 
-                                // ── Spacious AI Assistant Response Canvas (Always Prominent!) ──
+                                // Ad Blocker toggle
                                 Surface(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxWidth()
-                                        .heightIn(min = 120.dp),
-                                    shape = RoundedCornerShape(14.dp),
-                                    color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                    onClick = {
+                                        val nextVal = !adBlockerEnabled
+                                        UserAiPreferences.setVideoAdBlockerEnabled(context, nextVal)
+                                        Toast.makeText(
+                                            context,
+                                            if (nextVal) "Reklam engelleyici açıldı" else "Reklam engelleyici kapatıldı",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surface,
+                                    border = BorderStroke(1.dp, if (adBlockerEnabled) colorScheme.primary.copy(alpha = 0.5f) else colorScheme.outlineVariant)
                                 ) {
-                                    if (aiAnswer.isBlank() && !isAiLoading) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxSize()
-                                                .verticalScroll(rememberScrollState())
-                                                .padding(14.dp),
-                                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Text(
-                                                text = "İzlediğin video ve aktif süre ($liveTimeLabel) AI asistanına bağlı. Anlamadığın formülü veya dakikayı doğrudan sorabilirsin.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = colorScheme.onSurfaceVariant
-                                            )
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Shield,
+                                            contentDescription = "Reklam Engelleyici",
+                                            tint = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Text(
+                                            text = if (adBlockerEnabled) "Reklamsız" else "Reklam",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (adBlockerEnabled) colorScheme.primary else colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
 
-                                            // Live Timestamp Chip + Concise Quick Prompts inside empty canvas
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .horizontalScroll(rememberScrollState()),
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                if (activeEpisode.videoId.length == 11) {
+                                    Surface(
+                                        onClick = { useMobileWatchFallback = !useMobileWatchFallback },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = colorScheme.surface,
+                                        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(Icons.Default.SwapHoriz, contentDescription = "Oynatıcı", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
+                                            Text(if (useMobileWatchFallback) "Sade" else "Tam", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    onClick = {
+                                        customUrlInput = activeVideoUrlWithTimestamp(0)
+                                        showPasteLinkDialog = true
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = colorScheme.surface,
+                                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(Icons.Default.Link, contentDescription = "Link", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
+                                        Text("Link", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
+                                    }
+                                }
+
+                                if (onMarkCompleted != null) {
+                                    Surface(
+                                        onClick = { onMarkCompleted(activeEpisode) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFF10B981).copy(alpha = 0.14f),
+                                        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.45f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(Icons.Default.Check, contentDescription = "Tamamla", tint = Color(0xFF10B981), modifier = Modifier.size(12.dp))
+                                            Text("Bitti", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    onClick = {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(activeVideoUrlWithTimestamp(livePlaybackSeconds)))
+                                            )
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = colorScheme.primary,
+                                    contentColor = colorScheme.onPrimary
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "YouTube", modifier = Modifier.size(12.dp))
+                                        Text("YouTube", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Full-Area Video Player Viewport (fills remaining screen cleanly!)
+                    val playerUrl = remember(activeEpisode.videoId, activeEpisode.playlistId, activeEpisode.dayNumber, adBlockerEnabled, useMobileWatchFallback) {
+                        if (useMobileWatchFallback && activeEpisode.videoId.length == 11) {
+                            activeEpisode.buildMobileWatchUrl(livePlaybackSeconds)
+                        } else {
+                            activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true)
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .clipToBounds()
+                            .background(Color.Black),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isResolvingVideo) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = colorScheme.primary,
+                                    strokeWidth = 2.5.dp
+                                )
+                                Text(
+                                    text = "Ders videosu hazırlanıyor...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+                        } else {
+                            DistractionFreeYouTubeWebView(
+                                url = playerUrl,
+                                adBlockerEnabled = adBlockerEnabled,
+                                onWebViewCreated = { activeWebViewRef = it },
+                                onPlaybackTelemetry = { seconds, title, currentUrl ->
+                                    if (seconds >= 0) livePlaybackSeconds = seconds
+                                    if (title.isNotBlank() && !title.equals("YouTube", ignoreCase = true)) {
+                                        liveVideoTitle = title.removeSuffix(" - YouTube").trim()
+                                    }
+                                    val (parsedVid, _) = BookCampManager.parseYouTubeUrlIds(currentUrl)
+                                    if (parsedVid.length == 11) {
+                                        liveActiveVideoId = parsedVid
+                                    }
+                                },
+                                onEmbedRestricted = {
+                                    if (!useMobileWatchFallback && activeEpisode.videoId.length == 11) {
+                                        useMobileWatchFallback = true
+                                    }
+                                },
+                                onEnterCustomFullscreen = { view, callback ->
+                                    customFullscreenView = view
+                                    customFullscreenCallback = callback
+                                },
+                                onExitCustomFullscreen = {
+                                    customFullscreenView = null
+                                    customFullscreenCallback = null
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+
+                // ── LAYER 2: Real WebView Native Fullscreen Custom View (fills 100% of screen!) ──
+                customFullscreenView?.let { fsView ->
+                    AndroidView(
+                        factory = { ctx ->
+                            FrameLayout(ctx).apply {
+                                setBackgroundColor(android.graphics.Color.BLACK)
+                                (fsView.parent as? ViewGroup)?.removeView(fsView)
+                                addView(
+                                    fsView,
+                                    FrameLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                )
+                            }
+                        },
+                        update = { container ->
+                            if (fsView.parent !== container) {
+                                (fsView.parent as? ViewGroup)?.removeView(fsView)
+                                container.removeAllViews()
+                                container.addView(
+                                    fsView,
+                                    FrameLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                // Discreet Exit Fullscreen pill (top-left) whenever in fullscreen
+                if (isInFullscreen) {
+                    Surface(
+                        onClick = { exitFullscreen() },
+                        shape = RoundedCornerShape(50),
+                        color = Color.Black.copy(alpha = 0.58f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FullscreenExit,
+                                contentDescription = "Tam Ekrandan Çık",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Çık",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+
+                // ── LAYER 3: Compact Floating AI Chat / Note / Episodes Popup (opens near AI Orb!) ──
+                val popupAlignment = if (orbOffsetX > containerWidthPx * 0.45f) {
+                    if (orbOffsetY > containerHeightPx * 0.45f) Alignment.BottomEnd else Alignment.TopEnd
+                } else {
+                    if (orbOffsetY > containerHeightPx * 0.45f) Alignment.BottomStart else Alignment.TopStart
+                }
+
+                AnimatedVisibility(
+                    visible = isAiPopupOpen,
+                    enter = fadeIn() + scaleIn(initialScale = 0.90f),
+                    exit = fadeOut() + scaleOut(targetScale = 0.92f),
+                    modifier = Modifier
+                        .align(popupAlignment)
+                        .imePadding()
+                        .padding(
+                            start = 12.dp,
+                            end = 12.dp,
+                            top = if (isInFullscreen) 56.dp else 64.dp,
+                            bottom = 78.dp
+                        )
+                ) {
+                    Surface(
+                        modifier = Modifier
+                            .widthIn(min = 280.dp, max = 380.dp)
+                            .fillMaxWidth(0.92f)
+                            .heightIn(min = 240.dp, max = (maxHeight * 0.62f).coerceAtLeast(280.dp)),
+                        shape = RoundedCornerShape(22.dp),
+                        color = colorScheme.surface.copy(alpha = 0.97f),
+                        border = BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                        shadowElevation = 14.dp,
+                        tonalElevation = 6.dp
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Compact Popup Header
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "Stüdyo AI",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = colorScheme.primary.copy(alpha = 0.14f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(Icons.Default.AccessTime, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(11.dp))
+                                            Text(
+                                                text = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { isAiPopupOpen = false },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Kapat", modifier = Modifier.size(17.dp))
+                                }
+                            }
+
+                            // Mini Tab Selector (AI | Not | Bölümler)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val miniTabs = buildList {
+                                    add(Triple(0, "AI Asistan", Icons.Default.AutoAwesome))
+                                    add(Triple(1, "Hızlı Not", Icons.Default.EditNote))
+                                    if (safeEpisodes.size > 1) add(Triple(2, "Bölümler", Icons.Default.PlaylistPlay))
+                                }
+                                miniTabs.forEach { (id, label, icon) ->
+                                    val sel = popupTab == id
+                                    Surface(
+                                        onClick = { popupTab = id },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (sel) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                        border = BorderStroke(1.dp, if (sel) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(vertical = 5.dp, horizontal = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            Icon(icon, contentDescription = null, tint = if (sel) colorScheme.primary else colorScheme.onSurfaceVariant, modifier = Modifier.size(13.dp))
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = label,
+                                                fontSize = 10.sp,
+                                                fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (sel) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Popup Body Content
+                            when (popupTab) {
+                                0 -> {
+                                    if (!studioAiEnabled) {
+                                        Box(
+                                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Surface(
-                                                    onClick = {
-                                                        aiQuestion = if (livePlaybackSeconds > 0) {
-                                                            "$liveTimeLabel dakikasındaki formülü/adımı neden öyle yaptık? "
-                                                        } else {
-                                                            "4.5 dakikadaki formül neden öyle? "
-                                                        }
-                                                    },
-                                                    shape = RoundedCornerShape(9.dp),
-                                                    color = colorScheme.primary.copy(alpha = 0.14f),
-                                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
+                                                Text("Video Stüdyosu AI Kapalı", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                OutlinedButton(
+                                                    onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
+                                                    shape = RoundedCornerShape(10.dp)
                                                 ) {
-                                                    Row(
-                                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Default.AccessTime,
-                                                            contentDescription = null,
-                                                            tint = colorScheme.primary,
-                                                            modifier = Modifier.size(13.dp)
-                                                        )
-                                                        Text(
-                                                            text = if (livePlaybackSeconds > 0) "Şu Anı Sor ($liveTimeLabel)" else "Dakikayı Sor",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = colorScheme.primary
-                                                        )
-                                                    }
-                                                }
-                                                listOf(
-                                                    "Bu dersteki formülleri adım adım çıkar",
-                                                    "Konunun püf noktalarını özetle",
-                                                    "ÖSYM bu konudan nasıl sorar?"
-                                                ).forEach { chipPrompt ->
-                                                    Surface(
-                                                        onClick = {
-                                                            aiQuestion = chipPrompt
-                                                            triggerAiTutorQuestion(chipPrompt)
-                                                        },
-                                                        shape = RoundedCornerShape(9.dp),
-                                                        color = colorScheme.surface,
-                                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
-                                                    ) {
-                                                        Text(
-                                                            text = chipPrompt,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = colorScheme.onSurface,
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                                        )
-                                                    }
+                                                    Text("Stüdyo AI'yı Aç", fontSize = 12.sp)
                                                 }
                                             }
                                         }
                                     } else {
-                                        Column(
+                                        val liveTimeLabel = BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)
+                                        // Scrollable AI Answer Box
+                                        Surface(
                                             modifier = Modifier
-                                                .fillMaxSize()
-                                                .padding(12.dp)
-                                                .verticalScroll(rememberScrollState()),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                .weight(1f)
+                                                .fillMaxWidth(),
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.35f))
                                         ) {
-                                            if (isAiLoading && aiAnswer.isBlank()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(10.dp)
+                                            ) {
+                                                when {
+                                                    isAiLoading && aiAnswer.isBlank() -> {
+                                                        Row(
+                                                            modifier = Modifier.align(Alignment.Center),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                        ) {
+                                                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                                            Text("AI yanıt hazırlıyor...", style = MaterialTheme.typography.bodySmall)
+                                                        }
+                                                    }
+                                                    aiAnswer.isBlank() -> {
+                                                        Column(
+                                                            modifier = Modifier.align(Alignment.Center),
+                                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = "Takıldığın dakikayı veya formülü sor, video durmadan hemen yanıtlayayım.",
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = colorScheme.onSurfaceVariant
+                                                            )
+                                                            Surface(
+                                                                onClick = {
+                                                                    val q = "$liveTimeLabel civarında anlatılan kısmı adım adım özetler misin?"
+                                                                    aiQuestion = q
+                                                                    triggerAiTutorQuestion(q)
+                                                                },
+                                                                shape = RoundedCornerShape(10.dp),
+                                                                color = colorScheme.primary.copy(alpha = 0.12f),
+                                                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
+                                                            ) {
+                                                                Text(
+                                                                    text = "Şu anki ($liveTimeLabel) kısmı açıkla",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = colorScheme.primary,
+                                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                    else -> {
+                                                        Column(
+                                                            modifier = Modifier
+                                                                .fillMaxSize()
+                                                                .verticalScroll(rememberScrollState()),
+                                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            SelectionContainer {
+                                                                RichSolutionContent(
+                                                                    text = aiAnswer,
+                                                                    textColor = colorScheme.onSurface,
+                                                                    accentColor = colorScheme.primary,
+                                                                    formulaBackground = colorScheme.surface
+                                                                )
+                                                            }
+                                                            if (!isAiLoading) {
+                                                                TextButton(
+                                                                    onClick = {
+                                                                        if (!aiSavedToNotes) {
+                                                                            saveTextToNotes(
+                                                                                noteTitle = "$subject • ${activeEpisode.topicTitle} (AI)",
+                                                                                bodyText = aiAnswer
+                                                                            ) {
+                                                                                aiSavedToNotes = true
+                                                                                Toast.makeText(context, "Notlara kaydedildi", Toast.LENGTH_SHORT).show()
+                                                                            }
+                                                                        }
+                                                                    },
+                                                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                                                ) {
+                                                                    Icon(
+                                                                        imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
+                                                                        contentDescription = null,
+                                                                        modifier = Modifier.size(14.dp)
+                                                                    )
+                                                                    Spacer(modifier = Modifier.width(4.dp))
+                                                                    Text(if (aiSavedToNotes) "Kaydedildi" else "Nota Kaydet", fontSize = 11.sp)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        if (showMathPanel) {
+                                            MathSymbolKeyboardPanel(
+                                                onInsertSymbol = { sym ->
+                                                    aiQuestion = MathSymbolCatalog.insertAtEnd(aiQuestion, sym)
+                                                },
+                                                onClose = { showMathPanel = false }
+                                            )
+                                        }
+
+                                        // Compact Input Row
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            MathSymbolToggleButton(
+                                                expanded = showMathPanel,
+                                                onToggle = { showMathPanel = !showMathPanel }
+                                            )
+                                            OutlinedTextField(
+                                                value = aiQuestion,
+                                                onValueChange = { aiQuestion = it },
+                                                placeholder = { Text("Dakika veya soru sor...", fontSize = 12.sp) },
+                                                singleLine = true,
+                                                shape = RoundedCornerShape(12.dp),
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Surface(
+                                                onClick = {
+                                                    val q = aiQuestion
+                                                    aiQuestion = ""
+                                                    triggerAiTutorQuestion(q)
+                                                },
+                                                shape = CircleShape,
+                                                color = if (aiQuestion.isNotBlank() && !isAiLoading) colorScheme.primary else colorScheme.surfaceVariant,
+                                                modifier = Modifier.size(38.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Filled.Send,
+                                                        contentDescription = "Gönder",
+                                                        tint = if (aiQuestion.isNotBlank() && !isAiLoading) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                1 -> {
+                                    // Quick Note Tab
+                                    OutlinedTextField(
+                                        value = quickNoteText,
+                                        onValueChange = {
+                                            quickNoteText = it
+                                            noteSavedSuccess = false
+                                        },
+                                        placeholder = { Text("Ders notunu hızlıca yaz...", fontSize = 12.sp) },
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth()
+                                    )
+                                    Button(
+                                        onClick = {
+                                            saveTextToNotes(
+                                                noteTitle = "$subject • ${activeEpisode.dayNumber}. Ders",
+                                                bodyText = quickNoteText
+                                            ) {
+                                                noteSavedSuccess = true
+                                                Toast.makeText(context, "Not kaydedildi", Toast.LENGTH_SHORT).show()
+                                            }
+                                        },
+                                        enabled = quickNoteText.isNotBlank(),
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(if (noteSavedSuccess) "Kaydedildi" else "Notlara Kaydet", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                else -> {
+                                    // Episodes Tab
+                                    LazyColumn(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        items(safeEpisodes, key = { "${it.dayNumber}_${it.videoId}" }) { ep ->
+                                            val isCurrent = ep.dayNumber == activeEpisode.dayNumber
+                                            Surface(
+                                                onClick = {
+                                                    selectEpisode(ep)
+                                                    isAiPopupOpen = false
+                                                },
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = if (isCurrent) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                                border = BorderStroke(1.dp, if (isCurrent) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
                                                 Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
-                                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                                    Icon(
+                                                        imageVector = if (isCurrent) Icons.Default.PlayArrow else Icons.Default.PlayCircleOutline,
+                                                        contentDescription = null,
+                                                        tint = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
                                                     Text(
-                                                        text = "Video bağlamı ve formüller analiz ediliyor...",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = colorScheme.onSurfaceVariant
+                                                        text = "${ep.dayNumber}. ${ep.topicTitle}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (isCurrent) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f)
                                                     )
                                                 }
-                                            } else {
-                                                SelectionContainer {
-                                                    RichSolutionContent(
-                                                        text = aiAnswer,
-                                                        textColor = colorScheme.onSurface,
-                                                        fontSize = 14.sp,
-                                                        lineHeight = 22.sp
-                                                    )
-                                                }
-                                            }
-                                            if (aiAnswer.isNotBlank() && !isAiLoading) {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    TextButton(
-                                                        onClick = {
-                                                            aiAnswer = ""
-                                                            aiQuestion = if (livePlaybackSeconds > 0) {
-                                                                "$liveTimeLabel dakikasındaki adım neden öyle? "
-                                                            } else ""
-                                                        }
-                                                    ) {
-                                                        Text("Yeni Soru")
-                                                    }
-                                                    TextButton(
-                                                        onClick = {
-                                                            saveTextToNotes(
-                                                                noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle})",
-                                                                bodyText = aiAnswer,
-                                                                onDone = { aiSavedToNotes = true }
-                                                            )
-                                                        },
-                                                        enabled = !aiSavedToNotes
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = if (aiSavedToNotes) Icons.Default.CheckCircle else Icons.Default.EditNote,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(15.dp)
-                                                        )
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text(if (aiSavedToNotes) "Kaydedildi" else "Notlara Kaydet")
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Collapsible ∑ Math Symbol Panel docked above input bar
-                                MathSymbolKeyboardPanel(
-                                    visible = showMathPanel,
-                                    onInsertSymbol = { sym ->
-                                        aiQuestion = MathSymbolCatalog.insertSymbol(aiQuestion, sym)
-                                    }
-                                )
-
-                                // Bottom-docked Question Input Bar (Always visible & balanced)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    MathSymbolToggleButton(
-                                        expanded = showMathPanel,
-                                        onClick = { showMathPanel = !showMathPanel }
-                                    )
-                                    OutlinedTextField(
-                                        value = aiQuestion,
-                                        onValueChange = { aiQuestion = it },
-                                        placeholder = {
-                                            Text(
-                                                text = "Örn: 4.5 dakikadaki formül neden öyle?",
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                fontSize = 13.sp
-                                            )
-                                        },
-                                        singleLine = true,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Button(
-                                        onClick = { triggerAiTutorQuestion(aiQuestion) },
-                                        enabled = aiQuestion.isNotBlank() && !isAiLoading,
-                                        shape = RoundedCornerShape(12.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
-                                    ) {
-                                        if (isAiLoading) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(18.dp),
-                                                color = colorScheme.onPrimary,
-                                                strokeWidth = 2.dp
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.AutoMirrored.Filled.Send,
-                                                contentDescription = "Sor",
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        1 -> {
-                            // Tab 2: Quick Note Taking while watching
-                            OutlinedTextField(
-                                value = quickNoteText,
-                                onValueChange = {
-                                    quickNoteText = it
-                                    noteSavedSuccess = false
-                                },
-                                placeholder = {
-                                    Text("${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle}) notlarını buraya yaz...")
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            val stamp = "[${BookCampManager.formatSecondsAsTimestamp(livePlaybackSeconds)}] "
-                                            quickNoteText = if (quickNoteText.isBlank()) stamp else "$quickNoteText\n$stamp"
-                                        },
-                                        shape = RoundedCornerShape(9.dp),
-                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                                    ) {
-                                        Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(14.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Zaman Ekle", fontSize = 11.sp)
-                                    }
-                                    if (noteSavedSuccess) {
-                                        Icon(
-                                            imageVector = Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            tint = colorScheme.primary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = "Kaydedildi",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = colorScheme.primary,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    }
-                                }
-
-                                Button(
-                                    onClick = {
-                                        saveTextToNotes(
-                                            noteTitle = "$campTitle • ${activeEpisode.dayNumber}. Ders (${activeEpisode.topicTitle})",
-                                            bodyText = quickNoteText,
-                                            onDone = { noteSavedSuccess = true }
-                                        )
-                                    },
-                                    enabled = quickNoteText.isNotBlank(),
-                                    shape = RoundedCornerShape(10.dp)
-                                ) {
-                                    Text("Notlara Kaydet", fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-
-                        else -> {
-                            // Tab 3: Real Playlist Episodes Selector (1-tap exact video switch)
-                            LazyColumn(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth(),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                items(safeEpisodes, key = { "${it.dayNumber}_${it.videoId}" }) { ep ->
-                                    val isCurrent = ep.dayNumber == activeEpisode.dayNumber
-                                    Surface(
-                                        onClick = {
-                                            selectEpisode(ep)
-                                            if (studioAiEnabled) activeTab = 0
-                                        },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (isCurrent) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (isCurrent) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.4f)
-                                        ),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(horizontal = 12.dp, vertical = 9.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isCurrent) Icons.Default.PlayArrow else Icons.Default.PlayCircleOutline,
-                                                contentDescription = null,
-                                                tint = if (isCurrent) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(
-                                                    text = "${ep.dayNumber}. Ders • ${ep.topicTitle}",
-                                                    style = MaterialTheme.typography.labelMedium,
-                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                                    color = if (isCurrent) colorScheme.onPrimaryContainer else colorScheme.onSurface,
-                                                    maxLines = 2,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                            if (isCurrent) {
-                                                Text(
-                                                    text = "Oynuyor",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = colorScheme.primary
-                                                )
                                             }
                                         }
                                     }
@@ -1231,6 +1352,43 @@ fun CampVideoStudyStudioDialog(
                         }
                     }
                 }
+
+                // ── LAYER 4: Always-On-Top Draggable Floating AI Orb (Normal + Fullscreen!) ──
+                if (orbOffsetX >= 0f && orbOffsetY >= 0f) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isAiPopupOpen) colorScheme.primaryContainer else colorScheme.primary,
+                        contentColor = if (isAiPopupOpen) colorScheme.primary else colorScheme.onPrimary,
+                        border = BorderStroke(1.5.dp, colorScheme.onPrimary.copy(alpha = 0.45f)),
+                        shadowElevation = 10.dp,
+                        modifier = Modifier
+                            .offset { IntOffset(orbOffsetX.roundToInt(), orbOffsetY.roundToInt()) }
+                            .size(orbSizeDp)
+                            .pointerInput(containerWidthPx, containerHeightPx) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val maxX = (containerWidthPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx)
+                                    val maxY = (containerHeightPx - orbSizePx - edgePadPx).coerceAtLeast(edgePadPx)
+                                    orbOffsetX = (orbOffsetX + dragAmount.x).coerceIn(edgePadPx, maxX)
+                                    orbOffsetY = (orbOffsetY + dragAmount.y).coerceIn(edgePadPx, maxY)
+                                }
+                            }
+                            .clickable {
+                                isAiPopupOpen = !isAiPopupOpen
+                            }
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isAiPopupOpen) Icons.Default.Close else Icons.Default.AutoAwesome,
+                                contentDescription = "Stüdyo AI",
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ── LAYER 5: Smartwatch Wellness Popup Overlay (visible inside Video Studio too!) ──
+                WellnessReminderSmartwatchOverlay()
             }
         }
     }
@@ -1297,14 +1455,19 @@ private const val STUDIO_AD_BLOCKER_JS = """
 private fun DistractionFreeYouTubeWebView(
     url: String,
     adBlockerEnabled: Boolean,
+    onWebViewCreated: (WebView) -> Unit,
     onPlaybackTelemetry: (seconds: Int, title: String, currentUrl: String) -> Unit,
     onEmbedRestricted: () -> Unit,
+    onEnterCustomFullscreen: (View, WebChromeClient.CustomViewCallback?) -> Unit,
+    onExitCustomFullscreen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val currentAdBlock by rememberUpdatedState(adBlockerEnabled)
     val currentOnTelemetry by rememberUpdatedState(onPlaybackTelemetry)
     val currentOnEmbedRestricted by rememberUpdatedState(onEmbedRestricted)
+    val currentOnEnterFs by rememberUpdatedState(onEnterCustomFullscreen)
+    val currentOnExitFs by rememberUpdatedState(onExitCustomFullscreen)
 
     val webView = remember(context) {
         WebView(context).apply {
@@ -1340,7 +1503,20 @@ private fun DistractionFreeYouTubeWebView(
                 },
                 "SharkStudioBridge"
             )
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (view != null) {
+                        currentOnEnterFs(view, callback)
+                    } else {
+                        super.onShowCustomView(view, callback)
+                    }
+                }
+
+                override fun onHideCustomView() {
+                    currentOnExitFs()
+                    super.onHideCustomView()
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(
                     view: WebView?,
@@ -1376,7 +1552,7 @@ private fun DistractionFreeYouTubeWebView(
                     return !allowed
                 }
             }
-        }
+        }.also { onWebViewCreated(it) }
     }
 
     DisposableEffect(webView) {
@@ -1405,10 +1581,11 @@ private fun DistractionFreeYouTubeWebView(
 }
 
 /**
- * Mark 62 Real-Playlist Video Binding Dialog:
- * - Searches YouTube for genuinely relevant top-ranked playlists ("YouTube'da Bul") without fabricating fake camps.
- * - Absorbs REAL YouTube playlist videos (stripping intro/promo videos, keeping exact real order, count & videoIds).
- * - Lets students jump directly to any real lesson (e.g. Lesson 4) or detach video support cleanly.
+ * Mark 63 Hybrid AI-Driven Book Playlist Discovery & Binding Dialog:
+ * - Searches YouTube in background using Hybrid AI + heuristic ranking to find direct book playlists
+ *   AND subject-appropriate camps when a book has no official playlist.
+ * - Shows all discovered candidates with a clear "Önerilen" badge on index 0 so the student can choose freely.
+ * - Absorbs REAL YouTube playlist videos (stripping intros, keeping exact real lesson order & videoIds).
  */
 @Composable
 fun ResourceCampConfigDialog(
@@ -1428,14 +1605,46 @@ fun ResourceCampConfigDialog(
     var youtubeUrl by remember(initialBinding) { mutableStateOf(initialBinding.youtubeUrl) }
     var loadedEpisodes by remember(initialBinding) { mutableStateOf(initialBinding.episodes) }
     var isFromRealPlaylist by remember(initialBinding) { mutableStateOf(initialBinding.isFromRealPlaylist) }
+    var candidatePlaylists by remember(initialBinding) { mutableStateOf(initialBinding.candidatePlaylists) }
+    var hasDirectBookPlaylist by remember(initialBinding) { mutableStateOf(initialBinding.hasDirectBookPlaylist) }
 
     var isFetchingPlaylist by remember { mutableStateOf(false) }
     var isAutoSearching by remember { mutableStateOf(false) }
+    var selectingCandidateId by remember { mutableStateOf<String?>(null) }
     var isDistributing by remember { mutableStateOf(false) }
-    var statusNotice by remember { mutableStateOf<String?>(null) }
+    var statusNotice by remember(initialBinding) {
+        mutableStateOf(initialBinding.discoveryStatusMessage.takeIf { it.isNotBlank() })
+    }
 
     val (parsedVid, parsedPlId) = remember(youtubeUrl) { BookCampManager.parseYouTubeUrlIds(youtubeUrl) }
     val hasValidMedia = loadedEpisodes.any { it.videoId.length == 11 } || parsedVid.length == 11 || parsedPlId.isNotBlank()
+
+    // Automatically trigger hybrid background search on open if no candidates cached yet
+    LaunchedEffect(resource.id) {
+        if (candidatePlaylists.isEmpty() && !initialBinding.videoCheckCompleted) {
+            isAutoSearching = true
+            val discovered = BookCampManager.discoverAndSyncRealCampForResource(
+                context = context,
+                resource = resource,
+                forceRefresh = false
+            )
+            isAutoSearching = false
+            candidatePlaylists = discovered.candidatePlaylists
+            hasDirectBookPlaylist = discovered.hasDirectBookPlaylist
+            if (discovered.discoveryStatusMessage.isNotBlank()) {
+                statusNotice = discovered.discoveryStatusMessage
+            }
+            if (discovered.hasVerifiedVideoSupport) {
+                campTitle = discovered.campTitle
+                instructor = discovered.instructor
+                youtubeUrl = discovered.youtubeUrl
+                loadedEpisodes = discovered.episodes
+                isFromRealPlaylist = discovered.isFromRealPlaylist
+                currentDayText = discovered.currentDay.toString()
+                onSaved(discovered)
+            }
+        }
+    }
 
     fun buildAndSaveBinding(): ResourceCampBinding {
         val total = loadedEpisodes.size.coerceAtLeast(1)
@@ -1449,7 +1658,10 @@ fun ResourceCampConfigDialog(
             currentDay = cur,
             youtubeUrl = youtubeUrl,
             realEpisodes = loadedEpisodes,
-            isFromRealPlaylist = isFromRealPlaylist && loadedEpisodes.isNotEmpty()
+            isFromRealPlaylist = isFromRealPlaylist && loadedEpisodes.isNotEmpty(),
+            hasDirectBookPlaylist = hasDirectBookPlaylist,
+            discoveryStatusMessage = statusNotice.orEmpty(),
+            candidatePlaylists = candidatePlaylists
         )
     }
 
@@ -1458,7 +1670,7 @@ fun ResourceCampConfigDialog(
         title = {
             Column {
                 Text(
-                    text = "Video Oynatma Listesi Bağlantısı",
+                    text = "Video Kampı & Oynatma Listesi",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -1476,12 +1688,12 @@ fun ResourceCampConfigDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // 1. Auto-search YouTube strictly for this book
+                // 1. Hybrid AI-Assisted Background Discovery button
                 OutlinedButton(
                     onClick = {
                         if (isAutoSearching || isFetchingPlaylist) return@OutlinedButton
                         isAutoSearching = true
-                        statusNotice = "YouTube'da bu kitaba uygun liste aranıyor..."
+                        statusNotice = "Hibrit AI motoru YouTube'da bu kitap ve ders için en uygun kampları arıyor..."
                         scope.launch {
                             val discovered = BookCampManager.discoverAndSyncRealCampForResource(
                                 context = context,
@@ -1489,6 +1701,15 @@ fun ResourceCampConfigDialog(
                                 forceRefresh = true
                             )
                             isAutoSearching = false
+                            candidatePlaylists = discovered.candidatePlaylists
+                            hasDirectBookPlaylist = discovered.hasDirectBookPlaylist
+                            statusNotice = discovered.discoveryStatusMessage.ifBlank {
+                                if (discovered.hasVerifiedVideoSupport) {
+                                    "Oynatma listesi eşleştirildi (${discovered.episodes.size} ders)."
+                                } else {
+                                    "Bu kitap için doğrudan liste bulunamadı; önerilen kamplardan seçebilir veya link ekleyebilirsin."
+                                }
+                            }
                             if (discovered.hasVerifiedVideoSupport) {
                                 campTitle = discovered.campTitle
                                 instructor = discovered.instructor
@@ -1496,12 +1717,10 @@ fun ResourceCampConfigDialog(
                                 loadedEpisodes = discovered.episodes
                                 isFromRealPlaylist = discovered.isFromRealPlaylist
                                 currentDayText = discovered.currentDay.toString()
-                                statusNotice = "Gerçek liste bulundu: ${discovered.episodes.size} ders videosu (tanıtımlar filtrelendi)."
                                 onSaved(discovered)
                             } else {
                                 loadedEpisodes = emptyList()
                                 isFromRealPlaylist = false
-                                statusNotice = "Bu kitap için YouTube ilk sıralarında alakalı video listesi bulunamadı. İstersen aşağıya kendi YouTube linkini yapıştırabilirsin."
                             }
                         }
                     },
@@ -1514,10 +1733,145 @@ fun ResourceCampConfigDialog(
                         Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
                     }
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("YouTube'da Bu Kitap İçin Ara", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("AI ile Uygun Oynatma Listelerini Bul", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
 
-                // 2. Manual YouTube Playlist / Video Link + Fetch Real Videos button
+                if (!statusNotice.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = colorScheme.primaryContainer.copy(alpha = 0.35f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = statusNotice!!,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                        )
+                    }
+                }
+
+                // 2. Hybrid Discovered Candidate List ("Önerilen" + Selectable Direct / Subject Camps)
+                if (candidatePlaylists.isNotEmpty()) {
+                    Text(
+                        text = if (hasDirectBookPlaylist) {
+                            "Bulunan Oynatma Listeleri (Seçmek için dokun)"
+                        } else {
+                            "${resource.subject.ifBlank { "Ders" }} İçin Önerilen Kamplar (Seçmek için dokun)"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.primary
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        candidatePlaylists.take(6).forEach { cand: BookVideoCandidate ->
+                            val isActive = parsedPlId.isNotBlank() && parsedPlId == cand.playlistId
+                            val isSelectingThis = selectingCandidateId == cand.playlistId
+                            Surface(
+                                onClick = {
+                                    if (selectingCandidateId != null) return@Surface
+                                    selectingCandidateId = cand.playlistId
+                                    statusNotice = "\"${cand.title}\" oynatma listesinin gerçek ders videoları çekiliyor..."
+                                    scope.launch {
+                                        val selected = BookCampManager.selectCandidatePlaylistForResource(
+                                            context = context,
+                                            resource = resource,
+                                            candidate = cand
+                                        )
+                                        selectingCandidateId = null
+                                        campTitle = selected.campTitle
+                                        instructor = selected.instructor
+                                        youtubeUrl = selected.youtubeUrl
+                                        loadedEpisodes = selected.episodes
+                                        isFromRealPlaylist = selected.isFromRealPlaylist
+                                        hasDirectBookPlaylist = selected.hasDirectBookPlaylist
+                                        currentDayText = selected.currentDay.toString()
+                                        candidatePlaylists = selected.candidatePlaylists
+                                        statusNotice = selected.discoveryStatusMessage
+                                        onSaved(selected)
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isActive) colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isActive || cand.isRecommended) colorScheme.primary.copy(alpha = 0.65f)
+                                    else colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            if (cand.isRecommended) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = colorScheme.primary
+                                                ) {
+                                                    Text(
+                                                        text = "Önerilen",
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = colorScheme.onPrimary,
+                                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = colorScheme.surface
+                                            ) {
+                                                Text(
+                                                    text = if (cand.isDirectBookMatch) "Kitap Listesi" else "Ders Kampı",
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = cand.title,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        val meta = buildList {
+                                            if (cand.channelName.isNotBlank()) add(cand.channelName)
+                                            if (cand.videoCount > 0) add("${cand.videoCount} video")
+                                        }.joinToString(" • ")
+                                        if (meta.isNotBlank()) {
+                                            Text(
+                                                text = meta,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    if (isSelectingThis) {
+                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    } else if (isActive) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = "Seçili", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 3. Manual YouTube Playlist / Video Link + Fetch Real Videos button
                 OutlinedTextField(
                     value = youtubeUrl,
                     onValueChange = { youtubeUrl = it },
@@ -1591,7 +1945,7 @@ fun ResourceCampConfigDialog(
                                 scope.launch {
                                     val added = BookCampManager.distributeCampToWeeklyPlan(context, saved)
                                     isDistributing = false
-                                    statusNotice = "$added ders haftalık plana eklendi."
+                                    statusNotice = "$added ders esnek sürelerle haftalık plana eklendi."
                                     Toast.makeText(context, "$added ders haftalık plana eklendi", Toast.LENGTH_SHORT).show()
                                 }
                             },
@@ -1628,15 +1982,6 @@ fun ResourceCampConfigDialog(
                             modifier = Modifier.width(96.dp)
                         )
                     }
-                }
-
-                if (!statusNotice.isNullOrBlank()) {
-                    Text(
-                        text = statusNotice!!,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold
-                    )
                 }
 
                 // Real episode preview (tapping selects the exact episode to start from)
@@ -1692,7 +2037,11 @@ fun ResourceCampConfigDialog(
                 if (initialBinding.hasVerifiedVideoSupport) {
                     TextButton(
                         onClick = {
-                            val cleared = BookCampManager.clearResourceVideoBinding(context, resource)
+                            val cleared = BookCampManager.clearResourceVideoBinding(
+                                context = context,
+                                resource = resource,
+                                candidatePlaylists = candidatePlaylists
+                            )
                             onSaved(cleared)
                             onDismiss()
                         },

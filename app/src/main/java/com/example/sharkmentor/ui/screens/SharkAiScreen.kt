@@ -173,6 +173,13 @@ fun SharkAiScreen(
     val detectedEngine by viewModel.detectedEngine.collectAsStateWithLifecycle()
     val lockedEngine by viewModel.lockedEngine.collectAsStateWithLifecycle()
     val pendingHandoff by SharkAiHandoffManager.pendingHandoff.collectAsStateWithLifecycle()
+    val pendingDossierAction by viewModel.pendingDossierAction.collectAsStateWithLifecycle()
+    val openInterviewRequested by com.example.sharkmentor.core.coaching.StudentDossierNavBus.openInterviewRequested.collectAsStateWithLifecycle()
+    val studentDossier by com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(context)
+    }
 
     LaunchedEffect(pendingHandoff) {
         if (pendingHandoff != null) {
@@ -194,7 +201,15 @@ fun SharkAiScreen(
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showChatHistorySheet by rememberSaveable { mutableStateOf(false) }
     var showMathSymbolPanel by rememberSaveable { mutableStateOf(false) }
+    var showDossierInterviewDialog by rememberSaveable { mutableStateOf(false) }
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    LaunchedEffect(openInterviewRequested) {
+        if (openInterviewRequested) {
+            com.example.sharkmentor.core.coaching.StudentDossierNavBus.consumeOpenInterview()
+            showDossierInterviewDialog = true
+        }
+    }
 
     fun createTempPictureUri(ctx: Context): Uri {
         val tempFile = File.createTempFile("shark_ai_capture_", ".jpg", ctx.cacheDir).apply {
@@ -1839,6 +1854,241 @@ fun SharkAiScreen(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Explicit confirmation dialog before mutating or syncing Student Dossier via Shark AI
+        pendingDossierAction?.let { action ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { viewModel.cancelPendingDossierAction() },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = MaterialTheme.colorScheme.surface,
+                title = {
+                    Text(
+                        text = action.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                text = {
+                    Text(
+                        text = action.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { viewModel.confirmPendingDossierAction() },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Onayla")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { viewModel.cancelPendingDossierAction() }) {
+                        Text("İptal")
+                    }
+                }
+            )
+        }
+
+        // 10-Question Interactive Student Dossier Interview ("Öğrenci Dosyası Oluşturma")
+        if (showDossierInterviewDialog) {
+            StudentDossierInterviewDialog(
+                existingAnswers = studentDossier.interviewAnswers,
+                onDismiss = { showDossierInterviewDialog = false },
+                onComplete = { answers ->
+                    showDossierInterviewDialog = false
+                    viewModel.completeDossierInterview(answers)
+                    Toast.makeText(context, "Öğrenci Dosyası oluşturuldu", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StudentDossierInterviewDialog(
+    existingAnswers: Map<String, String>,
+    onDismiss: () -> Unit,
+    onComplete: (Map<String, String>) -> Unit
+) {
+    val questions = com.example.sharkmentor.core.coaching.StudentDossierManager.INTERVIEW_QUESTIONS
+    var currentIndex by remember { mutableIntStateOf(0) }
+    val answersMap = remember {
+        androidx.compose.runtime.mutableStateMapOf<String, String>().apply {
+            putAll(existingAnswers)
+        }
+    }
+    val q = questions[currentIndex.coerceIn(0, questions.lastIndex)]
+    val currentAnswer = answersMap[q.id].orEmpty()
+    val progress = (currentIndex + 1).toFloat() / questions.size.toFloat()
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnClickOutside = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.94f)
+                .widthIn(max = 520.dp)
+                .imePadding(),
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+            tonalElevation = 4.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Öğrenci Dosyası • Soru ${currentIndex + 1}/${questions.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Koçluk Profilini Oluştur",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Kapat",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                androidx.compose.material3.LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                ) {
+                    Text(
+                        text = "Yanıtların cihazında şifreli saklanır; yapay zeka koçuna adın ve kimlik bilgilerin olmadan anonim aktarılır.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+
+                Text(
+                    text = q.prompt,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                if (q.quickOptions.isNotEmpty()) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        q.quickOptions.forEach { opt ->
+                            val isSelected = currentAnswer.equals(opt, ignoreCase = true)
+                            Surface(
+                                onClick = { answersMap[q.id] = opt },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            ) {
+                                Text(
+                                    text = opt,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = currentAnswer,
+                    onValueChange = { answersMap[q.id] = it },
+                    placeholder = {
+                        Text(
+                            text = q.hint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    },
+                    minLines = 2,
+                    maxLines = 4,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (currentIndex > 0) {
+                        TextButton(onClick = { currentIndex-- }) {
+                            Text("Geri")
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (currentIndex < questions.lastIndex) {
+                            TextButton(onClick = { currentIndex++ }) {
+                                Text("Atla")
+                            }
+                            Button(
+                                onClick = { currentIndex++ },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("İleri")
+                            }
+                        } else {
+                            Button(
+                                onClick = { onComplete(answersMap.toMap()) },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Dosyamı Tamamla")
                             }
                         }
                     }

@@ -345,27 +345,10 @@ fun buildSmartTopBarSuggestions(
 ): List<TopBarSuggestionEntry> {
     val result = mutableListOf<TopBarSuggestionEntry>()
 
-    // 1. Long-study wellness reminders (Hydration & Posture) prioritized during active long sessions
-    if (isAnyFocusRunning) {
-        if (settings.hydrationReminderEnabled && elapsedFocusMinutes >= settings.hydrationIntervalMinutes) {
-            result.add(
-                TopBarSuggestionEntry(
-                    text = capitalizeTurkishSentence("${elapsedFocusMinutes} dk oldu, bir bardak su içmeyi unutma"),
-                    action = TopBarSuggestionAction.WellnessReminder("Su molası kaydedildi, zihnin tazelendi.")
-                )
-            )
-        }
-        if (settings.postureReminderEnabled && elapsedFocusMinutes >= settings.postureIntervalMinutes) {
-            result.add(
-                TopBarSuggestionEntry(
-                    text = capitalizeTurkishSentence("Duruşunu kontrol et, sırtını dikleştirip omuzlarını gevşet"),
-                    action = TopBarSuggestionAction.WellnessReminder("Dik duruş kontrol edildi, verimli çalışmalar.")
-                )
-            )
-        }
-    }
+    // Note: Hydration & Posture reminders were promoted to smartwatch-style visual popups + system notifications (Mark 63)
+    // and intentionally removed from the Top Bar text carousel.
 
-    // 2. Contextual in-app suggestions (Weather -> Ambient Sound, Quick In-App Actions)
+    // 1. Contextual in-app suggestions (Weather -> Ambient Sound, Quick In-App Actions)
     if (settings.inAppSuggestionsEnabled) {
         if (weatherState != null) {
             val code = weatherState.currentWeatherCode

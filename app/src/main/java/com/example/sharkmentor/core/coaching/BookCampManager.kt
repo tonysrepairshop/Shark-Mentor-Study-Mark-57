@@ -115,6 +115,17 @@ data class CampDayEpisode(
 }
 
 @Immutable
+data class BookVideoCandidate(
+    val playlistId: String,
+    val title: String,
+    val channelName: String = "",
+    val videoCount: Int = 0,
+    val isDirectBookMatch: Boolean = true,
+    val isRecommended: Boolean = false,
+    val descriptionNote: String = ""
+)
+
+@Immutable
 data class ResourceCampBinding(
     val resourceId: Long,
     val resourceTitle: String,
@@ -130,7 +141,10 @@ data class ResourceCampBinding(
     val isAutoMatched: Boolean = false,
     val hasVerifiedVideoSupport: Boolean = false,
     val isFromRealPlaylist: Boolean = false,
-    val videoCheckCompleted: Boolean = false
+    val videoCheckCompleted: Boolean = false,
+    val hasDirectBookPlaylist: Boolean = false,
+    val discoveryStatusMessage: String = "",
+    val candidatePlaylists: List<BookVideoCandidate> = emptyList()
 ) {
     fun currentEpisode(): CampDayEpisode {
         val safeDay = currentDay.coerceIn(1, totalDays.coerceAtLeast(1))
@@ -1224,7 +1238,10 @@ object BookCampManager {
         customDayTopics: List<String> = emptyList(),
         realEpisodes: List<CampDayEpisode> = emptyList(),
         isFromRealPlaylist: Boolean = realEpisodes.isNotEmpty(),
-        isAutoMatched: Boolean = false
+        isAutoMatched: Boolean = false,
+        hasDirectBookPlaylist: Boolean = isFromRealPlaylist,
+        discoveryStatusMessage: String = "",
+        candidatePlaylists: List<BookVideoCandidate>? = null
     ): ResourceCampBinding {
         ensureLoaded(context)
         val trimmedUrl = youtubeUrl.trim()
@@ -1306,6 +1323,7 @@ object BookCampManager {
 
         val effectiveFirstVideoId = finalEpisodes.firstOrNull { it.videoId.length == 11 }?.videoId
             ?: parsedVideoId
+        val existingCandidates = _bindingsByResourceId.value[resource.id]?.candidatePlaylists.orEmpty()
 
         val binding = ResourceCampBinding(
             resourceId = resource.id,
@@ -1322,7 +1340,10 @@ object BookCampManager {
             isAutoMatched = isAutoMatched,
             hasVerifiedVideoSupport = hasVerifiedVideo,
             isFromRealPlaylist = isFromRealPlaylist,
-            videoCheckCompleted = true
+            videoCheckCompleted = true,
+            hasDirectBookPlaylist = hasDirectBookPlaylist,
+            discoveryStatusMessage = discoveryStatusMessage,
+            candidatePlaylists = candidatePlaylists ?: existingCandidates
         )
 
         val updated = _bindingsByResourceId.value.toMutableMap()
@@ -1334,9 +1355,14 @@ object BookCampManager {
 
     /**
      * Explicitly removes video camp support for [resource] and caches `hasVerifiedVideoSupport = false`
-     * so auto-discovery will not re-attach an unwanted playlist unless the user requests a refresh.
+     * while optionally preserving selectable subject-camp [candidatePlaylists] and an honest [statusMessage].
      */
-    fun clearResourceVideoBinding(context: Context, resource: ResourceEntity): ResourceCampBinding {
+    fun clearResourceVideoBinding(
+        context: Context,
+        resource: ResourceEntity,
+        statusMessage: String = "",
+        candidatePlaylists: List<BookVideoCandidate> = emptyList()
+    ): ResourceCampBinding {
         ensureLoaded(context)
         val cleanUnits = resource.totalUnits.coerceAtLeast(1)
         val cleared = ResourceCampBinding(
@@ -1354,7 +1380,10 @@ object BookCampManager {
             isAutoMatched = false,
             hasVerifiedVideoSupport = false,
             isFromRealPlaylist = false,
-            videoCheckCompleted = true
+            videoCheckCompleted = true,
+            hasDirectBookPlaylist = false,
+            discoveryStatusMessage = statusMessage,
+            candidatePlaylists = candidatePlaylists
         )
         val updated = _bindingsByResourceId.value.toMutableMap()
         updated[resource.id] = cleared
@@ -1499,7 +1528,7 @@ object BookCampManager {
                 subject = binding.subject,
                 topic = taskTopic,
                 dayOfWeek = dayOfWeek,
-                scheduledTime = "10:00 - 11:30",
+                scheduledTime = "Esnek • 90 dk",
                 targetQuestions = targetQuestionsPerDay.coerceAtLeast(30),
                 isCompleted = false,
                 orderIndex = dayOfWeek
@@ -1552,6 +1581,26 @@ object BookCampManager {
                         )
                     }
                 }
+                val candArr = obj.optJSONArray("candidatePlaylists")
+                val candidates = mutableListOf<BookVideoCandidate>()
+                if (candArr != null) {
+                    for (j in 0 until candArr.length()) {
+                        val cObj = candArr.optJSONObject(j) ?: continue
+                        val pid = cObj.optString("playlistId", "")
+                        if (pid.isBlank()) continue
+                        candidates.add(
+                            BookVideoCandidate(
+                                playlistId = pid,
+                                title = cObj.optString("title", ""),
+                                channelName = cObj.optString("channelName", ""),
+                                videoCount = cObj.optInt("videoCount", 0),
+                                isDirectBookMatch = cObj.optBoolean("isDirectBookMatch", true),
+                                isRecommended = cObj.optBoolean("isRecommended", j == 0),
+                                descriptionNote = cObj.optString("descriptionNote", "")
+                            )
+                        )
+                    }
+                }
                 val videoId = obj.optString("videoId", "")
                 val playlistId = obj.optString("playlistId", "")
                 val isAutoMatched = obj.optBoolean("isAutoMatched", false)
@@ -1573,6 +1622,7 @@ object BookCampManager {
                 } else {
                     hasVerified
                 }
+                val hasDirect = obj.optBoolean("hasDirectBookPlaylist", hasVerified)
                 map[resId] = ResourceCampBinding(
                     resourceId = resId,
                     resourceTitle = obj.optString("resourceTitle", ""),
@@ -1588,7 +1638,10 @@ object BookCampManager {
                     isAutoMatched = isAutoMatched,
                     hasVerifiedVideoSupport = hasVerified,
                     isFromRealPlaylist = isFromRealPl,
-                    videoCheckCompleted = checkDone
+                    videoCheckCompleted = checkDone,
+                    hasDirectBookPlaylist = hasDirect,
+                    discoveryStatusMessage = obj.optString("discoveryStatusMessage", ""),
+                    candidatePlaylists = candidates
                 )
             }
             map
@@ -1613,6 +1666,8 @@ object BookCampManager {
             obj.put("hasVerifiedVideoSupport", b.hasVerifiedVideoSupport)
             obj.put("isFromRealPlaylist", b.isFromRealPlaylist)
             obj.put("videoCheckCompleted", b.videoCheckCompleted)
+            obj.put("hasDirectBookPlaylist", b.hasDirectBookPlaylist)
+            obj.put("discoveryStatusMessage", b.discoveryStatusMessage)
             val epsArr = JSONArray()
             b.episodes.forEach { ep ->
                 val eObj = JSONObject()
@@ -1626,6 +1681,19 @@ object BookCampManager {
                 epsArr.put(eObj)
             }
             obj.put("episodes", epsArr)
+            val candArr = JSONArray()
+            b.candidatePlaylists.forEach { c ->
+                candArr.put(JSONObject().apply {
+                    put("playlistId", c.playlistId)
+                    put("title", c.title)
+                    put("channelName", c.channelName)
+                    put("videoCount", c.videoCount)
+                    put("isDirectBookMatch", c.isDirectBookMatch)
+                    put("isRecommended", c.isRecommended)
+                    put("descriptionNote", c.descriptionNote)
+                })
+            }
+            obj.put("candidatePlaylists", candArr)
             arr.put(obj)
         }
         prefs(context).edit().putString(KEY_BINDINGS_JSON, arr.toString()).apply()
@@ -2035,12 +2103,186 @@ object BookCampManager {
     }
 
     /**
-     * Searches YouTube for [resource] and ONLY enables video support if a genuinely relevant
-     * top-ranked playlist (or direct lesson video) exists for that specific book.
-     * - If found: absorbs the REAL playlist videos (skipping intros, preserving real order & count)
-     *   and saves `hasVerifiedVideoSupport = true`.
-     * - If not found: saves `hasVerifiedVideoSupport = false, videoCheckCompleted = true` so neither
-     *   the Coaching Path map nor Resources shows fake videos.
+     * Pure deterministic hybrid ranker separating direct book playlist matches from subject-appropriate
+     * fallback camps and marking the #1 best pick as `isRecommended = true`.
+     */
+    fun rankHybridBookCandidates(
+        resourceTitle: String,
+        subject: String,
+        directRaw: List<DiscoveredYouTubePlaylist>,
+        subjectRaw: List<DiscoveredYouTubePlaylist>
+    ): Pair<Boolean, List<BookVideoCandidate>> {
+        val normTitle = normalizeForMatch(resourceTitle)
+        val normSubj = normalizeForMatch(subject)
+        val bookTokens = normTitle.split(" ")
+            .filter { it.length >= 2 && it !in GENERIC_BOOK_STOPWORDS }
+            .distinct()
+        val subjTokens = normSubj.split(" ")
+            .filter { it.length >= 3 && it !in GENERIC_BOOK_STOPWORDS }
+            .distinct()
+
+        fun scoreCandidate(pl: DiscoveredYouTubePlaylist): Pair<Int, Boolean> {
+            val hay = normalizeForMatch("${pl.title} ${pl.channelName}")
+            val exactStrict = isRelevantYouTubeMatch(resourceTitle, subject, pl.title, pl.channelName)
+            val bookHits = bookTokens.count { hay.contains(it) }
+            val subjHits = subjTokens.count { hay.contains(it) }
+            val isCampLike = hay.contains("kamp") || hay.contains("konu") || hay.contains("ders") ||
+                hay.contains("cozum") || hay.contains("çözüm") || pl.videoCount >= 5
+            val isDirect = exactStrict || (bookTokens.isNotEmpty() && bookHits >= 1 && (subjHits >= 1 || bookHits >= 2 || bookTokens.size == 1))
+            var score = 0
+            if (exactStrict) score += 60
+            score += bookHits * 24
+            score += subjHits * 12
+            if (isCampLike) score += 10
+            if (pl.videoCount in 8..120) score += 12 else if (pl.videoCount >= 3) score += 5
+            if (hay.contains("tanitim") || hay.contains("tanıtım") || hay.contains("shorts")) score -= 25
+            return score to isDirect
+        }
+
+        val uniqueDirect = LinkedHashMap<String, DiscoveredYouTubePlaylist>()
+        directRaw.forEach { if (it.playlistId.isNotBlank()) uniqueDirect.putIfAbsent(it.playlistId, it) }
+
+        val scoredDirect = uniqueDirect.values.map { pl ->
+            val (score, isDirect) = scoreCandidate(pl)
+            Triple(pl, score, isDirect)
+        }
+
+        val directMatches = scoredDirect
+            .filter { it.third && it.second >= 22 }
+            .sortedByDescending { it.second }
+
+        val subjectMatches = LinkedHashMap<String, Pair<DiscoveredYouTubePlaylist, Int>>()
+        (scoredDirect.filter { !it.third }.map { it.first } + subjectRaw).forEach { pl ->
+            if (pl.playlistId.isBlank() || directMatches.any { it.first.playlistId == pl.playlistId }) return@forEach
+            val (score, _) = scoreCandidate(pl)
+            if (score >= 10) {
+                val prev = subjectMatches[pl.playlistId]
+                if (prev == null || score > prev.second) {
+                    subjectMatches[pl.playlistId] = pl to score
+                }
+            }
+        }
+        val sortedSubject = subjectMatches.values.sortedByDescending { it.second }
+
+        val hasDirect = directMatches.isNotEmpty()
+        val combined = mutableListOf<BookVideoCandidate>()
+        directMatches.take(5).forEach { (pl, _) ->
+            combined.add(
+                BookVideoCandidate(
+                    playlistId = pl.playlistId,
+                    title = pl.title.ifBlank { resourceTitle },
+                    channelName = pl.channelName,
+                    videoCount = pl.videoCount,
+                    isDirectBookMatch = true,
+                    isRecommended = false,
+                    descriptionNote = "Kitaba doğrudan uyumlu oynatma listesi"
+                )
+            )
+        }
+        sortedSubject.take(if (hasDirect) 3 else 6).forEach { (pl, _) ->
+            combined.add(
+                BookVideoCandidate(
+                    playlistId = pl.playlistId,
+                    title = pl.title.ifBlank { "$subject Video Kampı" },
+                    channelName = pl.channelName,
+                    videoCount = pl.videoCount,
+                    isDirectBookMatch = false,
+                    isRecommended = false,
+                    descriptionNote = "$subject dersine uygun video kampı"
+                )
+            )
+        }
+
+        val finalRanked = combined.mapIndexed { idx, item ->
+            item.copy(isRecommended = idx == 0)
+        }
+        return hasDirect to finalRanked
+    }
+
+    /**
+     * Lightweight background AI tie-breaker: inspects up to 6 YouTube playlist candidates
+     * (title, channel, video count) and returns the 0-based index of the most accurate match
+     * for [resourceTitle] / [subject]. Returns null cleanly if offline or AI key unavailable.
+     */
+    private suspend fun pickBestCandidateIndexWithAiQuietly(
+        context: Context,
+        resourceTitle: String,
+        subject: String,
+        candidates: List<BookVideoCandidate>
+    ): Int? {
+        if (candidates.size <= 1) return null
+        return runCatching {
+            val listing = candidates.take(6).mapIndexed { idx, c ->
+                val countLabel = if (c.videoCount > 0) "${c.videoCount} video" else "oynatma listesi"
+                "$idx) ${c.title} | Kanal: ${c.channelName.ifBlank { "-" }} | $countLabel"
+            }.joinToString("\n")
+            val reply = com.example.sharkmentor.core.ai.MultiProviderAiClient.executeUnifiedTextPrompt(
+                context = context,
+                systemPrompt = "Sen bir eğitim kaynağı video eşleştirme asistanısın. Sadece en uygun oynatma listesinin 0-tabanlı sıra numarasını (örneğin: 0 veya 1) yaz; başka hiçbir açıklama ekleme.",
+                userPrompt = "Kitap: \"$resourceTitle\" | Ders: \"$subject\"\nAday YouTube oynatma listeleri:\n$listing\nEn doğru kamp hangisi? Sadece tek bir rakam döndür.",
+                temperature = 0.05f,
+                maxTokens = 16
+            )
+            val picked = Regex("""\b([0-5])\b""").find(reply.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+            if (picked != null && picked in candidates.indices) picked else null
+        }.getOrNull()
+    }
+
+    /**
+     * Applies a student-selected (or AI-recommended) [candidate] playlist to [resource],
+     * absorbing its REAL YouTube videos (skipping intros, preserving exact lesson order & videoIds).
+     */
+    suspend fun selectCandidatePlaylistForResource(
+        context: Context,
+        resource: ResourceEntity,
+        candidate: BookVideoCandidate
+    ): ResourceCampBinding = withContext(Dispatchers.IO) {
+        ensureLoaded(context)
+        val existing = _bindingsByResourceId.value[resource.id]
+        val (plPageTitle, realEpisodes) = fetchRealPlaylistEpisodes(candidate.playlistId)
+        val effectiveTitle = plPageTitle.ifBlank { candidate.title.ifBlank { resource.title } }
+        val updatedCandidates = existing?.candidatePlaylists.orEmpty().let { list ->
+            if (list.any { it.playlistId == candidate.playlistId }) {
+                list.map { it.copy(isRecommended = it.playlistId == candidate.playlistId) }
+            } else {
+                listOf(candidate.copy(isRecommended = true)) + list.map { it.copy(isRecommended = false) }
+            }
+        }
+        val statusMsg = if (candidate.isDirectBookMatch) {
+            "Kitapla uyumlu oynatma listesi bağlandı (${realEpisodes.size} ders)."
+        } else {
+            "Bu kitap için doğrudan liste bulunmadığından seçtiğin ${resource.subject} kampı bağlandı."
+        }
+        val syncedStartDay = if (realEpisodes.isNotEmpty() && resource.totalUnits > 0 && resource.completedUnits > 0) {
+            ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
+                .toInt().plus(1).coerceIn(1, realEpisodes.size)
+        } else 1
+
+        saveResourceCampBinding(
+            context = context,
+            resource = resource,
+            campTitle = effectiveTitle,
+            instructor = candidate.channelName.ifBlank { resource.title },
+            totalDays = realEpisodes.size.coerceAtLeast(1),
+            currentDay = syncedStartDay,
+            youtubeUrl = "https://www.youtube.com/playlist?list=${candidate.playlistId}",
+            realEpisodes = realEpisodes,
+            isFromRealPlaylist = realEpisodes.isNotEmpty(),
+            isAutoMatched = false,
+            hasDirectBookPlaylist = candidate.isDirectBookMatch,
+            discoveryStatusMessage = statusMsg,
+            candidatePlaylists = updatedCandidates
+        )
+    }
+
+    /**
+     * Hybrid AI-Assisted Book Playlist Discovery (Mark 63):
+     * 1. Broadly searches YouTube in background for direct book playlists AND subject-appropriate camps.
+     * 2. Ranks candidates deterministically + runs lightweight AI verification to pick the #1 "Önerilen" option.
+     * 3. If a direct book playlist exists: absorbs its REAL videos (skipping intros) and saves all alternatives
+     *    so the student can switch anytime in ResourceCampConfigDialog.
+     * 4. If NO direct book playlist exists: states that honestly AND exposes selectable subject-appropriate
+     *    camps (e.g. Matematik camps) instead of leaving the student empty-handed or fabricating fake videos!
      */
     suspend fun discoverAndSyncRealCampForResource(
         context: Context,
@@ -2065,11 +2307,14 @@ object BookCampManager {
                         youtubeUrl = existing.youtubeUrl.ifBlank { "https://www.youtube.com/playlist?list=${existing.playlistId}" },
                         realEpisodes = realEps,
                         isFromRealPlaylist = true,
-                        isAutoMatched = existing.isAutoMatched
+                        isAutoMatched = existing.isAutoMatched,
+                        hasDirectBookPlaylist = existing.hasDirectBookPlaylist,
+                        discoveryStatusMessage = existing.discoveryStatusMessage,
+                        candidatePlaylists = existing.candidatePlaylists
                     )
                 }
             }
-            if (existing.videoCheckCompleted || !existing.isAutoMatched) {
+            if (existing.videoCheckCompleted && (existing.candidatePlaylists.isNotEmpty() || !existing.isAutoMatched)) {
                 return@withContext existing
             }
         }
@@ -2079,65 +2324,92 @@ object BookCampManager {
             return@withContext resolveCampForResource(context, resource)
         }
 
-        // 1. General YouTube search first (checks top-ranked results just like searching on the internet)
-        val encodedGeneral = java.net.URLEncoder.encode(queryText, "UTF-8")
+        // 1. Broad YouTube background search for the book (general + playlist filter)
+        val encodedGeneral = java.net.URLEncoder.encode("$queryText kamp", "UTF-8")
         val generalHtml = fetchHtmlQuietly("https://www.youtube.com/results?search_query=$encodedGeneral&hl=tr&gl=TR")
         if (generalHtml.isNullOrBlank()) {
-            // Offline or temporary network error -> do NOT permanently cache false negative
             return@withContext existing ?: resolveCampForResource(context, resource)
         }
 
-        val candidatePlaylists = mutableListOf<DiscoveredYouTubePlaylist>()
-        candidatePlaylists.addAll(extractPlaylistsFromSearchHtml(generalHtml).take(4))
+        val directRaw = mutableListOf<DiscoveredYouTubePlaylist>()
+        directRaw.addAll(extractPlaylistsFromSearchHtml(generalHtml).take(6))
 
-        // 2. Also query YouTube playlist filter (sp=EgIQAw==) if general top results didn't already include a matching playlist
-        val hasRelevantInGeneral = candidatePlaylists.any {
-            isRelevantYouTubeMatch(resource.title, resource.subject, it.title, it.channelName)
+        val encodedPl = java.net.URLEncoder.encode("$queryText oynatma listesi", "UTF-8")
+        val plSearchHtml = fetchHtmlQuietly(
+            "https://www.youtube.com/results?search_query=$encodedPl&sp=EgIQAw%253D%253D&hl=tr&gl=TR"
+        )
+        if (!plSearchHtml.isNullOrBlank()) {
+            extractPlaylistsFromSearchHtml(plSearchHtml).take(6).forEach { pl ->
+                if (directRaw.none { it.playlistId == pl.playlistId }) directRaw.add(pl)
+            }
         }
-        if (!hasRelevantInGeneral) {
-            val encodedPl = java.net.URLEncoder.encode("$queryText oynatma listesi", "UTF-8")
-            val plSearchHtml = fetchHtmlQuietly(
-                "https://www.youtube.com/results?search_query=$encodedPl&sp=EgIQAw%253D%253D&hl=tr&gl=TR"
+
+        // 2. Also fetch subject-appropriate camps so books without an official playlist still get honest alternatives!
+        val subjectRaw = mutableListOf<DiscoveredYouTubePlaylist>()
+        if (resource.subject.isNotBlank()) {
+            val encodedSubj = java.net.URLEncoder.encode("${resource.subject} konu anlatım kampı oynatma listesi", "UTF-8")
+            val subjHtml = fetchHtmlQuietly(
+                "https://www.youtube.com/results?search_query=$encodedSubj&sp=EgIQAw%253D%253D&hl=tr&gl=TR"
             )
-            if (!plSearchHtml.isNullOrBlank()) {
-                extractPlaylistsFromSearchHtml(plSearchHtml).take(4).forEach { pl ->
-                    if (candidatePlaylists.none { it.playlistId == pl.playlistId }) {
-                        candidatePlaylists.add(pl)
-                    }
+            if (!subjHtml.isNullOrBlank()) {
+                subjectRaw.addAll(extractPlaylistsFromSearchHtml(subjHtml).take(6))
+            }
+        }
+
+        // 3. Hybrid deterministic + AI candidate ranking
+        val (hasDirectBookMatch, baseCandidates) = rankHybridBookCandidates(
+            resourceTitle = resource.title,
+            subject = resource.subject,
+            directRaw = directRaw,
+            subjectRaw = subjectRaw
+        )
+
+        var rankedCandidates = baseCandidates
+        val aiTargetPool = if (hasDirectBookMatch) {
+            rankedCandidates.filter { it.isDirectBookMatch }
+        } else {
+            rankedCandidates
+        }
+        val aiPickedIdx = pickBestCandidateIndexWithAiQuietly(context, resource.title, resource.subject, aiTargetPool)
+        if (aiPickedIdx != null && aiPickedIdx in aiTargetPool.indices) {
+            val pickedId = aiTargetPool[aiPickedIdx].playlistId
+            val promoted = rankedCandidates.firstOrNull { it.playlistId == pickedId }
+            if (promoted != null) {
+                rankedCandidates = (listOf(promoted) + rankedCandidates.filterNot { it.playlistId == pickedId })
+                    .mapIndexed { idx, c -> c.copy(isRecommended = idx == 0) }
+            }
+        }
+
+        // 4. If a direct book playlist was found, absorb its REAL videos immediately (skipping intros!)
+        if (hasDirectBookMatch) {
+            val bestDirect = rankedCandidates.firstOrNull { it.isDirectBookMatch }
+            if (bestDirect != null) {
+                val (plPageTitle, realEpisodes) = fetchRealPlaylistEpisodes(bestDirect.playlistId)
+                if (realEpisodes.isNotEmpty()) {
+                    val syncedStartDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
+                        ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
+                            .toInt().plus(1).coerceIn(1, realEpisodes.size)
+                    } else 1
+                    return@withContext saveResourceCampBinding(
+                        context = context,
+                        resource = resource,
+                        campTitle = plPageTitle.ifBlank { bestDirect.title.ifBlank { resource.title } },
+                        instructor = bestDirect.channelName.ifBlank { resource.title },
+                        totalDays = realEpisodes.size,
+                        currentDay = syncedStartDay,
+                        youtubeUrl = "https://www.youtube.com/playlist?list=${bestDirect.playlistId}",
+                        realEpisodes = realEpisodes,
+                        isFromRealPlaylist = true,
+                        isAutoMatched = true,
+                        hasDirectBookPlaylist = true,
+                        discoveryStatusMessage = "Önerilen kitap oynatma listesi otomatik eşleştirildi (${realEpisodes.size} ders). İstersen diğer seçeneklerden değiştirebilirsin.",
+                        candidatePlaylists = rankedCandidates
+                    )
                 }
             }
         }
 
-        // 3. Inspect TOP 3 playlist candidates for strict book relevance
-        val matchedPlaylist = candidatePlaylists.take(4).firstOrNull { pl ->
-            isRelevantYouTubeMatch(resource.title, resource.subject, pl.title, pl.channelName)
-        }
-
-        if (matchedPlaylist != null) {
-            val (plPageTitle, realEpisodes) = fetchRealPlaylistEpisodes(matchedPlaylist.playlistId)
-            if (realEpisodes.isNotEmpty()) {
-                val syncedStartDay = if (resource.totalUnits > 0 && resource.completedUnits > 0) {
-                    ((resource.completedUnits.toFloat() / resource.totalUnits.toFloat()) * realEpisodes.size)
-                        .toInt()
-                        .plus(1)
-                        .coerceIn(1, realEpisodes.size)
-                } else 1
-                return@withContext saveResourceCampBinding(
-                    context = context,
-                    resource = resource,
-                    campTitle = plPageTitle.ifBlank { matchedPlaylist.title.ifBlank { resource.title } },
-                    instructor = matchedPlaylist.channelName.ifBlank { resource.title },
-                    totalDays = realEpisodes.size,
-                    currentDay = syncedStartDay,
-                    youtubeUrl = "https://www.youtube.com/playlist?list=${matchedPlaylist.playlistId}",
-                    realEpisodes = realEpisodes,
-                    isFromRealPlaylist = true,
-                    isAutoMatched = true
-                )
-            }
-        }
-
-        // 4. Fallback: check TOP 3 direct non-intro videos from the general YouTube search
+        // 5. Fallback: check TOP 3 direct non-intro single videos from general search if it matches the exact book
         val topDirectVideo = extractSearchVideosFromHtml(generalHtml)
             .take(3)
             .firstOrNull { v ->
@@ -2165,13 +2437,25 @@ object BookCampManager {
                 youtubeUrl = "https://www.youtube.com/watch?v=${topDirectVideo.videoId}",
                 realEpisodes = listOf(singleEp),
                 isFromRealPlaylist = false,
-                isAutoMatched = true
+                isAutoMatched = true,
+                hasDirectBookPlaylist = true,
+                discoveryStatusMessage = "Kitapla ilgili video içeriği bulundu; alternatif ders kamplarına aşağıdan göz atabilirsin.",
+                candidatePlaylists = rankedCandidates
             )
         }
 
-        // 5. No relevant video content found in YouTube top results -> persist honest negative cache
-        val noVideoBinding = clearResourceVideoBinding(context, resource)
-        noVideoBinding
+        // 6. No direct book playlist found -> state clearly AND offer selectable subject-appropriate camps!
+        val honestMsg = if (rankedCandidates.isNotEmpty()) {
+            "Bu kitap için doğrudan bir YouTube oynatma listesi bulunamadı. İstersen ${resource.subject.ifBlank { "bu ders" }} için önerilen kamplardan birini seçebilirsin."
+        } else {
+            "Bu kitap için YouTube'da uyumlu bir video kampı bulunamadı; istersen kendi oynatma listesi bağlantını ekleyebilirsin."
+        }
+        clearResourceVideoBinding(
+            context = context,
+            resource = resource,
+            statusMessage = honestMsg,
+            candidatePlaylists = rankedCandidates
+        )
     }
 
     /**

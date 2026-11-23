@@ -942,9 +942,17 @@ fun ResourceCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (campBinding.videoCheckCompleted) "Video Listesi Bağla" else "Video Kontrol Ediliyor...",
+                            text = when {
+                                campBinding.candidatePlaylists.isNotEmpty() ->
+                                    "${campBinding.candidatePlaylists.size} Kamp Önerisi • Seç"
+                                campBinding.videoCheckCompleted ->
+                                    "Video Kampı Bul / Bağla"
+                                else ->
+                                    "Video Kampı Aranıyor..."
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = if (campBinding.candidatePlaylists.isNotEmpty()) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (campBinding.candidatePlaylists.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

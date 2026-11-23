@@ -358,11 +358,11 @@ KRİTİK DOĞRULUK VE ATAMA KURALLARI (KESİNLİKLE UYULACAK):
 2. DOĞRU DERS VE KONU EŞLEŞTİRME: Kaynak ve konu eklerken asla yanlış derse/sınava atama yapma. Mevcut kütüphane güncellemesinde bağlamdaki `[MEVCUT KÜTÜPHANE KAYNAKLARI]` listesinden doğru `resourceId`, tam `title` ve doğru `subject` bilgisini birebir al; bir dersin kitabını yanlışlıkla başka bir dersin kitabına işleme. Konularda AYT konularını (Türev, İntegral, Limit, Trigonometri, Logaritma, Diziler, Atışlar, Organik Kimya, Sistemler, Bitki Biyolojisi, Divan/Tanzimat) `AYT ...`, TYT konularını (Sözcükte Anlam, Problemler, EBOB-EKOK, Optik, Basınç, Mol, Mitoz) `TYT ...` dersine işle.
 3. Sohbet metninde öğrenciye hitaben 2-4 cümlelik net bir Türkçe açıklama/özet yaz ve mesajının EN SONUNA ilgili JSON eylem bloğunu (#ACTION:{...}#) ekle:
 
-HAFTALIK 7 GÜNLÜK PLAN OLUŞTURMA:
-#ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Strateji özeti","schedule":[{"dayOfWeek":1,"timeSlot":"09:00 - 10:30","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
+HAFTALIK 7 GÜNLÜK PLAN OLUŞTURMA (ESNEK SÜRELİ, 7 GÜNE VE ÇOKLU DERSE DENGELİ; ASLA '09:00 - 10:30' GİBİ KATI SAAT YAZMA):
+#ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Strateji özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
 
 TEKİL GÖREV EKLEME:
-#ACTION:{"type":"INSERT_PLAN_TASK","day":1,"time":"16:00 - 17:30","subject":"Fizik","topic":"Kuvvet ve Hareket","questions":30}#
+#ACTION:{"type":"INSERT_PLAN_TASK","day":1,"time":"Esnek • 90 dk","subject":"Fizik","topic":"Kuvvet ve Hareket","questions":30}#
 
 TOPLU KONU HAKİMİYETİ EKLEME (Örn: "TYT tüm konular", "AYT tüm konular" veya müfredat listesi istendiğinde ASLA tek boş klasör açma; preset veya topics dizisiyle tüm alt konuları gönder):
 #ACTION:{"type":"INSERT_TOPICS_BATCH","exam":"TYT","preset":"TYT_ALL","topics":[{"subject":"TYT Türkçe","topic":"Sözcükte Anlam","targetLevel":5},{"subject":"TYT Matematik","topic":"Temel Kavramlar ve Sayılar","targetLevel":5}]}#
@@ -1067,11 +1067,34 @@ $MANDATORY_PERSONA_RULES
         overrideMaxTokens: Int? = null,
         onPartialText: (String) -> Unit = {}
     ): Result<AiRouterResult> {
-        val compassHeader = runCatching {
-            com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(context)
+        val channel = when (activeEngine) {
+            SharkAiEngine.PLANNER_OR_ORGANIZER ->
+                com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI
+            SharkAiEngine.CONVERSATIONAL_PEER ->
+                com.example.sharkmentor.core.coaching.DossierAiChannel.AUTO_CHAT
+            SharkAiEngine.SOLVER_ENGINE,
+            SharkAiEngine.TWIN_QUESTION_ENGINE ->
+                com.example.sharkmentor.core.coaching.DossierAiChannel.OTHER_NON_COACHING
+        }
+        val dossierHeader = runCatching {
+            com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(context)
+            if (com.example.sharkmentor.core.coaching.StudentDossierManager.shouldAttachDossier(channel, prompt)) {
+                com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt()
+            } else if (channel == com.example.sharkmentor.core.coaching.DossierAiChannel.PLAN_ADD_AI ||
+                (channel == com.example.sharkmentor.core.coaching.DossierAiChannel.AUTO_CHAT &&
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.isCoachingPlanOrZenIntent(prompt))
+            ) {
+                com.example.sharkmentor.core.coaching.CoachingEngine.buildAiSystemCompassPrompt(context)
+            } else {
+                ""
+            }
         }.getOrDefault("")
-        val enrichedInstruction = if (compassHeader.isNotBlank() && !systemInstruction.contains("[ÖĞRENCİ HEDEF PUSULASI")) {
-            "$compassHeader\n\n$systemInstruction"
+        val enrichedInstruction = if (
+            dossierHeader.isNotBlank() &&
+            !systemInstruction.contains("[ANONİM ÖĞRENCİ DOSYASI") &&
+            !systemInstruction.contains("[ÖĞRENCİ HEDEF PUSULASI")
+        ) {
+            "$dossierHeader\n\n$systemInstruction"
         } else {
             systemInstruction
         }

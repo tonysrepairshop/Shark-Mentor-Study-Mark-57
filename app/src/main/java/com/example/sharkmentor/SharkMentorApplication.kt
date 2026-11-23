@@ -31,16 +31,11 @@ class SharkMentorApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // ── Fast Light Initialization on Main Thread ─────────────────────
+        // ── Ultra-Light Main Thread Init Only (Prevents Cold-Start ANR on 3GB Android 9 Devices) ──
         ThemePreferences.initialize(this)
-        UserAiPreferences.initialize(this)
         ThemeManager.init(this)
         SessionManager.init(this)
-        AppIconManager.init(this)
-        AvatarHelper.init(this)
         UserPreferences.getInstance(this)
-        BlockerPreferences.initialize(this)
-        NotificationChannels.registerAll(this)
 
         // Apply any deferred launcher icon switch cleanly when user leaves the app
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -53,18 +48,28 @@ class SharkMentorApplication : Application() {
             override fun onActivityStopped(activity: Activity) {
                 startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
                 if (startedActivityCount == 0 && !activity.isChangingConfigurations) {
-                    AppIconManager.applyPendingIconIfNeeded(applicationContext)
+                    appScope.launch {
+                        runCatching { AppIconManager.applyPendingIconIfNeeded(applicationContext) }
+                    }
                 }
             }
             override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
             override fun onActivityDestroyed(activity: Activity) = Unit
         })
 
-        // ── Offload Heavy/Fragile Startup Tasks to Background Thread ────
+        // ── Offload All Heavy Disk/IPC/Firebase Startup Tasks to Background Thread ────
         appScope.launch {
-            // 0. Pre-warm SharedPreferences-backed engines off main thread (zero first-frame hitch on low-end devices)
+            runCatching { UserAiPreferences.initialize(applicationContext) }
+            runCatching { AppIconManager.init(applicationContext) }
+            runCatching { AvatarHelper.init(applicationContext) }
+            runCatching { BlockerPreferences.initialize(applicationContext) }
+            runCatching { NotificationChannels.registerAll(applicationContext) }
+
+            // Pre-warm SharedPreferences-backed engines off main thread
             runCatching { com.example.sharkmentor.core.coaching.CoachingEngine.ensureInitialized(applicationContext) }
             runCatching { com.example.sharkmentor.core.coaching.BookCampManager.ensureLoaded(applicationContext) }
+            runCatching { com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(applicationContext) }
+            runCatching { com.example.sharkmentor.core.coaching.StudentDossierManager.syncIfDueBackground(applicationContext) }
             runCatching { com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences.ensureLoaded(applicationContext) }
             runCatching { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(applicationContext) }
             runCatching { com.example.sharkmentor.data.repository.CountdownRepository.getInstance(applicationContext) }
@@ -110,6 +115,11 @@ class SharkMentorApplication : Application() {
                 com.example.sharkmentor.worker.StreakReminderWorker.schedule(applicationContext)
             } catch (e: Throwable) {
                 Log.w("SharkMentorApp", "Water streak worker schedule bypassed: ${e.message}")
+            }
+            try {
+                com.example.sharkmentor.worker.StudentDossierSyncWorker.schedule(applicationContext)
+            } catch (e: Throwable) {
+                Log.w("SharkMentorApp", "Student dossier worker schedule bypassed: ${e.message}")
             }
         }
     }

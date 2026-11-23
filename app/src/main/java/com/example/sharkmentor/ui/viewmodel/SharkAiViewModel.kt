@@ -210,6 +210,106 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     private val _isRefreshingNetProjection = MutableStateFlow(false)
     val isRefreshingNetProjection: StateFlow<Boolean> = _isRefreshingNetProjection.asStateFlow()
 
+    enum class PendingDossierActionType {
+        SYNC_NOW,
+        EDIT_NOTE
+    }
+
+    data class PendingDossierAction(
+        val type: PendingDossierActionType,
+        val title: String,
+        val description: String,
+        val rawNote: String = ""
+    )
+
+    private val _pendingDossierAction = MutableStateFlow<PendingDossierAction?>(null)
+    val pendingDossierAction: StateFlow<PendingDossierAction?> = _pendingDossierAction.asStateFlow()
+
+    private fun normalizeFlexibleTimeSlot(raw: String?): String {
+        val clean = raw?.trim().orEmpty()
+        if (clean.isBlank()) return "Esnek • 90 dk"
+        val rangeMatch = Regex("""(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})""").find(clean)
+        if (rangeMatch != null) {
+            val h1 = rangeMatch.groupValues[1].toIntOrNull() ?: 9
+            val m1 = rangeMatch.groupValues[2].toIntOrNull() ?: 0
+            val h2 = rangeMatch.groupValues[3].toIntOrNull() ?: 10
+            val m2 = rangeMatch.groupValues[4].toIntOrNull() ?: 30
+            val diff = ((h2 * 60 + m2) - (h1 * 60 + m1)).let { if (it in 20..240) it else 90 }
+            return "Esnek • $diff dk"
+        }
+        return clean
+    }
+
+    fun confirmPendingDossierAction() {
+        val pending = _pendingDossierAction.value ?: return
+        _pendingDossierAction.value = null
+        val appCtx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
+            val replyText = when (pending.type) {
+                PendingDossierActionType.SYNC_NOW -> {
+                    val synced = com.example.sharkmentor.core.coaching.StudentDossierManager.syncFromDatabase(appCtx, force = true)
+                    "Öğrenci dosyan güncellendi. Hedeflerin, ${synced.topics.size} konu hakimiyeti kaydın ve ${synced.books.size} kütüphane kaynağın senkronize edildi; silinen kayıtlar temizlendi."
+                }
+                PendingDossierActionType.EDIT_NOTE -> {
+                    val cleanNote = pending.rawNote.trim()
+                    if (cleanNote.isNotBlank()) {
+                        com.example.sharkmentor.core.coaching.StudentDossierManager.updateSingleAnswerOrInsight(
+                            context = appCtx,
+                            questionId = null,
+                            newValue = cleanNote,
+                            asInsight = true
+                        )
+                    }
+                    "Onayınla birlikte bu bilgi anonim Öğrenci Dosyana eklendi. Koçluk ve plan önerilerin artık buna göre şekillenecek."
+                }
+            }
+            val aiMsg = AiChatMessage(
+                sender = "ai",
+                text = replyText,
+                personaTag = _uiState.value.currentPersona.id
+            )
+            _uiState.value = _uiState.value.copy(messages = _uiState.value.messages + aiMsg, isLoading = false)
+            persistCurrentChatState()
+        }
+    }
+
+    fun cancelPendingDossierAction() {
+        if (_pendingDossierAction.value == null) return
+        _pendingDossierAction.value = null
+        val aiMsg = AiChatMessage(
+            sender = "ai",
+            text = "Tamamdır, Öğrenci Dosyanda herhangi bir değişiklik yapılmadı.",
+            personaTag = _uiState.value.currentPersona.id
+        )
+        _uiState.value = _uiState.value.copy(messages = _uiState.value.messages + aiMsg, isLoading = false)
+        persistCurrentChatState()
+    }
+
+    fun completeDossierInterview(answers: Map<String, String>) {
+        val appCtx = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            com.example.sharkmentor.core.coaching.StudentDossierManager.saveInterviewAnswers(
+                context = appCtx,
+                answers = answers,
+                markCompleted = true
+            )
+            val synced = com.example.sharkmentor.core.coaching.StudentDossierManager.syncFromDatabase(appCtx, force = true)
+            val wdH = com.example.sharkmentor.core.coaching.CoachingEngine.formatMinutesShort(synced.weekdayGoalMinutes)
+            val weH = com.example.sharkmentor.core.coaching.CoachingEngine.formatMinutesShort(synced.weekendGoalMinutes)
+            val summaryMsg = AiChatMessage(
+                sender = "ai",
+                text = "Öğrenci Dosyan başarıyla oluşturuldu! Hedeflerin, ${synced.topics.size} konu hakimiyeti kaydın ve ${synced.books.size} kaynağın anonim profiline işlendi (Hafta içi $wdH / Hafta sonu $weH). Artık Koçluk Yolu ekranından sana özel dengeli planını başlatabilirsin. İstediğin zaman \"öğrenci dosyamı güncelle\" yazarak verilerini yenileyebilirsin.",
+                personaTag = AiPersona.SHARK_COACH.id
+            )
+            _uiState.value = _uiState.value.copy(
+                messages = _uiState.value.messages + summaryMsg,
+                isLoading = false
+            )
+            persistCurrentChatState()
+        }
+    }
+
     val netWizardState: StateFlow<NetWizardUiState> = netPredictionRepository.getNetProjectionStream()
         .stateIn(
             scope = viewModelScope,
@@ -625,6 +725,44 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
             error = null
         )
         persistCurrentChatState()
+
+        // Explicit confirmation gate for Student Dossier sync ("öğrenci dosyamı güncelle") or edit commands
+        if (attachmentUri == null && text.isNotBlank()) {
+            val isSyncCmd = com.example.sharkmentor.core.coaching.StudentDossierManager.isDossierSyncCommand(text)
+            val isEditCmd = !isSyncCmd && com.example.sharkmentor.core.coaching.StudentDossierManager.isDossierEditCommand(text)
+            if (isSyncCmd || isEditCmd) {
+                val action = if (isSyncCmd) {
+                    PendingDossierAction(
+                        type = PendingDossierActionType.SYNC_NOW,
+                        title = "Öğrenci Dosyasını Güncelle",
+                        description = "Mevcut hedeflerin, tüm konu hakimiyeti kayıtların ve kütüphanendeki kitapların güncel hali Öğrenci Dosyana aktarılacak; sildiğin kayıtlar dosyadan temizlenecek. Onaylıyor musun?"
+                    )
+                } else {
+                    PendingDossierAction(
+                        type = PendingDossierActionType.EDIT_NOTE,
+                        title = "Öğrenci Dosyasını Düzenle",
+                        description = "Aşağıdaki isteğin anonim Öğrenci Dosyana koçluk notu olarak işlenecek:\n\n\"${text.take(220)}\"\n\nBu değişikliği onaylıyor musun?",
+                        rawNote = text
+                    )
+                }
+                _pendingDossierAction.value = action
+                val confirmPrompt = AiChatMessage(
+                    sender = "ai",
+                    text = if (isSyncCmd) {
+                        "Öğrenci Dosyanı güncel hedefler, konu hakimiyeti ve kitap listesiyle eşitlemem için açılan pencereden onay vermen yeterli."
+                    } else {
+                        "Öğrenci Dosyanda değişiklik yapmadan önce onayını istiyorum. Açılan pencereden onaylayabilir veya iptal edebilirsin."
+                    },
+                    personaTag = currentPersona.id
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + confirmPrompt,
+                    isLoading = false
+                )
+                persistCurrentChatState()
+                return
+            }
+        }
 
         val streamingMsgId = UUID.randomUUID().toString()
         val originatingSessionId = _activeChatSessionId.value
@@ -1110,7 +1248,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                             val taskMap = item as? Map<*, *> ?: return@forEachIndexed
                             val subj = (taskMap["subject"] as? String ?: taskMap["course"] as? String ?: "Ders").ifBlank { "Ders" }
                             val top = (taskMap["topic"] as? String ?: taskMap["title"] as? String ?: "").trim()
-                            val time = (taskMap["timeSlot"] as? String ?: taskMap["time"] as? String ?: taskMap["scheduledTime"] as? String ?: "09:00 - 10:30").ifBlank { "09:00 - 10:30" }
+                            val rawTime = taskMap["timeSlot"] as? String ?: taskMap["time"] as? String ?: taskMap["scheduledTime"] as? String
+                            val time = normalizeFlexibleTimeSlot(rawTime)
                             val questions = (taskMap["targetQuestions"] as? Number)?.toInt()
                                 ?: (taskMap["questions"] as? Number)?.toInt()
                                 ?: (taskMap["count"] as? Number)?.toInt()
@@ -1221,7 +1360,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         val day = (actionMap["day"] as? Number)?.toInt()
                             ?: (actionMap["dayOfWeek"] as? Number)?.toInt()
                             ?: 1
-                        val time = (actionMap["time"] as? String ?: actionMap["timeSlot"] as? String ?: "09:00 - 10:30").ifBlank { "09:00 - 10:30" }
+                        val time = normalizeFlexibleTimeSlot(actionMap["time"] as? String ?: actionMap["timeSlot"] as? String)
 
                         withContext(Dispatchers.IO) {
                             val folders = database.planFolderDao().getFoldersCreatedAfter(0)
@@ -2033,7 +2172,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 val item = scheduleArray.optJSONObject(i) ?: continue
                                 val subj = item.optString("subject", item.optString("course", "Ders")).ifBlank { "Ders" }
                                 val top = item.optString("topic", item.optString("title", "")).trim()
-                                val time = item.optString("timeSlot", item.optString("time", item.optString("scheduledTime", "09:00 - 10:30"))).ifBlank { "09:00 - 10:30" }
+                                val rawTime = item.optString("timeSlot", item.optString("time", item.optString("scheduledTime", "")))
+                                val time = normalizeFlexibleTimeSlot(rawTime)
                                 val questions = item.optInt("targetQuestions", item.optInt("questions", 30))
                                 val day = item.optInt("dayOfWeek", item.optInt("day", item.optInt("dayIndex", (i % 7 + 1))))
 
@@ -2516,10 +2656,11 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                             val item = scheduleArray.getJSONObject(i)
                             val subject = item.optString("subject", item.optString("course", "Ders")).ifBlank { "Ders" }
                             val topic = item.optString("topic", item.optString("title", "")).trim()
-                            val timeSlot = item.optString(
+                            val rawTimeSlot = item.optString(
                                 "timeSlot",
-                                item.optString("time", item.optString("scheduledTime", "09:00 - 10:30"))
-                            ).ifBlank { "09:00 - 10:30" }
+                                item.optString("time", item.optString("scheduledTime", ""))
+                            )
+                            val timeSlot = normalizeFlexibleTimeSlot(rawTimeSlot)
                             val rawQ = item.optInt("targetQuestions", item.optInt("questions", 30))
 
                             parsedTasks.add(
@@ -2640,8 +2781,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val actionInstruction = if (includeActionInstructions) """
 
             AKSİYON VE EYLEM TALİMATLARI (HEM METİN HEM GÖRSEL ANALİZİNDE GEÇERLİDİR):
-            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa mesajının EN SONUNA plan eylemini ekle:
-            #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Haftalık odak stratejisi","schedule":[{"dayOfWeek":1,"timeSlot":"09:00 - 10:30","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
+            - Eğer öğrenci çalışma planı, haftalık program veya ders çalışma çizelgesi istiyorsa 7 güne ve çoklu derse dengeli, katı saat aralığı olmadan esnek sürelerle (`"Esnek • 90 dk"`) mesajının EN SONUNA plan eylemini ekle:
+            #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Haftalık odak stratejisi","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40}]}#
             - Eğer öğrenci "TYT tüm konular", "AYT tüm konular" veya bir dersin tüm konularını/müfredatını eklemek istiyorsa ASLA ders başına tek boş klasör açma; INSERT_TOPICS_BATCH kullan:
             #ACTION:{"type":"INSERT_TOPICS_BATCH","exam":"TYT","preset":"TYT_ALL","topics":[{"subject":"TYT Türkçe","topic":"Sözcükte Anlam","targetLevel":5},{"subject":"TYT Matematik","topic":"Temel Kavramlar","targetLevel":5}]}#
             - Eğer öğrenci tek bir konu hedefi eklemek veya seviyesini güncellemek istiyorsa, doğru ders adını (TYT/AYT ayrımıyla, örn. Türev için AYT Matematik) ve konuyu seç:
@@ -2692,7 +2833,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     GÖREV: Öğrencinin talebine dayanarak 7 günlük (Pazartesi-Pazar) operasyonel çalışma planı hazırla.
                     1. Önce öğrenciye 2-3 samimi cümleyle bu haftaki çalışma stratejisini, eksiklerini nasıl toparlayacağını açıkla.
                     2. Ardından mesajın en sonuna çalışma programını aşağıdaki sistem eylem formatında ekle:
-                    #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Bu haftaki stratejik yönelim özeti","schedule":[{"dayOfWeek":1,"timeSlot":"09:00 - 10:30","subject":"Matematik","topic":"Türev","targetQuestions":40,"focusStrategy":"Konu Pekiştirme"}]}#$rulesBlock
+                    #ACTION:{"type":"CREATE_WEEKLY_PLAN","title":"Haftalık Çalışma Programı","summary":"Bu haftaki stratejik yönelim özeti","schedule":[{"dayOfWeek":1,"timeSlot":"Esnek • 90 dk","subject":"Matematik","topic":"Türev","targetQuestions":40,"focusStrategy":"Konu Pekiştirme"}]}#$rulesBlock
                 """.trimIndent()
             } else {
                 """

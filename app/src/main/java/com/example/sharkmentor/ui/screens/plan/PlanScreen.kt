@@ -691,7 +691,7 @@ fun SpaciousPlanTaskCard(
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                     ) {
                         Text(
-                            text = task.scheduledTime.ifBlank { "09:00 - 10:30" },
+                            text = task.scheduledTime.ifBlank { "Esnek Süre" },
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
@@ -775,7 +775,7 @@ fun AddTaskDialog(
     var subject by remember { mutableStateOf("") }
     var topic by remember { mutableStateOf("") }
     var day by remember { mutableIntStateOf(selectedDay) }
-    var time by remember { mutableStateOf("09:00 - 10:30") }
+    var time by remember { mutableStateOf("Esnek • 90 dk") }
     var questionsText by remember { mutableStateOf("30") }
 
     val dayNames = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
@@ -865,8 +865,8 @@ fun AddTaskDialog(
                 OutlinedTextField(
                     value = time,
                     onValueChange = { time = it },
-                    label = { Text("Saat") },
-                    placeholder = { Text("09:00 - 10:30") },
+                    label = { Text("Süre / Zaman") },
+                    placeholder = { Text("Esnek • 90 dk") },
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.fillMaxWidth()

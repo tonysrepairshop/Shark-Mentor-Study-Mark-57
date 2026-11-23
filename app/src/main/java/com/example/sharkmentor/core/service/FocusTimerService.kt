@@ -921,6 +921,7 @@ class FocusTimerService : Service() {
             if (bucket > lastHydrationBucket && bucket >= 1) {
                 lastHydrationBucket = bucket
                 postHydrationReminderNotification(elapsedMinutes)
+                com.example.sharkmentor.ui.components.WellnessReminderBus.emitHydration(elapsedMinutes)
             }
         }
         if (topBarSettings.postureReminderEnabled) {
@@ -929,6 +930,7 @@ class FocusTimerService : Service() {
             if (bucket > lastPostureBucket && bucket >= 1) {
                 lastPostureBucket = bucket
                 postPostureReminderNotification(elapsedMinutes)
+                com.example.sharkmentor.ui.components.WellnessReminderBus.emitPosture(elapsedMinutes)
             }
         }
     }

@@ -95,13 +95,28 @@ class AiZenCoachViewModel(application: Application) : AndroidViewModel(applicati
         prefs.edit().putLong(PREF_LAST_QUESTION_TIME, System.currentTimeMillis()).apply()
         checkAndStartCooldownTicker()
 
-        // 3. Query AI model
+        // 3. Query AI model (selectively enriched with anonymized Student Dossier when consented)
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             _isLoading.value = true
             try {
+                val appCtx = getApplication<Application>()
+                com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
+                val dossierBlock = if (
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.shouldAttachDossier(
+                        com.example.sharkmentor.core.coaching.DossierAiChannel.ZEN_COACH,
+                        questionText
+                    )
+                ) {
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.buildAnonymizedDossierPrompt()
+                } else ""
+                val effectiveSystemPrompt = if (dossierBlock.isNotBlank()) {
+                    "$dossierBlock\n\n$zenCoachSystemPrompt"
+                } else {
+                    zenCoachSystemPrompt
+                }
                 val result = GeminiAiFactory.generateContentWithFailover(
-                    context = getApplication(),
-                    systemInstruction = zenCoachSystemPrompt,
+                    context = appCtx,
+                    systemInstruction = effectiveSystemPrompt,
                     userPrompt = questionText.trim(),
                     responseJson = false,
                     temperature = 0.45f,

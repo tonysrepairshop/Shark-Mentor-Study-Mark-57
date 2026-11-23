@@ -67,7 +67,7 @@ class Mark60FeaturesTest {
     }
 
     @Test
-    fun smartTopBarSuggestions_includesHydrationAndPostureOnLongSession() {
+    fun smartTopBarSuggestions_excludesHydrationAndPostureMovedToSmartwatchPopup() {
         val suggestions = buildSmartTopBarSuggestions(
             weatherState = WeatherUiState(currentWeatherCode = 0, currentTempCelsius = 22.0),
             isAnyFocusRunning = true,
@@ -81,7 +81,7 @@ class Mark60FeaturesTest {
             )
         )
         val wellnessCount = suggestions.count { it.action is TopBarSuggestionAction.WellnessReminder }
-        assertEquals(2, wellnessCount)
+        assertEquals(0, wellnessCount)
     }
 
     @Test

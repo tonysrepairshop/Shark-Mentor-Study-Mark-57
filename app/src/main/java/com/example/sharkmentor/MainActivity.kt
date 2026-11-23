@@ -80,9 +80,18 @@ class MainActivity : ComponentActivity() {
             val isZenMode = isZenModePref || isZenMinimalist
 
             val userPrefs = remember { com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(this) }
-            val auth = remember { GoogleServicesHelper.getFirebaseAuth(this) }
-            val currentUser = GoogleServicesHelper.getCurrentUser(auth, this)
-            var isLoggedIn by remember { mutableStateOf(currentUser != null || userPrefs.isOnboarded) }
+            var isLoggedIn by remember { mutableStateOf(userPrefs.isOnboarded) }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                if (!isLoggedIn) {
+                    val hasFirebaseUser = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val auth = GoogleServicesHelper.getFirebaseAuth(this@MainActivity)
+                            GoogleServicesHelper.getCurrentUser(auth, this@MainActivity) != null
+                        }.getOrDefault(false)
+                    }
+                    if (hasFirebaseUser) isLoggedIn = true
+                }
+            }
 
             SharkMentorTheme(
                 themeMode = themeMode,
@@ -105,9 +114,9 @@ class MainActivity : ComponentActivity() {
                     } else {
                         AuthScreen(
                             onAuthSuccess = {
-                                registerFcmToken()
-                                com.example.sharkmentor.core.notification.SocialNotificationMonitor.start(this@MainActivity)
                                 lifecycleScope.launch(Dispatchers.IO) {
+                                    runCatching { registerFcmToken() }
+                                    runCatching { com.example.sharkmentor.core.notification.SocialNotificationMonitor.start(this@MainActivity) }
                                     runCatching {
                                         com.example.sharkmentor.data.repository.StreakRepository(this@MainActivity)
                                             .pullAndMergeFromCloud()
@@ -182,13 +191,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        try {
-            if (GoogleServicesHelper.getCurrentUser(null, this) != null) {
-                registerFcmToken()
-                com.example.sharkmentor.core.notification.SocialNotificationMonitor.start(this)
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                if (GoogleServicesHelper.getCurrentUser(null, this@MainActivity) != null) {
+                    registerFcmToken()
+                    com.example.sharkmentor.core.notification.SocialNotificationMonitor.start(this@MainActivity)
+                }
+            }.onFailure { e ->
+                Log.w("MainActivity", "Error checking current user: ${e.message}")
             }
-        } catch (e: Throwable) {
-            Log.w("MainActivity", "Error checking current user: ${e.message}")
         }
     }
 

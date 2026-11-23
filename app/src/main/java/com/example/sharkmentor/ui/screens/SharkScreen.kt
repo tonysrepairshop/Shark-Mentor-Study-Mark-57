@@ -35,6 +35,12 @@ fun SharkScreen(
     onNavigateToPlans: (String) -> Unit = {}
 ) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) } // 0: AI Sohbet Hub, 1: Shark Arena
+    val openInterviewRequested by com.example.sharkmentor.core.coaching.StudentDossierNavBus.openInterviewRequested.collectAsStateWithLifecycle()
+    LaunchedEffect(openInterviewRequested) {
+        if (openInterviewRequested) {
+            selectedTab = 0
+        }
+    }
 
     Column(
         modifier = modifier

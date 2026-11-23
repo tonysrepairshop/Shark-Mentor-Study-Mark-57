@@ -411,13 +411,13 @@ fun DailyGoalConfigDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(2, 3, 4, 5, 6, 8).forEach { hr ->
+                    listOf(4, 6, 8, 10, 12, 14).forEach { hr ->
                         val isSelected = !useAi && weekdayHoursText == hr.toString()
                         Surface(
                             onClick = {
                                 useAi = false
                                 weekdayHoursText = hr.toString()
-                                weekendHoursText = (hr + 1).coerceAtMost(10).toString()
+                                weekendHoursText = (hr + 2).coerceAtMost(16).toString()
                             },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(8.dp),
@@ -472,7 +472,11 @@ fun DailyGoalConfigDialog(
                 onClick = {
                     val wdMins = if (useAi) aiWeekday else ((weekdayHoursText.replace(",", ".").toFloatOrNull() ?: 4f) * 60f).toInt()
                     val weMins = if (useAi) aiWeekend else ((weekendHoursText.replace(",", ".").toFloatOrNull() ?: 5f) * 60f).toInt()
-                    onSave(wdMins.coerceIn(30, 720), weMins.coerceIn(30, 720), useAi)
+                    onSave(
+                        wdMins.coerceIn(30, CoachingEngine.MAX_DAILY_GOAL_MINUTES),
+                        weMins.coerceIn(30, CoachingEngine.MAX_DAILY_GOAL_MINUTES),
+                        useAi
+                    )
                 },
                 shape = RoundedCornerShape(10.dp)
             ) {
@@ -763,11 +767,13 @@ fun ComprehensiveSupportSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
 
     LaunchedEffect(context) {
         CoachingEngine.ensureInitialized(context)
         CoachingEngine.refreshTargetAndLedgerAsync(context)
+        StudentDossierManager.ensureLoaded(context)
     }
 
     val comprehensiveSupportEnabled by CoachingEngine.comprehensiveSupportEnabled.collectAsStateWithLifecycle()
@@ -778,6 +784,7 @@ fun ComprehensiveSupportSettingsScreen(
     val customFocusTitles by CoachingEngine.customFocusTitles.collectAsStateWithLifecycle()
     val selectedFocusTitle by CoachingEngine.selectedFocusTitle.collectAsStateWithLifecycle()
     val focusSubNote by CoachingEngine.focusSubNote.collectAsStateWithLifecycle()
+    val studentDossier by StudentDossierManager.dossier.collectAsStateWithLifecycle()
 
     val todayBounds = remember { DailyFocusEngine.getTodayTimeBounds() }
     val todayDbMinutesFlow = remember(context, todayBounds) {
@@ -801,6 +808,11 @@ fun ComprehensiveSupportSettingsScreen(
     }
 
     var showDailyGoalDialog by remember { mutableStateOf(false) }
+    var showEthicalConsentDialog by remember { mutableStateOf(false) }
+    var showDossierViewerDialog by remember { mutableStateOf(false) }
+    var showDeleteDossierConfirm by remember { mutableStateOf(false) }
+    var isSyncingDossier by remember { mutableStateOf(false) }
+
     if (showDailyGoalDialog) {
         DailyGoalConfigDialog(
             weekdayMinutes = weekdayGoalMins,
@@ -815,6 +827,114 @@ fun ComprehensiveSupportSettingsScreen(
         )
     }
 
+    // Ethical & Privacy Consent Gate before activating Real Coaching ("Kapsamlı Destek")
+    if (showEthicalConsentDialog) {
+        AlertDialog(
+            onDismissRequest = { showEthicalConsentDialog = false },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = colorScheme.surface,
+            title = {
+                Text(
+                    text = "Öğrenci Dosyası ve Gizlilik Onayı",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Kapsamlı Destek (Gerçek Koçluk) özelliğinin sana özel, tutarlı planlar üretebilmesi için cihazında şifreli bir Öğrenci Dosyası oluşturulur.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "• Dosyada yalnızca hedeflerin, konu hakimiyetin, kütüphane kaynakların, çalışma saatlerin ve koçluk yanıtların tutulur.\n" +
+                            "• Üçüncü taraf yapay zeka modellerine ADIN, E-POSTAN veya KİMLİK BİLGİLERİN ASLA gönderilmez; veriler tamamen anonim olarak yalnızca koçluk, planlama ve Zen Koç işlemlerinde kullanılır.\n" +
+                            "• Dosyanı dilediğin an Ayarlar'dan görüntüleyebilir, düzenleyebilir veya kalıcı olarak silebilirsin.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        StudentDossierManager.setEthicalConsentAccepted(context, true)
+                        CoachingEngine.setComprehensiveSupportEnabled(context, true)
+                        showEthicalConsentDialog = false
+                        scope.launch {
+                            StudentDossierManager.syncFromDatabase(context, force = true)
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Onayla ve Etkinleştir")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEthicalConsentDialog = false }) {
+                    Text("Vazgeç")
+                }
+            }
+        )
+    }
+
+    if (showDeleteDossierConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDossierConfirm = false },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = colorScheme.surface,
+            title = {
+                Text(
+                    text = "Öğrenci Dosyasını Kalıcı Sil?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.error
+                )
+            },
+            text = {
+                Text(
+                    text = "Öğrenci Dosyandaki tüm koçluk yanıtları ve gözlemler cihazından kalıcı olarak silinecek ve Kapsamlı Destek kapatılacaktır. Devam etmek istiyor musun?",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        StudentDossierManager.deleteDossier(context)
+                        showDeleteDossierConfirm = false
+                        Toast.makeText(context, "Öğrenci Dosyası silindi", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Evet, Sil")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDossierConfirm = false }) {
+                    Text("İptal")
+                }
+            }
+        )
+    }
+
+    if (showDossierViewerDialog) {
+        StudentDossierEditorDialog(
+            dossier = studentDossier,
+            onSaveChange = { qId, newVal, asInsight ->
+                StudentDossierManager.updateSingleAnswerOrInsight(context, qId, newVal, asInsight)
+                Toast.makeText(context, "Öğrenci Dosyası güncellendi", Toast.LENGTH_SHORT).show()
+            },
+            onRemoveInsight = { idx ->
+                StudentDossierManager.removeInsightAt(context, idx)
+            },
+            onDismiss = { showDossierViewerDialog = false }
+        )
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -822,7 +942,7 @@ fun ComprehensiveSupportSettingsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. Kapsamlı Destek Toggle Card
+        // 1. Kapsamlı Destek Toggle Card (gated by Ethical Consent Dialog)
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -861,9 +981,116 @@ fun ComprehensiveSupportSettingsScreen(
                 Switch(
                     checked = comprehensiveSupportEnabled,
                     onCheckedChange = { enabled ->
-                        CoachingEngine.setComprehensiveSupportEnabled(context, enabled)
+                        if (enabled && !studentDossier.consentAccepted) {
+                            showEthicalConsentDialog = true
+                        } else {
+                            CoachingEngine.setComprehensiveSupportEnabled(context, enabled)
+                        }
                     }
                 )
+            }
+        }
+
+        // 1b. Student Dossier Management Card ("Öğrenci Dosyası")
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.3f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Öğrenci Dosyası (Anonim & Şifreli)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        val statusDesc = if (studentDossier.isCompleted) {
+                            "Aktif • ${studentDossier.topics.size} konu, ${studentDossier.books.size} kitap, ${studentDossier.answeredQuestionCount}/10 yanıt"
+                        } else if (studentDossier.consentAccepted) {
+                            "Onay verildi • Koçluk Yolu üzerinden 10 soruyu yanıtla"
+                        } else {
+                            "Henüz oluşturulmadı"
+                        }
+                        Text(
+                            text = statusDesc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (studentDossier.isCompleted) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = if (studentDossier.isCompleted) "Hazır" else "Bekliyor",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (studentDossier.isCompleted) colorScheme.primary else colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Günde 2 kez otomatik senkronize edilir. Yalnızca koçluk, plan ekleme ve Zen Koç işlemlerinde adın/kimliğin olmadan paylaşılır.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showDossierViewerDialog = true },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Text("Görüntüle / Düzenle", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (!isSyncingDossier) {
+                                isSyncingDossier = true
+                                scope.launch {
+                                    val synced = StudentDossierManager.syncFromDatabase(context, force = true)
+                                    isSyncingDossier = false
+                                    Toast.makeText(
+                                        context,
+                                        "Eşitlendi (${synced.topics.size} konu, ${synced.books.size} kitap)",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            }
+                        },
+                        enabled = !isSyncingDossier,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Text(if (isSyncingDossier) "..." else "Eşitle", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (studentDossier.isCompleted || studentDossier.consentAccepted) {
+                        TextButton(
+                            onClick = { showDeleteDossierConfirm = true },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Text("Sil", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colorScheme.error)
+                        }
+                    }
+                }
             }
         }
 
@@ -915,6 +1142,189 @@ fun ComprehensiveSupportSettingsScreen(
     }
 }
 
+@Composable
+private fun StudentDossierEditorDialog(
+    dossier: StudentDossier,
+    onSaveChange: (questionId: String?, newValue: String, asInsight: Boolean) -> Unit,
+    onRemoveInsight: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    var selectedQuestionId by remember { mutableStateOf<String?>(null) }
+    var editInputText by remember { mutableStateOf("") }
+    var pendingSaveConfirm by remember { mutableStateOf<Triple<String?, String, Boolean>?>(null) }
+
+    pendingSaveConfirm?.let { (qId, textVal, isInsight) ->
+        AlertDialog(
+            onDismissRequest = { pendingSaveConfirm = null },
+            shape = RoundedCornerShape(18.dp),
+            containerColor = colorScheme.surface,
+            title = { Text("Değişikliği Onayla", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "Öğrenci Dosyana şu bilgi kaydedilecek:\n\n\"${textVal.take(180)}\"\n\nOnaylıyor musun?",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onSaveChange(qId, textVal, isInsight)
+                        pendingSaveConfirm = null
+                        selectedQuestionId = null
+                        editInputText = ""
+                    }
+                ) {
+                    Text("Kaydet")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSaveConfirm = null }) {
+                    Text("İptal")
+                }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = colorScheme.surface,
+        title = {
+            Text(
+                text = "Öğrenci Dosyası Özeti",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "Hedef: ${dossier.targetHeadline.ifBlank { dossier.examType.ifBlank { "Belirlenmedi" } }}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.primary
+                )
+                Text(
+                    text = "Günlük Hedef: Hafta içi ${CoachingEngine.formatMinutesShort(dossier.weekdayGoalMinutes)} • Hafta sonu ${CoachingEngine.formatMinutesShort(dossier.weekendGoalMinutes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "Kayıtlı Veriler: ${dossier.topics.size} konu (${dossier.weakTopicsCount} zayıf) • ${dossier.books.size} kitap",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+
+                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Text(
+                    text = "Koçluk Yanıtların (Düzenlemek için dokun)",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.primary
+                )
+                StudentDossierManager.INTERVIEW_QUESTIONS.forEach { q ->
+                    val ans = dossier.interviewAnswers[q.id].orEmpty()
+                    Surface(
+                        onClick = {
+                            selectedQuestionId = q.id
+                            editInputText = ans
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selectedQuestionId == q.id) colorScheme.primaryContainer.copy(alpha = 0.45f)
+                        else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                            Text(
+                                text = "${q.number}. ${q.prompt}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurface
+                            )
+                            Text(
+                                text = ans.ifBlank { "Yanıtlanmadı" },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (ans.isNotBlank()) colorScheme.primary else colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                if (dossier.coachingInsights.isNotEmpty()) {
+                    HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    Text(
+                        text = "Koçluk Notları",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.primary
+                    )
+                    dossier.coachingInsights.forEachIndexed { idx, note ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "• $note",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurface,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { onRemoveInsight(idx) },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text("Kaldır", fontSize = 11.sp, color = colorScheme.error)
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                OutlinedTextField(
+                    value = editInputText,
+                    onValueChange = { editInputText = it },
+                    label = {
+                        Text(
+                            if (selectedQuestionId != null) "Seçili Soruyu Güncelle" else "Yeni Koçluk Notu Ekle",
+                            fontSize = 12.sp
+                        )
+                    },
+                    singleLine = false,
+                    maxLines = 3,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = {
+                        if (editInputText.isNotBlank()) {
+                            pendingSaveConfirm = Triple(selectedQuestionId, editInputText.trim(), selectedQuestionId == null)
+                        }
+                    },
+                    enabled = editInputText.isNotBlank(),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (selectedQuestionId != null) "Yanıtı Kaydet" else "Dosyaya Not Ekle")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Kapat")
+            }
+        }
+    )
+}
+
 /**
  * Full-Screen Duolingo-Style Guided Daily Path & Comprehensive Support Cockpit
  * rendered when [AppStudyMode.REAL_COACHING] ("Koçluk Yolu") is active.
@@ -933,12 +1343,132 @@ fun DuolingoCoachingPathView(
     onPauseFocus: () -> Unit,
     onResumeFocus: () -> Unit,
     onStopFocus: () -> Unit,
+    onNavigateToSharkAi: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val db = remember(context) { SharkMentorDatabase.getDatabase(context) }
+
+    val studentDossier by StudentDossierManager.dossier.collectAsStateWithLifecycle()
+    val efficiencySuggestion by StudentDossierManager.efficiencySuggestion.collectAsStateWithLifecycle()
+
+    LaunchedEffect(context) {
+        StudentDossierManager.ensureLoaded(context)
+        BookCampManager.ensureLoaded(context)
+    }
+
+    // ── Real Coaching Onboarding Gate: NEVER display fake/nonsense plans until Student Dossier is built! ──
+    if (!studentDossier.isCompleted) {
+        Column(
+            modifier = modifier
+                .widthIn(max = 680.dp)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            StudyModeHeaderSwitcher(
+                currentMode = AppStudyMode.REAL_COACHING,
+                onModeChange = onSwitchMode
+            )
+
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                border = BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = colorScheme.primary.copy(alpha = 0.14f),
+                        modifier = Modifier.size(56.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Gerçek Koçluk İçin Önce Seni Tanıyalım",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Text(
+                        text = "Sana ezbere veya anlamsız bir program atamak istemiyoruz. Programının dengeli, kararlı ve gerçekten verimli olması için önce Shark AI üzerinden 10 kısa soruyu yanıtlayarak anonim Öğrenci Dosyanı oluşturalım.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = colorScheme.surface.copy(alpha = 0.75f),
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Öğrenci Dosyanda Neler Yer Alır?",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                            Text(
+                                text = "• Hedef sınavın, sıralaman ve günlük çalışma saatin\n" +
+                                    "• Konu hakimiyeti seviyelerin ve kütüphanendeki kitapların\n" +
+                                    "• Verimli çalışma saatlerin, okul/kurs tempon ve tercihlerin\n" +
+                                    "• Cihazında şifreli saklanır; adın/kimliğin olmadan anonim işlenir.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            StudentDossierNavBus.requestOpenInterview()
+                            onNavigateToSharkAi()
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Shark AI'da Öğrenci Dosyamı Oluştur",
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
 
     val todayIso = remember {
         CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
@@ -968,10 +1498,6 @@ fun DuolingoCoachingPathView(
     var activePracticeNode by remember { mutableStateOf<DuolingoPathNode?>(null) }
     var activeMiniCheckNode by remember { mutableStateOf<DuolingoPathNode?>(null) }
     var isRebalancingWeek by remember { mutableStateOf(false) }
-
-    LaunchedEffect(context) {
-        BookCampManager.ensureLoaded(context)
-    }
 
     LaunchedEffect(activeSelectedResource?.id, activeSelectedResource?.title, activeSelectedResource?.subject) {
         val res = activeSelectedResource ?: return@LaunchedEffect
@@ -1106,6 +1632,68 @@ fun DuolingoCoachingPathView(
             currentMode = AppStudyMode.REAL_COACHING,
             onModeChange = onSwitchMode
         )
+
+        // 1b. Adaptive Efficiency Suggestion (when high-hour target + missed tasks occur; respects student veto!)
+        efficiencySuggestion?.let { suggestion ->
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "Verimlilik Önerisi",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.secondary
+                    )
+                    Text(
+                        text = suggestion.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                StudentDossierManager.recordEfficiencyDecision(
+                                    context = context,
+                                    acceptedLowerHours = true,
+                                    newWeekdayMins = suggestion.recommendedWeekdayMinutes,
+                                    newWeekendMins = suggestion.recommendedWeekendMinutes
+                                )
+                                Toast.makeText(context, "8-9 saat verimlilik denemesi aktif", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("8-9 Saati Dene", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                StudentDossierManager.recordEfficiencyDecision(
+                                    context = context,
+                                    acceptedLowerHours = false
+                                )
+                                Toast.makeText(context, "Mevcut yüksek hedefin korunacak", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 8.dp)
+                        ) {
+                            Text("Mevcut Hedefim Kalsın", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
 
         // 2. Macro Target Compass Banner ("Ana Pusula")
         val compassBrush = Brush.horizontalGradient(
@@ -2071,7 +2659,12 @@ private fun MiniTopicMasteryCheckDialog(
 
     LaunchedEffect(node.id) {
         isLoading = true
-        val compass = CoachingEngine.buildAiSystemCompassPrompt(context)
+        StudentDossierManager.ensureLoaded(context)
+        val compass = if (StudentDossierManager.shouldAttachDossier(DossierAiChannel.COACHING_DIRECT)) {
+            StudentDossierManager.buildAnonymizedDossierPrompt()
+        } else {
+            CoachingEngine.buildAiSystemCompassPrompt(context)
+        }
         val prompt = """
             $compass
             Ders: ${node.subject}
@@ -2385,6 +2978,111 @@ private fun buildDuolingoDayNodes(
     return nodes
 }
 
+data class BalancedPlanTaskSpec(
+    val dayOfWeek: Int,
+    val subject: String,
+    val topicLabel: String,
+    val flexibleTimeLabel: String,
+    val targetQuestions: Int
+)
+
+/**
+ * Pure deterministic balanced 7-day multi-subject plan builder:
+ * - Spreads blocks evenly across ALL 7 days (1..7) — never dumps onto Sunday.
+ * - Strictly respects weekday/weekend target minutes (e.g. 12h weekday = 8x90m, 15h weekend = 10x90m).
+ * - Rotates across all available books/topics/exam subjects so no single subject floods a day/week.
+ * - Uses ONLY flexible duration labels ("Esnek • 90 dk") — zero rigid clock ranges!
+ */
+fun buildBalancedMultiDayPlanSpecs(
+    weekdayMinutes: Int,
+    weekendMinutes: Int,
+    libraryResources: List<ResourceEntity>,
+    topicGoals: List<TopicGoalEntity>,
+    examType: String
+): List<BalancedPlanTaskSpec> {
+    val safeWd = weekdayMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
+    val safeWe = weekendMinutes.coerceIn(60, CoachingEngine.MAX_DAILY_GOAL_MINUTES)
+
+    // Collect distinct subjects from student's books + weak topics + exam defaults
+    val subjectPool = LinkedHashSet<String>()
+    libraryResources.forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
+    topicGoals
+        .sortedBy { it.currentLevel }
+        .forEach { if (it.subject.isNotBlank()) subjectPool.add(it.subject.trim()) }
+    if (subjectPool.size < 3) {
+        val upper = examType.uppercase(Locale.ROOT)
+        val defaults = when {
+            upper.contains("LGS") -> listOf("LGS Matematik", "LGS Fen Bilimleri", "LGS Türkçe", "LGS İnkılap")
+            upper.contains("KPSS") -> listOf("KPSS Matematik", "KPSS Türkçe", "KPSS Tarih", "KPSS Coğrafya")
+            upper.contains("TUS") -> listOf("TUS Anatomi", "TUS Biyokimya", "TUS Dahiliye", "TUS Patoloji")
+            else -> listOf("TYT Matematik", "TYT Türkçe", "AYT Matematik", "AYT Fizik", "AYT Kimya", "AYT Biyoloji")
+        }
+        defaults.forEach { subjectPool.add(it) }
+    }
+    val subjects = subjectPool.toList()
+
+    // Prepare topic queues per subject (weak topics first, ordered canonically)
+    val topicQueueBySubject = subjects.associateWith { subj ->
+        val weakForSubj = topicGoals
+            .filter { it.subject.equals(subj, ignoreCase = true) && it.currentLevel <= 3 }
+            .sortedWith(
+                compareBy<TopicGoalEntity> { it.currentLevel }
+                    .thenBy { BookCampManager.canonicalTopicIndex(subj, it.topic) }
+            )
+            .map { it.topic }
+        val canonical = BookCampManager.canonicalCurriculumForSubject(subj)
+        val merged = (weakForSubj + canonical).distinct()
+        if (merged.isNotEmpty()) merged else listOf("$subj Temel Pekiştirme", "$subj Soru Çözümü", "$subj Tekrar")
+    }
+    val cursorBySubject = HashMap<String, Int>()
+    val result = mutableListOf<BalancedPlanTaskSpec>()
+    var globalSlot = 0
+
+    for (day in 1..7) {
+        val isWeekend = day == 6 || day == 7
+        val dayTargetMins = if (isWeekend) safeWe else safeWd
+        val blockCount = (dayTargetMins / 90).coerceIn(2, 11)
+        val minsPerBlock = (dayTargetMins / blockCount).coerceIn(45, 120)
+        val flexLabel = "Esnek • $minsPerBlock dk"
+
+        for (slotIdx in 0 until blockCount) {
+            val subj = subjects[(globalSlot + day - 1) % subjects.size]
+            globalSlot++
+            val topicList = topicQueueBySubject[subj].orEmpty()
+            val curIdx = cursorBySubject[subj] ?: 0
+            cursorBySubject[subj] = curIdx + 1
+            val rawTopic = topicList.getOrElse(curIdx % topicList.size.coerceAtLeast(1)) { "$subj Etüt" }
+            val gatedTopic = BookCampManager.enforcePrerequisiteFoundationGate(
+                subject = subj,
+                requestedTopic = rawTopic,
+                studentTopicGoals = topicGoals
+            ).effectiveTopic
+
+            val matchingBook = libraryResources.firstOrNull {
+                it.subject.equals(subj, ignoreCase = true) ||
+                    it.subject.contains(subj.substringAfterLast(' '), ignoreCase = true)
+            }
+            val label = if (matchingBook != null) {
+                "${matchingBook.title}: $gatedTopic"
+            } else {
+                "$subj: $gatedTopic"
+            }
+            val qCount = if (minsPerBlock >= 90) 40 else 30
+
+            result.add(
+                BalancedPlanTaskSpec(
+                    dayOfWeek = day,
+                    subject = subj,
+                    topicLabel = label,
+                    flexibleTimeLabel = flexLabel,
+                    targetQuestions = qCount
+                )
+            )
+        }
+    }
+    return result
+}
+
 private suspend fun rebalanceWeeklyPlanWithAiCoach(
     context: Context,
     db: SharkMentorDatabase,
@@ -2404,103 +3102,76 @@ private suspend fun rebalanceWeeklyPlanWithAiCoach(
     val uncompleted = existingTasks.filter { !it.isCompleted }
 
     if (uncompleted.isNotEmpty()) {
-        val orderedUncompleted = uncompleted
+        // Interleave subjects cleanly and ALWAYS distribute across ALL 7 days cycling from todayIso (NEVER Sunday-only!)
+        val bySubject = uncompleted
             .map { task ->
                 val gate = BookCampManager.enforcePrerequisiteFoundationGate(
                     subject = task.subject,
                     requestedTopic = task.topic.ifBlank { task.title },
                     studentTopicGoals = topicGoals
                 )
+                val cleanTime = if (task.scheduledTime.contains(":") && task.scheduledTime.contains("-")) {
+                    "Esnek • 90 dk"
+                } else {
+                    task.scheduledTime.ifBlank { "Esnek • 90 dk" }
+                }
                 task.copy(
                     title = gate.effectiveTopic,
-                    topic = gate.effectiveTopic
+                    topic = gate.effectiveTopic,
+                    scheduledTime = cleanTime
                 )
             }
-            .sortedWith(
-                compareBy<PlanEntity> { it.subject }
-                    .thenBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }
-            )
+            .groupBy { it.subject.trim() }
+            .values
+            .map { list ->
+                list.sortedBy { BookCampManager.canonicalTopicIndex(it.subject, it.topic) }.toMutableList()
+            }
+
+        val interleaved = mutableListOf<PlanEntity>()
+        var remaining = true
+        while (remaining) {
+            remaining = false
+            for (bucket in bySubject) {
+                if (bucket.isNotEmpty()) {
+                    interleaved.add(bucket.removeAt(0))
+                    remaining = true
+                }
+            }
+        }
 
         val todayIso = CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
-        val targetDays = (todayIso..7).toList().ifEmpty { (1..7).toList() }
-        val rebalanced = orderedUncompleted.mapIndexed { idx, task ->
-            val assignedDay = targetDays[idx % targetDays.size]
+        val cyclicSevenDays = (0..6).map { offset -> ((todayIso - 1 + offset) % 7) + 1 }
+        val rebalanced = interleaved.mapIndexed { idx, task ->
+            val assignedDay = cyclicSevenDays[idx % cyclicSevenDays.size]
             task.copy(dayOfWeek = assignedDay, orderIndex = idx + 1)
         }
         planDao.insertTasks(rebalanced)
         return@withContext rebalanced.size
     }
 
-    // If a single book is selected, use its REAL verified playlist if present;
-    // otherwise schedule honest book practice blocks without fabricating fake video camps
-    val primaryResource = activeResource ?: libraryResources.firstOrNull()
-    if (primaryResource != null) {
-        val binding = BookCampManager.resolveCampForResource(context, primaryResource, topicGoals)
-        if (binding.hasVerifiedVideoSupport && binding.episodes.isNotEmpty()) {
-            return@withContext BookCampManager.distributeCampToWeeklyPlan(context, binding, targetQuestionsPerDay = 40)
-        }
-        val canonicalTopics = BookCampManager.canonicalCurriculumForSubject(primaryResource.subject, primaryResource.title)
-        val topics = if (canonicalTopics.isNotEmpty()) {
-            BookCampManager.expandTopicsToDaysWithMastery(
-                subject = primaryResource.subject,
-                topics = canonicalTopics,
-                totalDays = 7,
-                studentTopicGoals = topicGoals
-            )
-        } else {
-            (1..7).map { "${primaryResource.title} • ${primaryResource.completedUnits + it}. ${primaryResource.unitType}" }
-        }
-        val bookTasks = (1..7).map { day ->
-            val t = topics.getOrElse(day - 1) { "${primaryResource.title} • $day. Bölüm" }
-            val label = "${primaryResource.title}: $t"
-            PlanEntity(
-                id = UUID.randomUUID().toString(),
-                folderId = activeFolder.id,
-                title = label,
-                subject = primaryResource.subject,
-                topic = label,
-                dayOfWeek = day,
-                scheduledTime = "10:00 - 11:30",
-                targetQuestions = 40,
-                isCompleted = false,
-                orderIndex = day
-            )
-        }
-        planDao.insertTasks(bookTasks)
-        return@withContext bookTasks.size
-    }
-
-    val primarySubject = CoachingEngine.defaultFocusTitlesForExam(targetContext.examType).firstOrNull() ?: "TYT Matematik"
-    val canonicalTopics = BookCampManager.canonicalCurriculumForSubject(primarySubject)
-    val weightedTopics = BookCampManager.expandTopicsToDaysWithMastery(
-        subject = primarySubject,
-        topics = canonicalTopics,
-        totalDays = 7,
-        studentTopicGoals = topicGoals
+    // Generate a full 7-day multi-subject flexible-duration plan respecting exact weekday/weekend target hours
+    val wdMins = CoachingEngine.weekdayGoalMinutes.value
+    val weMins = CoachingEngine.weekendGoalMinutes.value
+    val specs = buildBalancedMultiDayPlanSpecs(
+        weekdayMinutes = wdMins,
+        weekendMinutes = weMins,
+        libraryResources = libraryResources,
+        topicGoals = topicGoals,
+        examType = targetContext.examType
     )
 
-    val generated = mutableListOf<PlanEntity>()
-    for (day in 1..7) {
-        val rawTopic = weightedTopics.getOrElse(day - 1) { "$primarySubject • $day. Gün" }
-        val gatedTopic = BookCampManager.enforcePrerequisiteFoundationGate(
-            subject = primarySubject,
-            requestedTopic = rawTopic,
-            studentTopicGoals = topicGoals
-        ).effectiveTopic
-        val topicLabel = "$primarySubject: $gatedTopic"
-        generated.add(
-            PlanEntity(
-                id = UUID.randomUUID().toString(),
-                folderId = activeFolder.id,
-                title = topicLabel,
-                subject = primarySubject,
-                topic = topicLabel,
-                dayOfWeek = day,
-                scheduledTime = "10:00 - 11:30",
-                targetQuestions = 40,
-                isCompleted = false,
-                orderIndex = day
-            )
+    val generated = specs.mapIndexed { idx, spec ->
+        PlanEntity(
+            id = UUID.randomUUID().toString(),
+            folderId = activeFolder.id,
+            title = spec.topicLabel,
+            subject = spec.subject,
+            topic = spec.topicLabel,
+            dayOfWeek = spec.dayOfWeek,
+            scheduledTime = spec.flexibleTimeLabel,
+            targetQuestions = spec.targetQuestions,
+            isCompleted = false,
+            orderIndex = idx + 1
         )
     }
     planDao.insertTasks(generated)

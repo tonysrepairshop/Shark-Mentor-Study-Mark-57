@@ -69,16 +69,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Listen for institution/coach assignment & student profile sync across the app
-        com.example.sharkmentor.core.notification.SharkNotificationEngine.init(application)
-        val auth = runCatching { com.google.firebase.auth.FirebaseAuth.getInstance() }.getOrNull()
-            ?: GoogleServicesHelper.getFirebaseAuth(application)
-        firebaseAuthRef = auth
-        runCatching { auth?.addAuthStateListener(authStateListener) }
+        // Defer Firebase Auth, Firestore listeners & notification setup off Main Thread (zero cold-start ANR on low-RAM devices)
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                com.example.sharkmentor.core.notification.SharkNotificationEngine.init(application)
+                val auth = runCatching { com.google.firebase.auth.FirebaseAuth.getInstance() }.getOrNull()
+                    ?: GoogleServicesHelper.getFirebaseAuth(application)
+                firebaseAuthRef = auth
+                runCatching { auth?.addAuthStateListener(authStateListener) }
 
-        val currentUser = auth?.currentUser
-            ?: GoogleServicesHelper.getCurrentUser(auth, application)
-        attachStudentListenerIfNeeded(currentUser?.takeUnless { it.isAnonymous }?.uid)
+                val currentUser = auth?.currentUser
+                    ?: GoogleServicesHelper.getCurrentUser(auth, application)
+                attachStudentListenerIfNeeded(currentUser?.takeUnless { it.isAnonymous }?.uid)
+            }
+        }
     }
 
     private fun attachStudentListenerIfNeeded(uid: String?) {
