@@ -122,10 +122,10 @@ class SyncWorker(
 
             val oneTimeRequest = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(constraints)
-                .setInitialDelay(3, TimeUnit.SECONDS)
+                .setInitialDelay(15, TimeUnit.SECONDS)
                 .setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL,
-                    20,
+                    30,
                     TimeUnit.SECONDS
                 )
                 .addTag(UNIQUE_IMMEDIATE_WORK)
@@ -136,7 +136,7 @@ class SyncWorker(
                 ExistingWorkPolicy.KEEP,
                 oneTimeRequest
             )
-            Log.d(TAG, "Immediate sync enqueued with KEEP policy (3s debounce)")
+            Log.d(TAG, "Immediate sync enqueued with KEEP policy (15s debounce)")
         }
 
         fun enqueueForceFullSync(context: Context) {
@@ -1281,11 +1281,10 @@ class SyncWorker(
         syncTag: String,
         uid: String
     ): Int {
-        val pendingDeleted = db.goalsDao().getPendingDeletedTopics()
-        if (pendingDeleted.isEmpty()) return 0
-        val ok = com.example.sharkmentor.data.sync.TopicCloudSyncManager
-            .deleteTopicsInCloudNow(applicationContext, pendingDeleted)
-        return if (ok) pendingDeleted.size else 0
+        if (uid.isBlank() || uid == "student_default") return 0
+        if (db.goalsDao().getPendingDeletedTopics().isEmpty()) return 0
+        return com.example.sharkmentor.data.sync.TopicCloudSyncManager
+            .pushPendingTopicsNow(applicationContext)
     }
 
     private suspend fun syncLocalPlans(
@@ -1340,10 +1339,8 @@ class SyncWorker(
         uid: String
     ): Int {
         if (uid.isBlank() || uid == "student_default") return 0
-        val pendingTopics = db.syncDao().getUnsyncedTopics()
-        if (pendingTopics.isEmpty()) return 0
         return com.example.sharkmentor.data.sync.TopicCloudSyncManager
-            .pushTopicsNow(applicationContext, pendingTopics)
+            .pushPendingTopicsNow(applicationContext)
     }
 
     private suspend fun syncLocalResources(

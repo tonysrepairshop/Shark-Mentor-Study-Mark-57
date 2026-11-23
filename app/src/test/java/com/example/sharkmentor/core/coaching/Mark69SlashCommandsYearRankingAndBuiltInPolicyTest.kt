@@ -387,4 +387,45 @@ class Mark69SlashCommandsYearRankingAndBuiltInPolicyTest {
         assertEquals(4, plan.toUpdate.first().currentLevel)
         assertEquals("Only remotely deleted Vektörler should be deleted locally", listOf(12L), plan.toDeleteIds)
     }
+
+    @Test
+    fun testTopicCloudSyncSingleDocSnapshotCompactnessHashGuardAndRoundTrip() {
+        val sampleTopics = (1..150).map { i ->
+            TopicGoalEntity(
+                id = i.toLong(),
+                subject = if (i % 2 == 0) "AYT Matematik" else "AYT Kimya",
+                topic = "Konu $i - Detaylı Başlık",
+                currentLevel = i % 6,
+                targetLevel = 5,
+                notes = if (i == 7) "Önemli not" else "",
+                isSynced = false,
+                isDeleted = false,
+                updatedAtMillis = 1_700_000_000_000L + i
+            )
+        }
+
+        val (jsonForward, hashForward) = TopicCloudSyncManager.serializeActiveTopicsSnapshotJson(sampleTopics)
+        val (_, hashReversed) = TopicCloudSyncManager.serializeActiveTopicsSnapshotJson(sampleTopics.reversed())
+
+        // Order-independent SHA-256 ensures unchanged state costs 0 Firestore writes
+        assertEquals("SHA-256 must be order-independent for skip-unchanged quota guard", hashForward, hashReversed)
+        // Entire 150-topic curriculum must fit easily inside 1 single Firestore doc (< 25 KB vs 1,000 KB limit)
+        assertTrue(
+            "150 topics should pack well under 25 KB (was ${jsonForward.toByteArray().size} bytes)",
+            jsonForward.toByteArray(Charsets.UTF_8).size < 25_000
+        )
+
+        // Exact round-trip parse from single snapshot doc restores all 150 topics with ratings & notes
+        val parsed = TopicCloudSyncManager.parseSnapshotTopicsJson("uid_quota_test", jsonForward, 1_700_000_999_000L)
+        assertEquals(150, parsed.size)
+        val seventh = parsed.first { it.topic == "Konu 7 - Detaylı Başlık" }
+        assertEquals("AYT Kimya", seventh.subject)
+        assertEquals(1, seventh.currentLevel)
+        assertEquals("Önemli not", seventh.notes)
+
+        // Changing even 1 mastery star changes the SHA-256 hash so the 1-doc write triggers cleanly
+        val modified = sampleTopics.map { if (it.id == 7L) it.copy(currentLevel = 4) else it }
+        val (_, hashModified) = TopicCloudSyncManager.serializeActiveTopicsSnapshotJson(modified)
+        assertNotEquals("Changing a rating must change SHA-256 hash", hashForward, hashModified)
+    }
 }

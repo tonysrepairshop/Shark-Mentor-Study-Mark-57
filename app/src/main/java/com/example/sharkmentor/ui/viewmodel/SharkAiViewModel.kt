@@ -2607,26 +2607,11 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                                 savedTarget = topicEntity.targetLevel
                             }
 
-                            val savedEntity = TopicGoalEntity(
-                                id = targetTopicId,
-                                subject = savedSubject,
-                                topic = savedTopic,
-                                currentLevel = savedLevel,
-                                targetLevel = savedTarget,
-                                isSynced = false,
-                                isDeleted = false,
-                                institutionId = com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(getApplication()).institutionId ?: "INDIVIDUAL",
-                                updatedAtMillis = now
-                            )
-                            val pushed = if (targetTopicId > 0L) {
-                                runCatching {
-                                    com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                                        .pushTopicsNow(getApplication(), listOf(savedEntity))
-                                }.getOrDefault(0)
-                            } else {
-                                0
-                            }
-                            if (pushed <= 0) {
+                            val pushed = runCatching {
+                                com.example.sharkmentor.data.sync.TopicCloudSyncManager
+                                    .pushSnapshotNow(getApplication())
+                            }.getOrDefault(false)
+                            if (!pushed) {
                                 SyncWorker.enqueueImmediateSync(getApplication())
                             }
                         }
@@ -2866,16 +2851,13 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         }
 
         if (entitiesToInsert.isNotEmpty()) {
-            val insertedIds = database.goalsDao().insertTopicGoals(entitiesToInsert)
-            val persistedEntities = entitiesToInsert.mapIndexed { idx, entity ->
-                val resolvedId = insertedIds.getOrNull(idx)?.takeIf { it > 0L } ?: entity.id
-                entity.copy(id = resolvedId)
-            }
+            database.goalsDao().insertTopicGoals(entitiesToInsert)
+            // Packs all inserted topics into 1 SINGLE Firestore write (99.7% quota savings vs per-doc writes)
             val pushed = runCatching {
                 com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                    .pushTopicsNow(getApplication(), persistedEntities)
-            }.getOrDefault(0)
-            if (pushed < persistedEntities.size) {
+                    .pushSnapshotNow(getApplication())
+            }.getOrDefault(false)
+            if (!pushed) {
                 SyncWorker.enqueueImmediateSync(getApplication())
             }
         }

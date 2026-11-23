@@ -8,20 +8,27 @@ import com.example.sharkmentor.data.local.entity.TopicGoalEntity
 import com.example.sharkmentor.service.sync.SyncWorker
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import java.security.MessageDigest
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 
 /**
- * Pure value representation of a Firestore topic mastery document used for
- * deterministic cross-collection merging & unit testing.
+ * Pure value representation of a Firestore topic mastery entry used for
+ * deterministic merging, single-document snapshot encoding, and unit testing.
  */
 data class RemoteTopicRecord(
     val docId: String,
@@ -46,32 +53,52 @@ data class TopicReconcilePlan(
 )
 
 /**
- * Canonical, offline-first Cloud Sync engine for Topic Mastery (`Konu Hakimiyeti` / `topic_goals`).
+ * Quota-safe, single-document Cloud Sync engine for Topic Mastery (`Konu Hakimiyeti` / `topic_goals`).
  *
- * Strictly adheres to Mark 47 `firestore.rules`:
- * - Primary canonical path: `students/{uid}/topics/{docId}` (owner-unconditional read/write)
- * - Mirror compatibility path: `topics/{docId}` with `studentId == uid` (Coach Web & legacy clients)
+ * Strictly adheres to Mark 47 `firestore.rules` (lines 230-232):
+ * - Canonical packed snapshot path: `students/{uid}/meta/topic_mastery_snapshot`
+ *   (owner-unconditional read/write; 1 SINGLE Firestore read / 1 SINGLE Firestore write for ALL 150-500+ topics!)
  *
- * Guarantees:
- * 1. Deterministic collision-free doc IDs derived from `(uid, normalizedSubject, normalizedTopic)`
- *    so Room auto-increment resets after reinstall NEVER overwrite unrelated cloud topics.
- * 2. Fast Firestore `WriteBatch` uploads (chunks of 200) so bulk AI topic creation (`INSERT_TOPICS_BATCH`)
- *    persists to Firebase immediately in <1 second instead of waiting for delayed/battery-gated workers.
- * 3. Seamless backward compatibility on pull: ALWAYS queries & merges BOTH `students/{uid}/topics`
- *    AND top-level `topics` (reading both legacy `${uid}_${localId}` and new `${uid}_t_<hash>` docs)
- *    with Last-Write-Wins deduplication by normalized `(subject, topic)`.
- * 4. Mutex-serialized Room writes so concurrent login pull, SyncWorker, and live listeners never duplicate rows.
+ * Quota Protection Guarantees:
+ * 1. **1 Write for Entire Topic Table:** Packing all topics into compact JSON inside 1 doc cuts bulk AI
+ *    insert writes from 300 writes -> **1 write** (99.7% reduction; ~14 KB for 200 topics vs 1 MB doc limit).
+ * 2. **SHA-256 Change Guard:** Computes deterministic SHA-256 over sorted canonical topics before writing.
+ *    If unchanged -> **0 Firestore writes**.
+ * 3. **2.5-Second Debounced Flush:** Rapid star-rating taps coalesce into **1 single write** instead of
+ *    firing a write per tap. `flushPendingInBackground` ensures immediate flush on screen exit.
+ * 4. **Zero Live Collection Listeners + 15-Min Pull Cooldown:** Room is the single source of truth; tab
+ *    switches cause **0 Firestore reads**. Fresh reinstalls / logins restore ALL topics in **1 single read**.
+ * 5. **One-Time Legacy Migration:** Only when `meta/topic_mastery_snapshot` does not yet exist AND the
+ *    account hasn't migrated yet (24h guard), reads legacy `students/{uid}/topics` / `topics` ONCE,
+ *    packs them into the single snapshot doc, and never scans those legacy collections again.
  */
 object TopicCloudSyncManager {
 
     private const val TAG = "TopicCloudSync"
-    private const val BATCH_CHUNK_SIZE = 200
-    private const val QUERY_LIMIT = 500L
+    private const val PREFS_NAME = "shark_topic_sync_quota_prefs"
+    private const val KEY_LAST_HASH_PREFIX = "last_topics_sha256_"
+    private const val KEY_LAST_PULL_PREFIX = "last_topics_pull_ms_"
+    private const val KEY_LEGACY_MIGRATED_PREFIX = "legacy_topics_migrated_"
+    private const val KEY_LEGACY_CHECKED_MS_PREFIX = "legacy_topics_checked_ms_"
+
+    private const val SNAPSHOT_VERSION = 2
+    private const val PULL_COOLDOWN_MS = 15L * 60L * 1000L // 15 minutes
+    private const val LEGACY_CHECK_COOLDOWN_MS = 24L * 60L * 60L * 1000L // 24 hours
+    private const val DEFAULT_DEBOUNCE_MS = 2_500L
+    private const val LEGACY_QUERY_LIMIT = 400L
+
     private val NON_ALNUM_TR = Regex("""[^a-z0-9çğıöşü]+""")
     private val MULTI_SPACE = Regex("""\s+""")
     private val syncMutex = Mutex()
+    private val bgScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    // ── Pure Deterministic Key / ID / Merge Logic (JVM Unit-Testable) ────────
+    @Volatile
+    private var pendingDebounceJob: Job? = null
+
+    private fun prefs(context: Context) =
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    // ── Pure Deterministic Serialization, Hashing & Merge Logic (JVM Unit-Testable) ──
 
     fun normalizeSegment(raw: String): String {
         return raw.trim()
@@ -87,43 +114,115 @@ object TopicCloudSyncManager {
 
     fun buildStableTopicDocId(uid: String, subject: String, topic: String): String {
         val canonicalKey = normalizeTopicKey(subject, topic)
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(canonicalKey.toByteArray(Charsets.UTF_8))
-        val hex = digest.joinToString("") { "%02x".format(it) }.take(24)
+        val hex = sha256Hex(canonicalKey).take(24)
         return "${uid}_t_$hex"
     }
 
-    fun buildTopicPayloadMap(
-        uid: String,
-        topic: TopicGoalEntity,
-        docId: String,
-        nowMillis: Long = topic.updatedAtMillis.takeIf { it > 0L } ?: System.currentTimeMillis()
-    ): HashMap<String, Any?> {
-        val clampedLevel = topic.currentLevel.coerceIn(0, 5)
-        val clampedTarget = topic.targetLevel.coerceIn(1, 5)
-        return hashMapOf(
-            "id" to docId,
-            "localId" to topic.id,
-            "studentId" to uid,
-            "userId" to uid,
-            "subject" to topic.subject.trim(),
-            "topic" to topic.topic.trim(),
-            "topicName" to topic.topic.trim(),
-            "masteryLevel" to clampedLevel,
-            "currentLevel" to clampedLevel,
-            "targetMasteryScore" to clampedTarget,
-            "targetLevel" to clampedTarget,
-            "notes" to topic.notes,
-            "institutionId" to (topic.institutionId?.takeIf { it.isNotBlank() } ?: "INDIVIDUAL"),
-            "isDeleted" to topic.isDeleted,
-            "updatedAtMillis" to nowMillis
-        )
+    fun sha256Hex(input: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(input.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     /**
-     * Merges topic records fetched from BOTH `students/{uid}/topics` and top-level `topics`
-     * (including legacy `${uid}_${localId}` and new `${uid}_t_<hash>` IDs) into a single
-     * deduplicated list keyed by normalized `(subject, topic)`.
+     * Serializes active topics into ultra-compact deterministic JSON (~70-90 bytes/topic)
+     * sorted by canonical `(subject, topic)` key so the content hash is 100% stable.
+     */
+    fun serializeActiveTopicsSnapshotJson(topics: List<TopicGoalEntity>): Pair<String, String> {
+        val deduped = LinkedHashMap<String, TopicGoalEntity>()
+        for (entity in topics) {
+            if (entity.isDeleted) continue
+            val cleanTopic = entity.topic.trim()
+            if (cleanTopic.isBlank()) continue
+            val cleanSubject = entity.subject.trim().ifBlank { "Genel" }
+            val key = normalizeTopicKey(cleanSubject, cleanTopic)
+            val prev = deduped[key]
+            if (prev == null || entity.updatedAtMillis >= prev.updatedAtMillis) {
+                deduped[key] = entity.copy(subject = cleanSubject, topic = cleanTopic)
+            }
+        }
+
+        val sortedKeys = deduped.keys.sorted()
+        val jsonArray = JsonArray()
+        val hashInput = StringBuilder()
+
+        for (key in sortedKeys) {
+            val item = deduped[key] ?: continue
+            val level = item.currentLevel.coerceIn(0, 5)
+            val target = item.targetLevel.coerceIn(1, 5)
+            val cleanNotes = item.notes.trim()
+            val obj = JsonObject().apply {
+                addProperty("s", item.subject)
+                addProperty("t", item.topic)
+                addProperty("l", level)
+                if (target != 5) addProperty("g", target)
+                if (cleanNotes.isNotEmpty()) addProperty("n", cleanNotes)
+                addProperty("u", item.updatedAtMillis)
+            }
+            jsonArray.add(obj)
+            hashInput.append(key)
+                .append('|').append(level)
+                .append('|').append(target)
+                .append('|').append(cleanNotes)
+                .append('\n')
+        }
+
+        val jsonStr = jsonArray.toString()
+        val contentHash = sha256Hex(hashInput.toString())
+        return jsonStr to contentHash
+    }
+
+    /**
+     * Parses a packed `topicsJson` array from `students/{uid}/meta/topic_mastery_snapshot`.
+     */
+    fun parseSnapshotTopicsJson(
+        uid: String,
+        topicsJson: String?,
+        fallbackUpdatedAtMillis: Long
+    ): List<RemoteTopicRecord> {
+        if (topicsJson.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val root = JsonParser.parseString(topicsJson)
+            if (!root.isJsonArray) return@runCatching emptyList()
+            val arr = root.asJsonArray
+            val out = ArrayList<RemoteTopicRecord>(arr.size())
+            for (elem in arr) {
+                if (!elem.isJsonObject) continue
+                val obj = elem.asJsonObject
+                val rawSubj = obj.get("s")?.takeIf { !it.isJsonNull }?.asString ?: "Genel"
+                val rawTopic = obj.get("t")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val subject = SyncWorker.sanitizeTurkishText(rawSubj).trim().ifBlank { "Genel" }
+                val topic = SyncWorker.sanitizeTurkishText(rawTopic).trim()
+                if (topic.isBlank()) continue
+                val level = (obj.get("l")?.takeIf { !it.isJsonNull }?.asInt ?: 0).coerceIn(0, 5)
+                val target = (obj.get("g")?.takeIf { !it.isJsonNull }?.asInt ?: 5).coerceIn(1, 5)
+                val rawNotes = obj.get("n")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val notes = SyncWorker.sanitizeTurkishText(rawNotes).trim()
+                val updatedAt = (obj.get("u")?.takeIf { !it.isJsonNull }?.asLong ?: fallbackUpdatedAtMillis)
+                    .takeIf { it > 0L } ?: fallbackUpdatedAtMillis
+                val stableId = buildStableTopicDocId(uid, subject, topic)
+                out.add(
+                    RemoteTopicRecord(
+                        docId = stableId,
+                        localId = null,
+                        subject = subject,
+                        topic = topic,
+                        currentLevel = level,
+                        targetLevel = target,
+                        notes = notes,
+                        isDeleted = false,
+                        updatedAtMillis = updatedAt,
+                        fromSubcollection = true
+                    )
+                )
+            }
+            out
+        }.getOrElse { emptyList() }
+    }
+
+    /**
+     * Merges topic records (from single snapshot or legacy collections) into a single
+     * deduplicated list keyed by normalized `(subject, topic)` using deterministic LWW.
      */
     fun mergeRemoteTopicRecords(records: List<RemoteTopicRecord>): List<RemoteTopicRecord> {
         if (records.isEmpty()) return emptyList()
@@ -148,19 +247,15 @@ object TopicCloudSyncManager {
         if (candidate.updatedAtMillis != existing.updatedAtMillis) {
             return candidate.updatedAtMillis > existing.updatedAtMillis
         }
-        // Tie-breaker 1: active document wins over deleted when timestamps match identically
         if (existing.isDeleted != candidate.isDeleted) {
             return !candidate.isDeleted
         }
-        // Tie-breaker 2: higher mastery rating wins if legacy doc lacked an updatedAt timestamp
         if (candidate.currentLevel != existing.currentLevel) {
             return candidate.currentLevel > existing.currentLevel
         }
-        // Tie-breaker 3: prefer canonical owner subcollection (`students/{uid}/topics`)
         if (existing.fromSubcollection != candidate.fromSubcollection) {
             return candidate.fromSubcollection
         }
-        // Tie-breaker 4: prefer new stable doc ID format over legacy auto-increment ID
         return candidate.docId.contains("_t_") && !existing.docId.contains("_t_")
     }
 
@@ -204,11 +299,9 @@ object TopicCloudSyncManager {
             activeRemoteKeys.add(key)
 
             if (existing != null) {
-                // Respect pending local deletion unless remote was updated strictly after it
                 if (existing.isDeleted && !existing.isSynced && existing.updatedAtMillis >= remote.updatedAtMillis) {
                     continue
                 }
-                // Respect pending local mastery edit unless remote is strictly newer
                 if (!existing.isSynced && !existing.isDeleted && existing.updatedAtMillis >= remote.updatedAtMillis) {
                     continue
                 }
@@ -260,7 +353,7 @@ object TopicCloudSyncManager {
         )
     }
 
-    // ── Firestore I/O Operations ─────────────────────────────────────────────
+    // ── Quota-Safe Single-Document Firestore I/O ─────────────────────────────
 
     private fun resolveAuthenticatedUid(context: Context): String? {
         val uid = runCatching {
@@ -269,7 +362,11 @@ object TopicCloudSyncManager {
         return uid?.takeIf { it.isNotBlank() && it != "student_default" && it != "local_student" }
     }
 
-    private fun parseSnapshotDoc(
+    private fun snapshotDocRef(fs: com.google.firebase.firestore.FirebaseFirestore, uid: String) =
+        fs.collection("students").document(uid)
+            .collection("meta").document("topic_mastery_snapshot")
+
+    private fun parseLegacyDoc(
         doc: DocumentSnapshot,
         uid: String,
         fromSubcollection: Boolean
@@ -314,259 +411,249 @@ object TopicCloudSyncManager {
     }
 
     /**
-     * Immediately uploads the supplied [topics] to Firestore using batched writes (200 docs/batch).
-     * Canonical write goes to `students/{uid}/topics/{stableDocId}` first, then mirrors to
-     * top-level `topics/{stableDocId}` independently for coach dashboard & legacy compatibility.
+     * Coalesces rapid star-rating / edit bursts into **1 SINGLE Firestore write**
+     * after [delayMs] of inactivity (default 2.5 seconds).
      */
-    suspend fun pushTopicsNow(
-        context: Context,
-        topics: List<TopicGoalEntity>
-    ): Int = withContext(Dispatchers.IO) {
-        if (topics.isEmpty()) return@withContext 0
-        val uid = resolveAuthenticatedUid(context) ?: return@withContext 0
-        val fs = GoogleServicesHelper.getFirebaseFirestore(context) ?: return@withContext 0
-        val db = SharkMentorDatabase.getDatabase(context)
-        val activeTopics = topics.filter { !it.isDeleted && it.topic.isNotBlank() }
-        if (activeTopics.isEmpty()) return@withContext 0
-
-        var uploaded = 0
-        val syncedIds = mutableListOf<Long>()
-
-        for (chunk in activeTopics.chunked(BATCH_CHUNK_SIZE)) {
-            val now = System.currentTimeMillis()
-            val prepared = chunk.map { entity ->
-                val docId = buildStableTopicDocId(uid, entity.subject, entity.topic)
-                val ts = entity.updatedAtMillis.takeIf { it > 0L } ?: now
-                val payload = buildTopicPayloadMap(uid, entity, docId, ts).apply {
-                    put("updatedAt", FieldValue.serverTimestamp())
-                }
-                Triple(entity, docId, payload)
-            }
-
-            // 1. Canonical owner subcollection (unconditionally permitted for student owner)
-            val subOk = runCatching {
-                val batch = fs.batch()
-                for ((_, docId, payload) in prepared) {
-                    val ref = fs.collection("students").document(uid)
-                        .collection("topics").document(docId)
-                    batch.set(ref, payload, SetOptions.merge())
-                }
-                batch.commit().await()
-                true
-            }.onFailure { e ->
-                Log.w(TAG, "Subcollection batch push failed (${prepared.size} topics): ${e.message}")
-            }.getOrDefault(false)
-
-            // 2. Top-level mirror collection (Coach Web & legacy listener compatibility)
-            val rootOk = runCatching {
-                val batch = fs.batch()
-                for ((_, docId, payload) in prepared) {
-                    val ref = fs.collection("topics").document(docId)
-                    batch.set(ref, payload, SetOptions.merge())
-                }
-                batch.commit().await()
-                true
-            }.onFailure { e ->
-                Log.w(TAG, "Root mirror batch push failed (${prepared.size} topics): ${e.message}")
-            }.getOrDefault(false)
-
-            if (subOk || rootOk) {
-                uploaded += prepared.size
-                prepared.forEach { (entity, _, _) ->
-                    if (entity.id > 0L) syncedIds.add(entity.id)
-                }
+    fun scheduleDebouncedPush(context: Context, delayMs: Long = DEFAULT_DEBOUNCE_MS) {
+        val appCtx = context.applicationContext
+        pendingDebounceJob?.cancel()
+        pendingDebounceJob = bgScope.launch {
+            delay(delayMs)
+            val pushed = pushSnapshotNow(appCtx, force = false)
+            if (!pushed) {
+                SyncWorker.enqueueImmediateSync(appCtx)
             }
         }
-
-        if (syncedIds.isNotEmpty()) {
-            runCatching {
-                syncedIds.chunked(400).forEach { idChunk ->
-                    db.syncDao().markTopicsAsSynced(idChunk)
-                }
-            }
-        }
-        Log.d(TAG, "pushTopicsNow finished: uploaded=$uploaded/${activeTopics.size}")
-        uploaded
     }
 
     /**
-     * Flushes all locally pending deletions and unsynced topic inserts/updates to Firestore.
+     * Immediately flushes any pending debounced topic edits in the background
+     * (e.g., when leaving `GoalsViewModel` or after bulk AI insert). Costs at most 1 write,
+     * or 0 writes if SHA-256 hash matches the last uploaded snapshot.
+     */
+    fun flushPendingInBackground(context: Context) {
+        val appCtx = context.applicationContext
+        pendingDebounceJob?.cancel()
+        pendingDebounceJob = null
+        bgScope.launch {
+            val db = SharkMentorDatabase.getDatabase(appCtx)
+            val hasPending = db.syncDao().getUnsyncedTopics().isNotEmpty() ||
+                db.goalsDao().getPendingDeletedTopics().isNotEmpty()
+            if (hasPending) {
+                val ok = pushSnapshotNow(appCtx, force = false)
+                if (!ok) {
+                    SyncWorker.enqueueImmediateSync(appCtx)
+                }
+            }
+        }
+    }
+
+    /**
+     * Packs ALL active local topics into **1 SINGLE Firestore document** (`students/{uid}/meta/topic_mastery_snapshot`)
+     * guarded by a SHA-256 hash so unchanged state incurs **0 Firestore writes**.
+     *
+     * Returns `true` if cloud state is confirmed up-to-date (either skipped via SHA-256 or written cleanly).
+     */
+    suspend fun pushSnapshotNow(
+        context: Context,
+        force: Boolean = false
+    ): Boolean = withContext(Dispatchers.IO) {
+        val appCtx = context.applicationContext
+        val uid = resolveAuthenticatedUid(appCtx) ?: return@withContext false
+        val fs = GoogleServicesHelper.getFirebaseFirestore(appCtx) ?: return@withContext false
+
+        syncMutex.withLock {
+            val db = SharkMentorDatabase.getDatabase(appCtx)
+            val goalsDao = db.goalsDao()
+            val allRows = goalsDao.getAllTopicsIncludingDeletedRaw()
+            val activeRows = allRows.filter { !it.isDeleted && it.topic.isNotBlank() }
+            val pendingDeleted = allRows.filter { it.isDeleted }
+            val unsyncedActive = activeRows.filter { !it.isSynced }
+
+            if (!force && unsyncedActive.isEmpty() && pendingDeleted.isEmpty()) {
+                return@withLock true
+            }
+
+            val (topicsJson, contentHash) = serializeActiveTopicsSnapshotJson(activeRows)
+            val quotaPrefs = prefs(appCtx)
+            val lastHash = quotaPrefs.getString("$KEY_LAST_HASH_PREFIX$uid", null)
+
+            if (!force && lastHash != null && lastHash == contentHash) {
+                // Local content matches cloud byte-for-byte -> 0 Firestore writes!
+                if (unsyncedActive.isNotEmpty()) {
+                    unsyncedActive.map { it.id }.chunked(400).forEach { chunk ->
+                        db.syncDao().markTopicsAsSynced(chunk)
+                    }
+                }
+                pendingDeleted.forEach { goalsDao.deleteTopicPermanently(it.id) }
+                Log.d(TAG, "pushSnapshotNow: SHA-256 unchanged -> 0 Firestore writes")
+                return@withLock true
+            }
+
+            val now = System.currentTimeMillis()
+            val payload = hashMapOf<String, Any>(
+                "version" to SNAPSHOT_VERSION,
+                "studentId" to uid,
+                "contentHash" to contentHash,
+                "count" to activeRows.size,
+                "topicsJson" to topicsJson,
+                "updatedAtMillis" to now,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+
+            val written = runCatching {
+                snapshotDocRef(fs, uid).set(payload, SetOptions.merge()).await()
+                true
+            }.onFailure { e ->
+                Log.w(TAG, "pushSnapshotNow failed (1-doc snapshot): ${e.message}")
+            }.getOrDefault(false)
+
+            if (written) {
+                quotaPrefs.edit()
+                    .putString("$KEY_LAST_HASH_PREFIX$uid", contentHash)
+                    .putBoolean("$KEY_LEGACY_MIGRATED_PREFIX$uid", true)
+                    .apply()
+                if (unsyncedActive.isNotEmpty()) {
+                    unsyncedActive.map { it.id }.chunked(400).forEach { chunk ->
+                        db.syncDao().markTopicsAsSynced(chunk)
+                    }
+                }
+                pendingDeleted.forEach { goalsDao.deleteTopicPermanently(it.id) }
+                Log.i(TAG, "pushSnapshotNow: 1 Firestore write synced ${activeRows.size} topics (${topicsJson.length} chars)")
+            }
+            written
+        }
+    }
+
+    /**
+     * Convenience wrapper for SyncWorker / CloudSyncRepository: pushes all pending local topic
+     * mutations (inserts, mastery updates, deletions) in **at most 1 Firestore write**.
      */
     suspend fun pushPendingTopicsNow(context: Context): Int = withContext(Dispatchers.IO) {
         val db = SharkMentorDatabase.getDatabase(context)
-        var total = 0
-
-        val pendingDeleted = db.goalsDao().getPendingDeletedTopics()
-        if (pendingDeleted.isNotEmpty()) {
-            if (deleteTopicsInCloudNow(context, pendingDeleted)) {
-                total += pendingDeleted.size
-            }
-        }
-
-        val pendingUpserts = db.syncDao().getUnsyncedTopics()
-        if (pendingUpserts.isNotEmpty()) {
-            total += pushTopicsNow(context, pendingUpserts)
-        }
-        total
+        val pendingCount = db.syncDao().getUnsyncedTopics().size +
+            db.goalsDao().getPendingDeletedTopics().size
+        if (pendingCount == 0) return@withContext 0
+        if (pushSnapshotNow(context, force = false)) pendingCount else 0
     }
 
     /**
-     * Marks both the deterministic doc ID and any legacy `${uid}_${localId}` doc ID as deleted
-     * across both `students/{uid}/topics` and top-level `topics`, then purges them locally on success.
-     */
-    suspend fun deleteTopicsInCloudNow(
-        context: Context,
-        topics: List<TopicGoalEntity>
-    ): Boolean = withContext(Dispatchers.IO) {
-        if (topics.isEmpty()) return@withContext true
-        val uid = resolveAuthenticatedUid(context) ?: return@withContext false
-        val fs = GoogleServicesHelper.getFirebaseFirestore(context) ?: return@withContext false
-        val db = SharkMentorDatabase.getDatabase(context)
-        val now = System.currentTimeMillis()
-        var allSucceeded = true
-
-        for (chunk in topics.chunked(BATCH_CHUNK_SIZE / 2)) {
-            val payloadPairs = chunk.flatMap { topic ->
-                val stableId = buildStableTopicDocId(uid, topic.subject, topic.topic)
-                val legacyId = "${uid}_${topic.id}"
-                val ids = linkedSetOf(stableId, legacyId)
-                ids.map { docId ->
-                    docId to hashMapOf<String, Any?>(
-                        "id" to docId,
-                        "localId" to topic.id,
-                        "studentId" to uid,
-                        "userId" to uid,
-                        "subject" to topic.subject,
-                        "topic" to topic.topic,
-                        "topicName" to topic.topic,
-                        "isDeleted" to true,
-                        "updatedAtMillis" to now,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                }
-            }
-
-            val subOk = runCatching {
-                val batch = fs.batch()
-                for ((docId, payload) in payloadPairs) {
-                    val ref = fs.collection("students").document(uid)
-                        .collection("topics").document(docId)
-                    batch.set(ref, payload, SetOptions.merge())
-                }
-                batch.commit().await()
-                true
-            }.onFailure { e ->
-                Log.w(TAG, "Subcollection batch delete failed: ${e.message}")
-            }.getOrDefault(false)
-
-            val rootOk = runCatching {
-                val batch = fs.batch()
-                for ((docId, payload) in payloadPairs) {
-                    val ref = fs.collection("topics").document(docId)
-                    batch.set(ref, payload, SetOptions.merge())
-                }
-                batch.commit().await()
-                true
-            }.onFailure { e ->
-                Log.w(TAG, "Root mirror batch delete failed: ${e.message}")
-            }.getOrDefault(false)
-
-            if (subOk || rootOk) {
-                chunk.forEach { db.goalsDao().deleteTopicPermanently(it.id) }
-            } else {
-                allSucceeded = false
-            }
-        }
-        allSucceeded
-    }
-
-    /**
-     * Full pull + merge from BOTH `students/{uid}/topics` and top-level `topics`.
-     * Safe for fresh reinstalls, account re-login, manual "Şimdi Senkronize Et", and SyncWorker.
+     * Pulls Topic Mastery from Firestore using **1 SINGLE READ** (`students/{uid}/meta/topic_mastery_snapshot`).
      *
-     * Returns total active topic count in local Room after reconciliation, or -1 if unauthenticated/unavailable.
+     * Quota protections:
+     * - Respects 15-minute cooldown unless [forceServer] == true OR local Room currently has 0 topics
+     *   (fresh reinstall / empty state).
+     * - Only if the single snapshot document does NOT exist yet AND this account hasn't been migrated
+     *   in the last 24h, runs a ONE-TIME legacy recovery from `students/{uid}/topics` / `topics`,
+     *   immediately packs recovered topics into the single snapshot doc (`1 write`), and marks
+     *   `legacy_topics_migrated` so those legacy collections are never queried again.
+     *
+     * Returns total active topics in Room, or -1 if unauthenticated/unavailable.
      */
     suspend fun pullAndMergeFromCloud(
         context: Context,
         forceServer: Boolean = false
     ): Int = withContext(Dispatchers.IO) {
-        val uid = resolveAuthenticatedUid(context) ?: return@withContext -1
-        val fs = GoogleServicesHelper.getFirebaseFirestore(context) ?: return@withContext -1
+        val appCtx = context.applicationContext
+        val uid = resolveAuthenticatedUid(appCtx) ?: return@withContext -1
+        val fs = GoogleServicesHelper.getFirebaseFirestore(appCtx) ?: return@withContext -1
+        val db = SharkMentorDatabase.getDatabase(appCtx)
+        val quotaPrefs = prefs(appCtx)
 
-        // Push pending local mutations first so offline edits are never clobbered
-        runCatching { pushPendingTopicsNow(context) }
+        val localActiveBefore = db.goalsDao().getAllTopicsRaw().size
+        val now = System.currentTimeMillis()
+        val lastPullMs = quotaPrefs.getLong("$KEY_LAST_PULL_PREFIX$uid", 0L)
+        val needsEmptyRestore = localActiveBefore == 0
 
-        val preferredSource = if (forceServer) Source.SERVER else Source.DEFAULT
-
-        suspend fun fetchQuery(query: com.google.firebase.firestore.Query): com.google.firebase.firestore.QuerySnapshot? {
-            return runCatching {
-                query.get(preferredSource).await()
-            }.recoverCatching {
-                if (preferredSource == Source.SERVER) {
-                    query.get(Source.DEFAULT).await()
-                } else {
-                    throw it
-                }
-            }.getOrNull()
+        if (!forceServer && !needsEmptyRestore && (now - lastPullMs) < PULL_COOLDOWN_MS) {
+            Log.d(TAG, "pullAndMergeFromCloud skipped (15-min quota cooldown; localActive=$localActiveBefore)")
+            return@withContext localActiveBefore
         }
 
-        val subSnap = fetchQuery(
-            fs.collection("students").document(uid)
-                .collection("topics")
-                .limit(QUERY_LIMIT)
-        )
-        val rootSnap = fetchQuery(
-            fs.collection("topics")
-                .whereEqualTo("studentId", uid)
-                .limit(QUERY_LIMIT)
-        )
+        // Flush pending local edits first (at most 1 write, 0 if unchanged)
+        runCatching { pushPendingTopicsNow(appCtx) }
 
-        if (subSnap == null && rootSnap == null) {
-            Log.w(TAG, "pullAndMergeFromCloud: both subcollection and root queries failed; retaining local topics.")
+        val source = if (forceServer) Source.SERVER else Source.DEFAULT
+        val snapDoc = runCatching {
+            snapshotDocRef(fs, uid).get(source).await()
+        }.recoverCatching {
+            if (source == Source.SERVER) snapshotDocRef(fs, uid).get(Source.DEFAULT).await() else throw it
+        }.getOrNull()
+
+        if (snapDoc == null) {
+            Log.w(TAG, "pullAndMergeFromCloud: snapshot fetch failed (offline/error); retaining local topics.")
             return@withContext -1
         }
 
-        val records = mutableListOf<RemoteTopicRecord>()
-        subSnap?.documents?.forEach { doc ->
-            parseSnapshotDoc(doc, uid, fromSubcollection = true)?.let { records.add(it) }
+        if (snapDoc.exists() && snapDoc.contains("topicsJson")) {
+            val remoteHash = snapDoc.getSafeStr("contentHash").orEmpty()
+            val remoteUpdatedMs = snapDoc.getSafeLongVal("updatedAtMillis")
+                ?: snapDoc.getTimestamp("updatedAt")?.toDate()?.time
+                ?: now
+            val topicsJson = snapDoc.getSafeStr("topicsJson")
+            val records = parseSnapshotTopicsJson(uid, topicsJson, remoteUpdatedMs)
+            val merged = mergeRemoteTopicRecords(records)
+            val canPrune = !snapDoc.metadata.isFromCache
+
+            applyMergedRecordsLocked(appCtx, merged, canSafelyPruneSyncedOrphans = canPrune)
+
+            val editor = quotaPrefs.edit()
+                .putLong("$KEY_LAST_PULL_PREFIX$uid", System.currentTimeMillis())
+                .putBoolean("$KEY_LEGACY_MIGRATED_PREFIX$uid", true)
+            if (remoteHash.isNotBlank()) {
+                editor.putString("$KEY_LAST_HASH_PREFIX$uid", remoteHash)
+            }
+            editor.apply()
+
+            val activeAfter = db.goalsDao().getAllTopicsRaw().size
+            Log.i(TAG, "pullAndMergeFromCloud: 1 Firestore read restored/synced $activeAfter topics.")
+            return@withContext activeAfter
         }
-        rootSnap?.documents?.forEach { doc ->
-            parseSnapshotDoc(doc, uid, fromSubcollection = false)?.let { records.add(it) }
+
+        // ── One-Time Legacy Migration (ONLY if snapshot doc does not exist yet!) ──
+        val alreadyMigrated = quotaPrefs.getBoolean("$KEY_LEGACY_MIGRATED_PREFIX$uid", false)
+        val lastLegacyCheckMs = quotaPrefs.getLong("$KEY_LEGACY_CHECKED_MS_PREFIX$uid", 0L)
+        val canRunLegacyRecovery = !alreadyMigrated &&
+            (forceServer || (now - lastLegacyCheckMs) >= LEGACY_CHECK_COOLDOWN_MS)
+
+        if (canRunLegacyRecovery) {
+            val legacyRecords = mutableListOf<RemoteTopicRecord>()
+            runCatching {
+                val subSnap = fs.collection("students").document(uid)
+                    .collection("topics")
+                    .limit(LEGACY_QUERY_LIMIT)
+                    .get(source).await()
+                subSnap.documents.forEach { d ->
+                    parseLegacyDoc(d, uid, fromSubcollection = true)?.let { legacyRecords.add(it) }
+                }
+            }
+            if (legacyRecords.none { !it.isDeleted }) {
+                runCatching {
+                    val rootSnap = fs.collection("topics")
+                        .whereEqualTo("studentId", uid)
+                        .limit(LEGACY_QUERY_LIMIT)
+                        .get(source).await()
+                    rootSnap.documents.forEach { d ->
+                        parseLegacyDoc(d, uid, fromSubcollection = false)?.let { legacyRecords.add(it) }
+                    }
+                }
+            }
+
+            quotaPrefs.edit().putLong("$KEY_LEGACY_CHECKED_MS_PREFIX$uid", System.currentTimeMillis()).apply()
+
+            val mergedLegacy = mergeRemoteTopicRecords(legacyRecords)
+            val activeLegacy = mergedLegacy.filter { !it.isDeleted }
+            if (activeLegacy.isNotEmpty()) {
+                applyMergedRecordsLocked(appCtx, mergedLegacy, canSafelyPruneSyncedOrphans = false)
+                // Pack recovered legacy topics into the new 1-doc snapshot so legacy collections are never scanned again!
+                pushSnapshotNow(appCtx, force = true)
+            } else {
+                quotaPrefs.edit().putBoolean("$KEY_LEGACY_MIGRATED_PREFIX$uid", true).apply()
+            }
         }
 
-        val merged = mergeRemoteTopicRecords(records)
-        val canSafelyPrune = subSnap != null &&
-            rootSnap != null &&
-            !subSnap.metadata.isFromCache &&
-            !rootSnap.metadata.isFromCache &&
-            subSnap.size().toLong() < QUERY_LIMIT &&
-            rootSnap.size().toLong() < QUERY_LIMIT
-
-        applyMergedRecordsLocked(context, merged, canSafelyPrune)
-
-        val activeCount = SharkMentorDatabase.getDatabase(context).goalsDao().getAllTopicsRaw().size
-        Log.i(
-            TAG,
-            "pullAndMergeFromCloud complete: sub=${subSnap?.size() ?: -1}, root=${rootSnap?.size() ?: -1}, merged=${merged.size}, localActive=$activeCount"
-        )
-        activeCount
-    }
-
-    /**
-     * Reconciles live Firestore snapshot updates from `GoalsViewModel` listeners into Room.
-     * Never performs destructive orphan sweeps so partial/cached snapshots can never wipe topics.
-     */
-    suspend fun reconcileLiveSnapshot(
-        context: Context,
-        docs: List<DocumentSnapshot>,
-        fromSubcollection: Boolean
-    ) = withContext(Dispatchers.IO) {
-        if (docs.isEmpty()) return@withContext
-        val uid = resolveAuthenticatedUid(context) ?: return@withContext
-        val records = docs.mapNotNull { parseSnapshotDoc(it, uid, fromSubcollection) }
-        if (records.isEmpty()) return@withContext
-        val merged = mergeRemoteTopicRecords(records)
-        applyMergedRecordsLocked(context, merged, canSafelyPruneSyncedOrphans = false)
+        quotaPrefs.edit().putLong("$KEY_LAST_PULL_PREFIX$uid", System.currentTimeMillis()).apply()
+        db.goalsDao().getAllTopicsRaw().size
     }
 
     private suspend fun applyMergedRecordsLocked(

@@ -58,10 +58,6 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile
     private var resourcesListener: ListenerRegistration? = null
     @Volatile
-    private var topicsSubcollectionListener: ListenerRegistration? = null
-    @Volatile
-    private var topicsRootListener: ListenerRegistration? = null
-    @Volatile
     private var activeListenersUid: String? = null
     private var authStateListener: FirebaseAuth.AuthStateListener? = null
     private val aiService = com.example.sharkmentor.core.ai.GeminiCoreService(application)
@@ -198,10 +194,6 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     private fun detachCloudSyncListeners() {
         resourcesListener?.remove()
         resourcesListener = null
-        topicsSubcollectionListener?.remove()
-        topicsSubcollectionListener = null
-        topicsRootListener?.remove()
-        topicsRootListener = null
         activeListenersUid = null
     }
 
@@ -211,7 +203,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         val appContext = getApplication<Application>()
         val fs = GoogleServicesHelper.getFirebaseFirestore(appContext) ?: return
 
-        // Immediate one-shot pull + merge for Topic Mastery (handles fresh reinstalls instantaneously)
+        // Quota-safe 1-doc Topic Mastery sync (0 reads within 15-min cooldown; 1 read on reinstall/cooldown expiry)
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 com.example.sharkmentor.data.sync.TopicCloudSyncManager
@@ -219,7 +211,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // 1. Live Resources Listener (Kütüphane)
+        // Live Resources Listener (Kütüphane)
         runCatching {
             resourcesListener = fs.collection("resources")
                 .whereEqualTo("studentId", uid)
@@ -284,56 +276,9 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         }.onFailure { e ->
             Log.w("ResourceSync", "Failed to attach resources listener: ${e.message}")
         }
-
-        // 2. Live Topic Mastery Listener — Canonical Owner Subcollection (`students/{uid}/topics`)
-        runCatching {
-            topicsSubcollectionListener = fs.collection("students").document(uid)
-                .collection("topics")
-                .addSnapshotListener { snapshots, error ->
-                    if (error != null) {
-                        Log.w("TopicSync", "Konu subcollection dinleme hatası: ${error.message}")
-                        return@addSnapshotListener
-                    }
-                    if (snapshots != null && snapshots.documents.isNotEmpty()) {
-                        viewModelScope.launch(Dispatchers.IO) {
-                            com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                                .reconcileLiveSnapshot(appContext, snapshots.documents, fromSubcollection = true)
-                            _isLoading.value = false
-                        }
-                    }
-                }
-        }.onFailure { e ->
-            Log.w("TopicSync", "Failed to attach topics subcollection listener: ${e.message}")
-        }
-
-        // 3. Live Topic Mastery Listener — Root Compatibility Collection (`topics`)
-        runCatching {
-            topicsRootListener = fs.collection("topics")
-                .whereEqualTo("studentId", uid)
-                .addSnapshotListener { snapshots, error ->
-                    if (error != null) {
-                        Log.w("TopicSync", "Konu root dinleme hatası: ${error.message}")
-                        return@addSnapshotListener
-                    }
-                    if (snapshots != null && snapshots.documents.isNotEmpty()) {
-                        viewModelScope.launch(Dispatchers.IO) {
-                            com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                                .reconcileLiveSnapshot(appContext, snapshots.documents, fromSubcollection = false)
-                            _isLoading.value = false
-                        }
-                    }
-                }
-        }.onFailure { e ->
-            Log.w("TopicSync", "Failed to attach topics root listener: ${e.message}")
-        }
     }
 
     // ── Direct Firestore Sync Helpers ──────────────────────────────────────────
-
-    private suspend fun syncTopicToFirestore(entity: TopicGoalEntity): Boolean {
-        return com.example.sharkmentor.data.sync.TopicCloudSyncManager
-            .pushTopicsNow(getApplication(), listOf(entity)) > 0
-    }
 
     private suspend fun syncResourceToFirestore(resource: ResourceEntity): Boolean {
         val uid = GoogleServicesHelper.getCurrentUser(context = getApplication())?.uid ?: return false
@@ -385,12 +330,10 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 updatedAtMillis = System.currentTimeMillis()
             )
             dao?.updateTopicGoal(updated)
-            val pushed = syncTopicToFirestore(updated)
             val context = getApplication<android.app.Application>()
+            // Coalesce rapid mastery taps into 1 SINGLE Firestore document write (2.5s debounce)
+            com.example.sharkmentor.data.sync.TopicCloudSyncManager.scheduleDebouncedPush(context)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            if (!pushed) {
-                SyncWorker.enqueueImmediateSync(context)
-            }
         }
     }
 
@@ -408,16 +351,9 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 institutionId = institutionId,
                 updatedAtMillis = now
             )
-            val insertedId = dao?.insertTopicGoal(entity) ?: 0L
-            val pushed = if (insertedId > 0L) {
-                syncTopicToFirestore(entity.copy(id = insertedId))
-            } else {
-                false
-            }
+            dao?.insertTopicGoal(entity)
+            com.example.sharkmentor.data.sync.TopicCloudSyncManager.scheduleDebouncedPush(context)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-            if (!pushed) {
-                SyncWorker.enqueueImmediateSync(context)
-            }
         }
     }
 
@@ -425,18 +361,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<android.app.Application>()
             dao?.softDeleteTopicGoal(topic.id)
-            val deletedRemote = com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                .deleteTopicsInCloudNow(context, listOf(topic))
-            if (!deletedRemote) {
-                val database = SharkMentorDatabase.getDatabase(context)
-                database.pendingDeletionDao().insert(
-                    com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
-                        entityId = topic.id.toString(),
-                        collectionName = "topics"
-                    )
-                )
-                SyncWorker.enqueueImmediateSync(context)
-            }
+            com.example.sharkmentor.data.sync.TopicCloudSyncManager.scheduleDebouncedPush(context)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
         }
     }
@@ -444,23 +369,8 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteSubjectFolder(subjectName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<android.app.Application>()
-            val database = SharkMentorDatabase.getDatabase(context)
-            val allTopics = dao?.getAllTopicsRaw()?.filter { it.subject == subjectName }.orEmpty()
             dao?.softDeleteBySubject(subjectName)
-
-            val deletedRemote = com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                .deleteTopicsInCloudNow(context, allTopics)
-            if (!deletedRemote) {
-                allTopics.forEach { topic ->
-                    database.pendingDeletionDao().insert(
-                        com.example.sharkmentor.data.local.entity.PendingDeletionEntity(
-                            entityId = topic.id.toString(),
-                            collectionName = "topics"
-                        )
-                    )
-                }
-                SyncWorker.enqueueImmediateSync(context)
-            }
+            com.example.sharkmentor.data.sync.TopicCloudSyncManager.scheduleDebouncedPush(context)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
         }
     }
@@ -628,15 +538,11 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                             updatedAtMillis = now
                         )
                     }
-                    val insertedIds = dao?.insertTopicGoals(entities) ?: emptyList()
-                    val persistedEntities = entities.mapIndexed { index, topicEntity ->
-                        val topicId = insertedIds.getOrNull(index)?.takeIf { it > 0L } ?: topicEntity.id
-                        topicEntity.copy(id = topicId)
-                    }.filter { it.id > 0L }
+                    dao?.insertTopicGoals(entities)
                     val pushed = com.example.sharkmentor.data.sync.TopicCloudSyncManager
-                        .pushTopicsNow(context, persistedEntities)
+                        .pushSnapshotNow(context)
                     com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(context)
-                    if (pushed < persistedEntities.size) {
+                    if (!pushed) {
                         SyncWorker.enqueueImmediateSync(context)
                     }
                 }
@@ -753,6 +659,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        com.example.sharkmentor.data.sync.TopicCloudSyncManager.flushPendingInBackground(getApplication())
         authStateListener?.let { listener ->
             runCatching { GoogleServicesHelper.getFirebaseAuth(getApplication())?.removeAuthStateListener(listener) }
         }

@@ -750,13 +750,8 @@ private suspend fun persistTopicMasteryUpdate(
     )
     db.goalsDao().updateTopicGoal(updated)
 
-    val pushed = runCatching {
-        com.example.sharkmentor.data.sync.TopicCloudSyncManager.pushTopicsNow(context, listOf(updated))
-    }.getOrDefault(0)
+    com.example.sharkmentor.data.sync.TopicCloudSyncManager.scheduleDebouncedPush(context)
     StudentDossierManager.syncInBackground(context)
-    if (pushed <= 0) {
-        SyncWorker.enqueueImmediateSync(context)
-    }
 }
 
 private suspend fun persistBookProgressUpdate(
