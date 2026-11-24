@@ -81,15 +81,21 @@ import com.example.sharkmentor.core.data.ThemePreferences
 import com.example.sharkmentor.core.theme.ThemeManager
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.ui.components.ControlPanelContent
+import androidx.compose.ui.graphics.graphicsLayer
+import com.example.sharkmentor.core.audio.MusicPlaybackState
+import com.example.sharkmentor.core.audio.MusicPlayerHub
 import com.example.sharkmentor.data.weather.WeatherRepository
 import com.example.sharkmentor.data.weather.WeatherSettings
 import com.example.sharkmentor.data.weather.WeatherUiState
 import com.example.sharkmentor.data.topbar.FocusSessionState
+import com.example.sharkmentor.data.topbar.TopBarModuleId
 import com.example.sharkmentor.data.topbar.TopBarPreferences
 import com.example.sharkmentor.data.topbar.TopBarSettings
+import com.example.sharkmentor.ui.components.MusicPlayerModalSheet
 import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.SpecialMemberConfig
 import com.example.sharkmentor.ui.components.TopBarAiShortcutBox
+import com.example.sharkmentor.ui.components.TopBarMusicPill
 import com.example.sharkmentor.ui.components.TopBarWeatherPill
 import com.example.sharkmentor.ui.components.WeatherHourlyDialog
 import com.example.sharkmentor.ui.navigation.Screen
@@ -195,9 +201,12 @@ fun MainScreen(
     var showWeatherDialog by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         weatherRepository.refreshWeather()
+        MusicPlayerHub.ensureInitialized(context)
     }
     val topBarPreferences = remember(context) { TopBarPreferences.getInstance(context) }
     val topBarSettings by topBarPreferences.settings.collectAsStateWithLifecycle()
+    val musicPlaybackState by MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+    var showMusicPlayerSheet by remember { mutableStateOf(false) }
     val isAnyFocusRunning by FocusSessionState.isAnyFocusRunning.collectAsStateWithLifecycle()
     val liveTimerState by com.example.sharkmentor.core.service.FocusTimerService.timerStateFlow.collectAsStateWithLifecycle()
     val elapsedFocusMinutes = remember(liveTimerState.timeElapsedMillis / 60_000L, isAnyFocusRunning) {
@@ -332,6 +341,8 @@ fun MainScreen(
                                         weatherState = weatherState,
                                         weatherSettings = weatherSettings,
                                         hasUnreadDm = hasUnreadDm,
+                                        musicPlaybackState = musicPlaybackState,
+                                        onOpenMusicPlayer = { showMusicPlayerSheet = true },
                                         onWeatherClick = { showWeatherDialog = true },
                                         onOpenSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
                                         onStartZenSound = { sound, msg ->
@@ -625,6 +636,11 @@ fun MainScreen(
                         onDismiss = { showWeatherDialog = false }
                     )
                 }
+                if (showMusicPlayerSheet) {
+                    MusicPlayerModalSheet(
+                        onDismiss = { showMusicPlayerSheet = false }
+                    )
+                }
 
                 if (showSundayCheckInDialog) {
                     com.example.sharkmentor.ui.coaching.PlanReadinessCheckInDialog(
@@ -695,6 +711,8 @@ private fun SharkMentorTopBar(
     weatherState: WeatherUiState,
     weatherSettings: WeatherSettings,
     hasUnreadDm: Boolean = false,
+    musicPlaybackState: MusicPlaybackState = MusicPlaybackState(),
+    onOpenMusicPlayer: () -> Unit = {},
     onWeatherClick: () -> Unit,
     onOpenSharkAi: () -> Unit,
     onStartZenSound: (com.example.sharkmentor.core.audio.ZenSound, String) -> Unit = { _, _ -> },
@@ -706,91 +724,150 @@ private fun SharkMentorTopBar(
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val hideForFocus = topBarSettings.hideDuringFocus && (isAnyFocusRunning || isPaceKeep)
-    val showTopBarWidgets = isLandscape && !topBarSettings.hideTopBarMenu && !hideForFocus
+    val showAnyModules = !topBarSettings.hideTopBarMenu && !hideForFocus
     val showBubbleFrame = !topBarSettings.hideBubbles
-    val showCountdown = countdown.isNotBlank() && !topBarSettings.hideTopBarMenu && !hideForFocus
-    val showPortraitDmShortcut = !isLandscape && !topBarSettings.hideTopBarMenu && !hideForFocus
+
+    val enabledModules = remember(topBarSettings.modules, countdown) {
+        topBarSettings.modules.filter { mod ->
+            mod.enabled && (mod.id != TopBarModuleId.COUNTDOWN || countdown.isNotBlank())
+        }
+    }
+    // In portrait with 4+ active modules, tuck TEXT_BAR away so icons/pills never clip;
+    // if user picks <= 3 modules (e.g. only Text Bar, or Text Bar + Music), show Text Bar in portrait too!
+    val visibleModules = remember(enabledModules, isLandscape) {
+        if (!isLandscape && enabledModules.size >= 4) {
+            enabledModules.filter { it.id != TopBarModuleId.TEXT_BAR }
+        } else {
+            enabledModules
+        }
+    }
+    val hasFlexibleTextBar = showAnyModules && visibleModules.any { it.id == TopBarModuleId.TEXT_BAR }
 
     TopAppBar(
-        expandedHeight = 48.dp,
+        expandedHeight = 52.dp,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (isLandscape) 8.dp else 5.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(end = 6.dp)
+                    .padding(end = 4.dp)
             ) {
                 SharkMentorBranding(countdown = countdown, isCampus = isCampus)
-                if (showTopBarWidgets) {
-                    TopBarWeatherPill(
-                        weatherState = weatherState,
-                        settings = weatherSettings,
-                        showBubble = showBubbleFrame,
-                        onClick = onWeatherClick
-                    )
-                    TopBarAiShortcutBox(
-                        onClick = { prompt ->
-                            PendingAiPromptBus.pendingPrompt.value = prompt
-                            onOpenSharkAi()
-                        },
-                        modifier = Modifier.weight(1f),
-                        topBarSettings = topBarSettings,
-                        showBubble = showBubbleFrame,
-                        weatherState = weatherState,
-                        isAnyFocusRunning = isAnyFocusRunning,
-                        elapsedFocusMinutes = elapsedFocusMinutes,
-                        onStartZenSound = onStartZenSound,
-                        onNavigateRoute = onNavigateRoute,
-                        onWellnessAck = onWellnessAck
-                    )
-                    com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
-                        hasUnread = hasUnreadDm,
-                        showBubble = showBubbleFrame,
-                        onClick = onOpenDmInbox
-                    )
+
+                if (showAnyModules && !hasFlexibleTextBar) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+
+                if (showAnyModules) {
+                    visibleModules.forEach { mod ->
+                        val modScale = mod.size.scale
+                        val scaleModifier = if (modScale != 1.0f) {
+                            Modifier.graphicsLayer {
+                                scaleX = modScale
+                                scaleY = modScale
+                            }
+                        } else {
+                            Modifier
+                        }
+
+                        when (mod.id) {
+                            TopBarModuleId.WEATHER -> {
+                                TopBarWeatherPill(
+                                    weatherState = weatherState,
+                                    settings = weatherSettings,
+                                    showBubble = showBubbleFrame,
+                                    onClick = onWeatherClick,
+                                    modifier = scaleModifier
+                                )
+                            }
+                            TopBarModuleId.TEXT_BAR -> {
+                                TopBarAiShortcutBox(
+                                    onClick = { prompt ->
+                                        PendingAiPromptBus.pendingPrompt.value = prompt
+                                        onOpenSharkAi()
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .then(
+                                            if (modScale != 1.0f) {
+                                                Modifier.graphicsLayer {
+                                                    scaleY = modScale.coerceIn(0.88f, 1.10f)
+                                                }
+                                            } else {
+                                                Modifier
+                                            }
+                                        ),
+                                    topBarSettings = topBarSettings,
+                                    showBubble = showBubbleFrame,
+                                    weatherState = weatherState,
+                                    isAnyFocusRunning = isAnyFocusRunning,
+                                    elapsedFocusMinutes = elapsedFocusMinutes,
+                                    onStartZenSound = onStartZenSound,
+                                    onNavigateRoute = onNavigateRoute,
+                                    onWellnessAck = onWellnessAck
+                                )
+                            }
+                            TopBarModuleId.MUSIC -> {
+                                TopBarMusicPill(
+                                    playbackState = musicPlaybackState,
+                                    showBubble = showBubbleFrame,
+                                    scaleFactor = modScale,
+                                    compactIconOnly = !isLandscape && visibleModules.size > 2,
+                                    onClick = onOpenMusicPlayer
+                                )
+                            }
+                            TopBarModuleId.MESSAGES -> {
+                                com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
+                                    hasUnread = hasUnreadDm,
+                                    showBubble = showBubbleFrame,
+                                    onClick = onOpenDmInbox,
+                                    modifier = scaleModifier
+                                )
+                            }
+                            TopBarModuleId.COUNTDOWN -> {
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = if (showBubbleFrame) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                    } else {
+                                        androidx.compose.ui.graphics.Color.Transparent
+                                    },
+                                    border = if (showBubbleFrame) {
+                                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                                    } else null,
+                                    modifier = scaleModifier.clickable { onCountdownClick() }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(
+                                            horizontal = if (isLandscape) 10.dp else 7.dp,
+                                            vertical = 5.dp
+                                        ),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Event,
+                                            contentDescription = "Hedef Sınav Geri Sayım",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = countdown,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
         actions = {
-            if (showPortraitDmShortcut) {
-                com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
-                    hasUnread = hasUnreadDm,
-                    showBubble = showBubbleFrame,
-                    onClick = onOpenDmInbox,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-            }
-            // Task 6.2: Restored Target Exam Countdown Widget (YKS remaining days pill)
-            if (showCountdown) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .clickable { onCountdownClick() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Event,
-                            contentDescription = "Hedef Sınav Geri Sayım",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = countdown,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
             IconButton(onClick = onMenuClick, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Default.Menu,

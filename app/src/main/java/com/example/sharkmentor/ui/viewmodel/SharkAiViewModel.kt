@@ -264,6 +264,98 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     private val _pendingPlanRebuildRequest = MutableStateFlow<PendingPlanRebuildRequest?>(null)
     val pendingPlanRebuildRequest: StateFlow<PendingPlanRebuildRequest?> = _pendingPlanRebuildRequest.asStateFlow()
 
+    private val _activeSimulation = MutableStateFlow<com.example.sharkmentor.core.ai.InteractiveSimulation?>(null)
+    val activeSimulation: StateFlow<com.example.sharkmentor.core.ai.InteractiveSimulation?> = _activeSimulation.asStateFlow()
+
+    private val _showSimulationsSheet = MutableStateFlow(false)
+    val showSimulationsSheet: StateFlow<Boolean> = _showSimulationsSheet.asStateFlow()
+
+    private val _isGeneratingSimulation = MutableStateFlow(false)
+    val isGeneratingSimulation: StateFlow<Boolean> = _isGeneratingSimulation.asStateFlow()
+
+    fun openSimulation(simulation: com.example.sharkmentor.core.ai.InteractiveSimulation) {
+        _activeSimulation.value = simulation
+    }
+
+    fun openSimulationById(simulationId: String) {
+        val found = com.example.sharkmentor.core.ai.SimulationStudioEngine.findById(getApplication(), simulationId)
+        if (found != null) {
+            _activeSimulation.value = found
+        } else {
+            _showSimulationsSheet.value = true
+        }
+    }
+
+    fun dismissSimulation() {
+        _activeSimulation.value = null
+    }
+
+    fun openSimulationsSheet() {
+        com.example.sharkmentor.core.ai.SimulationStudioEngine.ensureLoaded(getApplication())
+        _showSimulationsSheet.value = true
+    }
+
+    fun dismissSimulationsSheet() {
+        _showSimulationsSheet.value = false
+    }
+
+    fun generateSimulationForTopic(
+        topic: String,
+        rawUserDisplay: String = "/simulasyon $topic"
+    ) {
+        val cleanTopic = topic.trim()
+        if (cleanTopic.isBlank() || _isGeneratingSimulation.value) return
+        val personaId = _uiState.value.currentPersona.id
+        val userMsg = AiChatMessage(
+            sender = "user",
+            text = rawUserDisplay.trim(),
+            personaTag = personaId
+        )
+        _inputText.value = ""
+        SharkAiChatSessionStore.saveDraftState(getApplication(), "", _lockedEngine.value)
+        _isGeneratingSimulation.value = true
+        _uiState.value = _uiState.value.copy(
+            messages = _uiState.value.messages + userMsg,
+            isLoading = true,
+            error = null
+        )
+        persistCurrentChatState()
+
+        viewModelScope.launch {
+            val result = com.example.sharkmentor.core.ai.SimulationStudioEngine.generateSimulationWithAi(
+                context = getApplication(),
+                topicPrompt = cleanTopic
+            )
+            _isGeneratingSimulation.value = false
+            result.onSuccess { sim ->
+                val aiReply = AiChatMessage(
+                    sender = "ai",
+                    text = "**${sim.title}** 2D interaktif simülasyonu hazırlandı ve cihazına çevrimdışı kaydedildi.\n\nAşağıdaki butondan istediğin zaman tekrar açıp parametreleri deneyebilirsin.\n${com.example.sharkmentor.core.ai.SimulationStudioEngine.SIMULATION_OPEN_TAG}${sim.id}",
+                    personaTag = personaId
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + aiReply,
+                    isLoading = false,
+                    error = null
+                )
+                persistCurrentChatState()
+                _activeSimulation.value = sim
+            }.onFailure { err ->
+                val failMsg = AiChatMessage(
+                    sender = "ai",
+                    text = "2D simülasyon üretilirken bir sorun oluştu: ${err.message ?: "Bilinmeyen hata"}. Dilersen tekrar deneyebilir veya hazır simülasyon örneklerini açabilirsin.",
+                    personaTag = personaId
+                )
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + failMsg,
+                    isLoading = false,
+                    error = null
+                )
+                persistCurrentChatState()
+            }
+        }
+    }
+
     fun confirmPendingPlanRebuild() {
         val pending = _pendingPlanRebuildRequest.value ?: return
         _pendingPlanRebuildRequest.value = null
@@ -898,6 +990,21 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     error = null
                 )
                 persistCurrentChatState()
+                return
+            }
+
+            // Dedicated 2D Interactive Simulation Studio (`/simulasyon`)
+            if (cmd == com.example.sharkmentor.ui.aichat.SharkSlashCommand.SIMULASYON) {
+                if (parsedSlash.argumentText.isBlank()) {
+                    _inputText.value = ""
+                    SharkAiChatSessionStore.saveDraftState(getApplication(), "", _lockedEngine.value)
+                    openSimulationsSheet()
+                } else {
+                    generateSimulationForTopic(
+                        topic = parsedSlash.argumentText,
+                        rawUserDisplay = rawInput
+                    )
+                }
                 return
             }
 

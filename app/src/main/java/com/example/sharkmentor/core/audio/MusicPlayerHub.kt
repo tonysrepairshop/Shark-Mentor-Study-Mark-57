@@ -4,8 +4,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
@@ -45,6 +47,13 @@ enum class MusicSourceKind {
 }
 
 @Immutable
+data class MusicQueueItem(
+    val queueId: Long,
+    val title: String,
+    val subtitle: String = ""
+)
+
+@Immutable
 data class MusicPlaybackState(
     val hasActiveSession: Boolean = false,
     val isPlaying: Boolean = false,
@@ -58,7 +67,8 @@ data class MusicPlaybackState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val lastPositionUpdateElapsedMs: Long = 0L,
-    val playbackSpeed: Float = 1f
+    val playbackSpeed: Float = 1f,
+    val queueItems: List<MusicQueueItem> = emptyList()
 ) {
     fun estimateCurrentPositionMs(nowElapsedRealtimeMs: Long = SystemClock.elapsedRealtime()): Long {
         if (durationMs <= 0L) return positionMs.coerceAtLeast(0L)
@@ -102,9 +112,10 @@ class SharkMediaSessionListenerService : NotificationListenerService() {
 }
 
 /**
- * Unified Music & Zen Audio hub powering the Left-of-HomeScreen Turntable/CD/Cassette deck.
+ * Unified Music & Zen Audio hub powering the Top Bar Music button, Note/PDF music popup,
+ * and Left-of-HomeScreen Turntable/CD/Cassette deck.
  * Bridges Spotify (`com.spotify.music`), YouTube Music (`com.google.android.apps.youtube.music`),
- * system media players, and in-app [ZenAudioManager] with zero Firestore traffic.
+ * system media players (including dynamic `MediaController.queue` when exposed), and in-app [ZenAudioManager].
  */
 object MusicPlayerHub {
 
@@ -152,6 +163,10 @@ object MusicPlayerHub {
         }
 
         override fun onMetadataChanged(metadata: MediaMetadata?) {
+            recomputeMergedState()
+        }
+
+        override fun onQueueChanged(queue: MutableList<MediaSession.QueueItem>?) {
             recomputeMergedState()
         }
 
@@ -250,14 +265,14 @@ object MusicPlayerHub {
         }.getOrDefault(false)
     }
 
+    fun openMusicProvider(context: Context, packageName: String) {
+        connectMusicProvider(context, packageName)
+    }
+
     fun connectMusicProvider(context: Context, packageName: String) {
         ensureInitialized(context)
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (!_isEnabled.value) {
-            prefs.edit().putBoolean(KEY_ENABLED, true).apply()
-            _isEnabled.value = true
-        }
         if (packageName == PKG_SPOTIFY) {
             prefs.edit().putBoolean(KEY_SPOTIFY_LINKED, true).apply()
             _spotifyConnected.value = true
@@ -301,6 +316,26 @@ object MusicPlayerHub {
                 runCatching { context.startActivity(intent) }
             }
         }
+    }
+
+    fun getDeviceVolumeFraction(context: Context): Float {
+        return runCatching {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return 0.6f
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, max)
+            cur.toFloat() / max.toFloat()
+        }.getOrDefault(0.6f)
+    }
+
+    fun setDeviceVolumeFraction(context: Context, fraction: Float): Float {
+        val clamped = fraction.coerceIn(0f, 1f)
+        return runCatching {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return clamped
+            val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            val target = (clamped * max).toInt().coerceIn(0, max)
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            target.toFloat() / max.toFloat()
+        }.getOrDefault(clamped)
     }
 
     internal fun onNotificationListenerConnected(context: Context) {
@@ -368,6 +403,33 @@ object MusicPlayerHub {
         return stateScore + (if (isPreferredApp) 15 else 0)
     }
 
+    private fun extractUpcomingQueue(ctrl: MediaController, currentTitle: String): List<MusicQueueItem> {
+        val rawQueue = runCatching { ctrl.queue }.getOrNull().orEmpty()
+        if (rawQueue.isEmpty()) return emptyList()
+        val activeQueueId = ctrl.playbackState?.activeQueueItemId ?: MediaSession.QueueItem.UNKNOWN_ID.toLong()
+        val mapped = rawQueue.mapNotNull { qi ->
+            val desc = qi.description ?: return@mapNotNull null
+            val qTitle = desc.title?.toString()?.trim().orEmpty()
+            if (qTitle.isBlank()) return@mapNotNull null
+            val qSub = desc.subtitle?.toString()?.trim().orEmpty()
+            MusicQueueItem(
+                queueId = qi.queueId,
+                title = qTitle,
+                subtitle = qSub
+            )
+        }
+        val activeIdx = mapped.indexOfFirst {
+            (activeQueueId >= 0L && it.queueId == activeQueueId) ||
+                (currentTitle.isNotBlank() && it.title.equals(currentTitle, ignoreCase = true))
+        }
+        val upcoming = if (activeIdx in 0 until mapped.lastIndex) {
+            mapped.drop(activeIdx + 1)
+        } else {
+            mapped.filterNot { it.title.equals(currentTitle, ignoreCase = true) }
+        }
+        return upcoming.take(12)
+    }
+
     private fun recomputeMergedState() {
         val bestExternal = observedControllers
             .filter { ctrl ->
@@ -411,6 +473,7 @@ object MusicPlayerHub {
                 val lastUpdate = pb?.lastPositionUpdateTime?.takeIf { it > 0L } ?: SystemClock.elapsedRealtime()
                 val speed = pb?.playbackSpeed?.takeIf { it > 0f } ?: 1f
                 val srcName = friendlySourceName(bestExternal.packageName)
+                val queue = extractUpcomingQueue(bestExternal, title)
 
                 _playbackState.value = MusicPlaybackState(
                     hasActiveSession = true,
@@ -425,7 +488,8 @@ object MusicPlayerHub {
                     positionMs = pos,
                     durationMs = duration,
                     lastPositionUpdateElapsedMs = lastUpdate,
-                    playbackSpeed = speed
+                    playbackSpeed = speed,
+                    queueItems = queue
                 )
             }
 
@@ -443,7 +507,8 @@ object MusicPlayerHub {
                     positionMs = 0L,
                     durationMs = 0L,
                     lastPositionUpdateElapsedMs = SystemClock.elapsedRealtime(),
-                    playbackSpeed = 1f
+                    playbackSpeed = 1f,
+                    queueItems = emptyList()
                 )
             }
 
@@ -520,6 +585,12 @@ object MusicPlayerHub {
                 }
             }
             MusicSourceKind.NONE -> Unit
+        }
+    }
+
+    fun skipToQueueItem(queueId: Long) {
+        if (_playbackState.value.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
+            runCatching { primaryExternalController?.transportControls?.skipToQueueItem(queueId) }
         }
     }
 

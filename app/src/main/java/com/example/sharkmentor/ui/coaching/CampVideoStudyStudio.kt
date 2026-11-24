@@ -196,7 +196,6 @@ fun CampVideoStudyStudioDialog(
     val studioAiEnabled by UserAiPreferences.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val adBlockerEnabled by UserAiPreferences.videoAdBlockerEnabled.collectAsStateWithLifecycle()
     val wellnessEvent by WellnessReminderBus.activeEvent.collectAsStateWithLifecycle()
-    val bgPlaybackState by CampVideoPlaybackController.state.collectAsStateWithLifecycle()
 
     var episodeListState by remember(allEpisodes, initialEpisode) {
         mutableStateOf(allEpisodes.ifEmpty { listOf(initialEpisode) })
@@ -206,33 +205,23 @@ fun CampVideoStudyStudioDialog(
         mutableStateOf(initialEpisode)
     }
     var pendingDeleteStudioEpisode by remember { mutableStateOf<CampDayEpisode?>(null) }
-    var isMinimizingToBackground by remember { mutableStateOf(false) }
-    var hasEnteredMediaSession by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.topicTitle, campTitle) {
-        CampVideoPlaybackController.markRestoredToForeground(context)
-        CampVideoPlaybackController.startOrUpdateSession(
-            context = context,
+        CampVideoPlaybackController.prepareSessionMetadata(
             title = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
-            subtitle = campTitle.ifBlank { subject.ifBlank { "Kamp Video Stüdyosu" } },
-            url = activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true),
-            isPlaying = true
+            subtitle = campTitle.ifBlank { subject.ifBlank { "Kamp Video Stüdyosu" } }
         )
-        hasEnteredMediaSession = true
     }
 
-    // If user clicks "Kapat" on the top media notification while studio is open, close cleanly
-    LaunchedEffect(bgPlaybackState.isActive, hasEnteredMediaSession) {
-        if (hasEnteredMediaSession && !bgPlaybackState.isActive && !isMinimizingToBackground) {
+    LaunchedEffect(Unit) {
+        CampVideoPlaybackController.closeRequestedEvents.collect {
             onDismiss()
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            if (!isMinimizingToBackground) {
-                CampVideoPlaybackController.stopAndRelease(context)
-            }
+            CampVideoPlaybackController.stopAndClear(context)
         }
     }
 
@@ -799,32 +788,6 @@ fun CampVideoStudyStudioDialog(
                                             Icon(Icons.Default.PlaylistPlay, contentDescription = "Bölümler", tint = colorScheme.primary, modifier = Modifier.size(13.dp))
                                             Text("Bölümler", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, color = colorScheme.onSurface)
                                         }
-                                    }
-                                }
-
-                                // Minimize & Continue Playing in Background with Media Notification
-                                Surface(
-                                    onClick = {
-                                        isMinimizingToBackground = true
-                                        CampVideoPlaybackController.minimizeToBackground(context)
-                                        Toast.makeText(
-                                            context,
-                                            "Arka planda oynatılıyor • Bildirimden yönetebilirsiniz",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        onDismiss()
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = colorScheme.primary.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                    ) {
-                                        Icon(Icons.Default.Headphones, contentDescription = "Arka Planda Çal", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
-                                        Text("Arka Plan", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.primary)
                                     }
                                 }
 
@@ -1632,7 +1595,6 @@ private const val STUDIO_BACKGROUND_PLAY_JS = """
     var blockVis = function(e) { e.stopImmediatePropagation(); };
     document.addEventListener('visibilitychange', blockVis, true);
     document.addEventListener('webkitvisibilitychange', blockVis, true);
-    window.addEventListener('blur', blockVis, true);
   } catch (e) {}
 })();
 """
@@ -1649,7 +1611,6 @@ private const val STUDIO_TELEMETRY_JS = """
         boundVideo = v;
         v.addEventListener('play', sendSnap);
         v.addEventListener('pause', sendSnap);
-        v.addEventListener('seeked', sendSnap);
         v.addEventListener('loadedmetadata', sendSnap);
       }
       var sec = (v && !isNaN(v.currentTime)) ? Math.floor(v.currentTime) : -1;
@@ -1667,8 +1628,8 @@ private const val STUDIO_TELEMETRY_JS = """
     } catch (e) {}
   }
   window.__sharkSendTelemetryNow = sendSnap;
-  setTimeout(sendSnap, 1200);
-  setInterval(sendSnap, 3500);
+  setTimeout(sendSnap, 1800);
+  setInterval(sendSnap, 5000);
 })();
 """
 
@@ -1734,13 +1695,14 @@ private fun DistractionFreeYouTubeWebView(
     val currentOnExitFs by rememberUpdatedState(onExitCustomFullscreen)
 
     val webView = remember(context) {
-        CampVideoPlaybackController.acquireOrCreateWebView(context) { wv ->
-            wv.layoutParams = ViewGroup.LayoutParams(
+        BackgroundPlayableWebView(context).apply {
+            allowBackgroundPlayback = true
+            layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            wv.setBackgroundColor(android.graphics.Color.BLACK)
-            wv.settings.apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 mediaPlaybackRequiresUserGesture = false
@@ -1753,8 +1715,6 @@ private fun DistractionFreeYouTubeWebView(
                 displayZoomControls = false
                 setGeolocationEnabled(false)
             }
-        }.apply {
-            removeJavascriptInterface("SharkStudioBridge")
             addJavascriptInterface(
                 object {
                     @JavascriptInterface
@@ -1797,11 +1757,6 @@ private fun DistractionFreeYouTubeWebView(
                     return super.shouldInterceptRequest(view, request)
                 }
 
-                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                    super.onPageStarted(view, url, favicon)
-                    view?.evaluateJavascript(STUDIO_BACKGROUND_PLAY_JS, null)
-                }
-
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
                     view?.evaluateJavascript(STUDIO_BACKGROUND_PLAY_JS, null)
@@ -1824,14 +1779,28 @@ private fun DistractionFreeYouTubeWebView(
                     return !allowed
                 }
             }
-        }.also { onWebViewCreated(it) }
+        }.also {
+            CampVideoPlaybackController.attachWebView(it)
+            onWebViewCreated(it)
+        }
+    }
+
+    DisposableEffect(webView) {
+        onDispose {
+            CampVideoPlaybackController.attachWebView(null)
+            runCatching {
+                webView.allowBackgroundPlayback = false
+                webView.removeJavascriptInterface("SharkStudioBridge")
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.clearHistory()
+                webView.destroy()
+            }
+        }
     }
 
     AndroidView(
-        factory = {
-            (webView.parent as? ViewGroup)?.removeView(webView)
-            webView
-        },
+        factory = { webView },
         update = { view ->
             if (view.tag != url) {
                 view.tag = url

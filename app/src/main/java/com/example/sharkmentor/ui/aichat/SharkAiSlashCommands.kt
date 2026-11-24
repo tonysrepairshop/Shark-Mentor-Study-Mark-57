@@ -6,6 +6,7 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.sharkmentor.core.coaching.PlanProgressAuditor
@@ -15,7 +16,7 @@ import java.util.Locale
 /**
  * Mark 69 Antigravity-style `/` Slash Sub-Runner registry for Shark AI.
  *
- * Dedicated specialized tools (`/plan`, `/hedef`, `/soru`, `/benzer`, `/zen`, `/dopamin`)
+ * Dedicated specialized tools (`/plan`, `/hedef`, `/soru`, `/benzer`, `/zen`, `/dopamin`, `/simulasyon`)
  * are invoked cleanly via `/` commands, while default `Shark AI` remains a full-access
  * In-App Agent (konu hakimiyeti/çizelgesi, kütüphane kitap yönetimi, hata bankası düzenleme,
  * öğrenci dosyası ve genel sohbet için `/` gerektirmez).
@@ -69,6 +70,16 @@ enum class SharkSlashCommand(
         persona = AiPersona.SHARK_COACH,
         engine = SharkAiEngine.TWIN_QUESTION_ENGINE,
         aliases = listOf("/ikiz", "/benzersoru")
+    ),
+    SIMULASYON(
+        command = "/simulasyon",
+        title = "2D Simülasyon Stüdyosu",
+        subtitle = "Fizik, Biyoloji, Kimya ve Tıp için hafif interaktif 2D simülasyon üret",
+        examplePrompt = "DNA replikasyonu ve helikaz enzimi etkileşimli simülasyonu",
+        icon = Icons.Default.Science,
+        persona = AiPersona.SHARK_COACH,
+        engine = SharkAiEngine.CONVERSATIONAL_PEER,
+        aliases = listOf("/sim", "/simule", "/simulasyonlar")
     ),
     ZEN(
         command = "/zen",

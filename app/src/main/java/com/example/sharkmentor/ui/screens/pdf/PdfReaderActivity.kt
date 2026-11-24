@@ -919,6 +919,14 @@ fun PdfReaderScreen(
     val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
     val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
+    val topBarPrefs = remember(context) { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(context) }
+    val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
+    val showPdfMusicButton = topBarSettings.isModuleEnabled(com.example.sharkmentor.data.topbar.TopBarModuleId.MUSIC)
+    val pdfMusicState by com.example.sharkmentor.core.audio.MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+    var showPdfMusicSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(context) {
+        com.example.sharkmentor.core.audio.MusicPlayerHub.ensureInitialized(context)
+    }
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
     var aiResult by remember { mutableStateOf<String?>(null) }
@@ -1592,6 +1600,17 @@ fun PdfReaderScreen(
                     }
                 }
 
+                if (showPdfMusicButton) {
+                    com.example.sharkmentor.ui.components.TopBarMusicPill(
+                        playbackState = pdfMusicState,
+                        showBubble = !topBarSettings.hideBubbles,
+                        scaleFactor = 0.92f,
+                        compactIconOnly = true,
+                        onClick = { showPdfMusicSheet = true },
+                        modifier = Modifier.padding(end = 2.dp)
+                    )
+                }
+
                 // AI Note Assistant button (controlled by Notes AI toggle in Settings)
                 if (notesAiEnabled) {
                     IconButton(
@@ -2081,6 +2100,12 @@ fun PdfReaderScreen(
                 }
             }
         }
+    }
+
+    if (showPdfMusicSheet) {
+        com.example.sharkmentor.ui.components.MusicPlayerModalSheet(
+            onDismiss = { showPdfMusicSheet = false }
+        )
     }
 
     // AI Note Assistant ModalBottomSheet

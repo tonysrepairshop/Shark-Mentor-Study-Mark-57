@@ -220,10 +220,13 @@ fun HomeScreen(
         }
     }
 
+    val topBarPrefs = remember(context) { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(context) }
+    val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
+    val musicModuleEnabled = topBarSettings.isModuleEnabled(com.example.sharkmentor.data.topbar.TopBarModuleId.MUSIC)
     val musicPlayerEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
     val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
     val musicPlaybackState by MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
-    val showLeftMusicScreen = shouldShowLeftMusicScreen(musicPlayerEnabled, musicPlaybackState)
+    val showLeftMusicScreen = shouldShowLeftMusicScreen(musicModuleEnabled && musicPlayerEnabled, musicPlaybackState)
 
     val streakRepository = remember(context) { com.example.sharkmentor.data.repository.StreakRepository(context) }
     val streakState by streakRepository.streakState.collectAsStateWithLifecycle()

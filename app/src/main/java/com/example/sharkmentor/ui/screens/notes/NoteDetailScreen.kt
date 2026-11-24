@@ -933,6 +933,14 @@ fun NoteDetailScreen(
     val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
     val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
+    val topBarPrefs = remember(context) { com.example.sharkmentor.data.topbar.TopBarPreferences.getInstance(context) }
+    val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
+    val showNoteMusicButton = topBarSettings.isModuleEnabled(com.example.sharkmentor.data.topbar.TopBarModuleId.MUSIC)
+    val noteMusicState by com.example.sharkmentor.core.audio.MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+    var showNoteMusicSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(context) {
+        com.example.sharkmentor.core.audio.MusicPlayerHub.ensureInitialized(context)
+    }
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
     var lassoAiCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1367,6 +1375,16 @@ fun NoteDetailScreen(
                 }
             },
             actions = {
+                if (showNoteMusicButton) {
+                    com.example.sharkmentor.ui.components.TopBarMusicPill(
+                        playbackState = noteMusicState,
+                        showBubble = !topBarSettings.hideBubbles,
+                        scaleFactor = 0.92f,
+                        compactIconOnly = true,
+                        onClick = { showNoteMusicSheet = true },
+                        modifier = Modifier.padding(end = 2.dp)
+                    )
+                }
                 if (notesAiEnabled) {
                     IconButton(
                         onClick = {
@@ -3685,6 +3703,12 @@ fun NoteDetailScreen(
             lines = lineCount,
             spentSeconds = totalNoteSpentSeconds,
             onDismissRequest = { showStatsDialog = false }
+        )
+    }
+
+    if (showNoteMusicSheet) {
+        com.example.sharkmentor.ui.components.MusicPlayerModalSheet(
+            onDismiss = { showNoteMusicSheet = false }
         )
     }
 

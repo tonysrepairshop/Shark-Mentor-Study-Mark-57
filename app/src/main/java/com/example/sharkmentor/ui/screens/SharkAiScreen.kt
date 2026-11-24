@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.History
@@ -209,6 +210,9 @@ fun SharkAiScreen(
     var showMathSymbolPanel by rememberSaveable { mutableStateOf(false) }
     var showDossierInterviewDialog by rememberSaveable { mutableStateOf(false) }
     var tempCameraUri by remember { mutableStateOf<Uri?>(null) }
+    val activeSimulation by viewModel.activeSimulation.collectAsStateWithLifecycle()
+    val showSimulationsSheet by viewModel.showSimulationsSheet.collectAsStateWithLifecycle()
+    val isGeneratingSimulation by viewModel.isGeneratingSimulation.collectAsStateWithLifecycle()
 
     LaunchedEffect(openInterviewRequested) {
         if (openInterviewRequested) {
@@ -367,6 +371,36 @@ fun SharkAiScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            Surface(
+                                onClick = { viewModel.openSimulationsSheet() },
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.22f)),
+                                modifier = Modifier.heightIn(min = 32.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .heightIn(min = 32.dp)
+                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Science,
+                                        contentDescription = "2D Simülasyon Stüdyosu",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "2D",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
                             Surface(
                                 onClick = { showChatHistorySheet = true },
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
@@ -774,9 +808,12 @@ fun SharkAiScreen(
                                             tonalElevation = 2.dp
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp)) {
-                                                val (cleanBubbleText, slashQuickFillPayload) = remember(msg.text) {
-                                                    com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
+                                                val (cleanBubbleText, slashQuickFillPayload, simulationOpenId) = remember(msg.text) {
+                                                    val (noQuickFill, quickFill) = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
                                                         .extractQuickFillPayload(msg.text)
+                                                    val (finalClean, simId) = com.example.sharkmentor.core.ai.SimulationStudioEngine
+                                                        .extractSimulationOpenTag(noQuickFill)
+                                                    Triple(finalClean, quickFill, simId)
                                                 }
                                                 // Header: Unified Shark AI brand & copy button
                                                 Row(
@@ -865,6 +902,17 @@ fun SharkAiScreen(
                                                         label = "$cmdToken ile doldur",
                                                         onClick = {
                                                             viewModel.onInputTextChanged(slashQuickFillPayload)
+                                                        }
+                                                    )
+                                                }
+
+                                                if (!simulationOpenId.isNullOrBlank()) {
+                                                    Spacer(modifier = Modifier.height(8.dp))
+                                                    ActionChip(
+                                                        icon = Icons.Default.Science,
+                                                        label = "2D Simülasyonu Başlat",
+                                                        onClick = {
+                                                            viewModel.openSimulationById(simulationOpenId)
                                                         }
                                                     )
                                                 }
@@ -1729,6 +1777,26 @@ fun SharkAiScreen(
                     }
                 }
             }
+        }
+
+        if (showSimulationsSheet) {
+            com.example.sharkmentor.ui.components.SavedSimulationsSheet(
+                isGenerating = isGeneratingSimulation,
+                onOpenSimulation = { sim -> viewModel.openSimulation(sim) },
+                onGenerateTopic = { topic -> viewModel.generateSimulationForTopic(topic) },
+                onDismiss = { viewModel.dismissSimulationsSheet() }
+            )
+        }
+
+        activeSimulation?.let { sim ->
+            com.example.sharkmentor.ui.components.InteractiveSimulationDialog(
+                simulation = sim,
+                onSimulationUpdated = { updated -> viewModel.openSimulation(updated) },
+                onDelete = { toDelete ->
+                    com.example.sharkmentor.core.ai.SimulationStudioEngine.deleteSimulation(context, toDelete.id)
+                },
+                onDismiss = { viewModel.dismissSimulation() }
+            )
         }
 
         if (showChatHistorySheet) {

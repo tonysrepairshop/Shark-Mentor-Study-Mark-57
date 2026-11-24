@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 71 APK
+name: Build SharkMentor Mark 73 APK
 
 on:
   push:
@@ -15,6 +15,8 @@ on:
       - mark-69
       - mark-70
       - mark-71
+      - mark-72
+      - mark-73
   workflow_dispatch:
 
 permissions:
@@ -268,7 +270,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark71-debug-apk
+          name: SharkMentor-Mark73-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -277,8 +279,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark71-debug.apk
-          gh release delete mark71-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark71-apk SharkMentor-Mark71-debug.apk \
-            --title "Shark Mentor Study Mark 71 (Debug APK)" \
-            --notes "Mark 71 sürümü: İçe aktarılan playlist videolarını tekil silme, sıfırlanan çalışma başlığı & gerçek metin senkronizasyonu, arka planda/kilitli ekranda medya bildirimli video oynatma, gerçek Not/PDF özeti Podcast motoru, Ana Ekran solunda 5 temalı (Default, Modern Vinyl, Classic Vinyl, CD, Cassette) dönen plaklı Müzik & Zen çalar, konuma/saate duyarlı Tema Döngüsü + Mavi Işık Filtresi ve Kronometre ekran açık tutma seçeneği."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark73-debug.apk
+          gh release delete mark73-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark73-apk SharkMentor-Mark73-debug.apk \
+            --title "Shark Mentor Study Mark 73 (Debug APK)" \
+            --notes "Mark 73 sürümü: Kasma ve kendi kendine durma sorunu çözülmüş akıcı video oynatıcı + kilitli ekran bildirim kontrolleri, sürüklenebilir & boyutlandırılabilir modüler Üst Panel + Not/PDF dahil her yerden erişilebilen 5 temalı interaktif plak/CD/kaset Müzik Çalar (plak iğnesi, CD anahtarı, ses düğmesi ve dinamik Sıradakiler listesi), sadeleştirilmiş Ayarlar mimarisi ve Shark AI içi hafif 2D /simulasyon interaktif konu simülasyon stüdyosu."

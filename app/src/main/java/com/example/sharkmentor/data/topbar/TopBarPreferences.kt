@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import com.google.gson.Gson
+import com.google.gson.JsonParser
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -16,6 +18,111 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+
+enum class TopBarModuleId(val id: String, val label: String) {
+    WEATHER("weather", "Hava Durumu"),
+    TEXT_BAR("text_bar", "Yazı & Öneri Barı"),
+    MUSIC("music", "Müzik Çalar"),
+    COUNTDOWN("countdown", "Sınav Sayacı"),
+    MESSAGES("messages", "Mesajlar");
+
+    companion object {
+        fun fromId(raw: String?): TopBarModuleId? =
+            entries.firstOrNull { it.id.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true) }
+    }
+}
+
+enum class TopBarModuleSize(val scale: Float, val label: String) {
+    SMALL(0.86f, "Küçük"),
+    MEDIUM(1.0f, "Orta"),
+    LARGE(1.16f, "Büyük");
+
+    companion object {
+        fun fromNameOrDefault(raw: String?): TopBarModuleSize =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: MEDIUM
+    }
+}
+
+data class TopBarModuleConfig(
+    val id: TopBarModuleId,
+    val enabled: Boolean = true,
+    val size: TopBarModuleSize = TopBarModuleSize.MEDIUM
+)
+
+fun defaultTopBarModules(): List<TopBarModuleConfig> = listOf(
+    TopBarModuleConfig(TopBarModuleId.WEATHER, enabled = true, size = TopBarModuleSize.MEDIUM),
+    TopBarModuleConfig(TopBarModuleId.TEXT_BAR, enabled = true, size = TopBarModuleSize.MEDIUM),
+    TopBarModuleConfig(TopBarModuleId.MUSIC, enabled = true, size = TopBarModuleSize.MEDIUM),
+    TopBarModuleConfig(TopBarModuleId.MESSAGES, enabled = true, size = TopBarModuleSize.MEDIUM),
+    TopBarModuleConfig(TopBarModuleId.COUNTDOWN, enabled = true, size = TopBarModuleSize.MEDIUM)
+)
+
+fun moveTopBarModule(
+    modules: List<TopBarModuleConfig>,
+    fromIndex: Int,
+    toIndex: Int
+): List<TopBarModuleConfig> {
+    if (modules.isEmpty()) return modules
+    val safeFrom = fromIndex.coerceIn(0, modules.lastIndex)
+    val safeTo = toIndex.coerceIn(0, modules.lastIndex)
+    if (safeFrom == safeTo) return modules
+    val mutable = modules.toMutableList()
+    val moved = mutable.removeAt(safeFrom)
+    mutable.add(safeTo, moved)
+    return mutable
+}
+
+fun toggleTopBarModule(
+    modules: List<TopBarModuleConfig>,
+    id: TopBarModuleId,
+    enabled: Boolean
+): List<TopBarModuleConfig> = modules.map {
+    if (it.id == id) it.copy(enabled = enabled) else it
+}
+
+fun resizeTopBarModule(
+    modules: List<TopBarModuleConfig>,
+    id: TopBarModuleId,
+    size: TopBarModuleSize
+): List<TopBarModuleConfig> = modules.map {
+    if (it.id == id) it.copy(size = size) else it
+}
+
+fun serializeTopBarModulesJson(modules: List<TopBarModuleConfig>): String {
+    val payload = modules.map {
+        mapOf(
+            "id" to it.id.id,
+            "enabled" to it.enabled,
+            "size" to it.size.name
+        )
+    }
+    return Gson().toJson(payload)
+}
+
+fun parseTopBarModulesJson(raw: String?): List<TopBarModuleConfig> {
+    val defaults = defaultTopBarModules()
+    if (raw.isNullOrBlank()) return defaults
+    return runCatching {
+        val parsed = JsonParser.parseString(raw)
+        if (!parsed.isJsonArray) return defaults
+        val seen = LinkedHashSet<TopBarModuleId>()
+        val result = mutableListOf<TopBarModuleConfig>()
+        for (el in parsed.asJsonArray) {
+            if (!el.isJsonObject) continue
+            val obj = el.asJsonObject
+            val id = TopBarModuleId.fromId(obj.get("id")?.asString) ?: continue
+            if (!seen.add(id)) continue
+            val enabled = obj.get("enabled")?.asBoolean ?: true
+            val size = TopBarModuleSize.fromNameOrDefault(obj.get("size")?.asString)
+            result.add(TopBarModuleConfig(id = id, enabled = enabled, size = size))
+        }
+        // Append any newly added modules that weren't in an older saved config
+        defaults.forEach { def ->
+            if (seen.add(def.id)) result.add(def)
+        }
+        result
+    }.getOrDefault(defaults)
+}
 
 enum class TopBarTextSource(val label: String) {
     AI_SUGGESTIONS("AI & Uygulama Önerileri"),
@@ -97,8 +204,12 @@ data class TopBarSettings(
     val hydrationReminderEnabled: Boolean = true,
     val hydrationIntervalMinutes: Int = 45,
     val postureReminderEnabled: Boolean = true,
-    val postureIntervalMinutes: Int = 50
-)
+    val postureIntervalMinutes: Int = 50,
+    val modules: List<TopBarModuleConfig> = defaultTopBarModules()
+) {
+    fun isModuleEnabled(id: TopBarModuleId): Boolean =
+        modules.firstOrNull { it.id == id }?.enabled ?: true
+}
 
 object FocusSessionState {
     private val _isAnyFocusRunning = MutableStateFlow(false)
@@ -171,8 +282,33 @@ class TopBarPreferences private constructor(context: Context) {
             hydrationReminderEnabled = prefs.getBoolean(KEY_HYDRATION_REMINDER, true),
             hydrationIntervalMinutes = prefs.getInt(KEY_HYDRATION_INTERVAL_MIN, 45).coerceIn(20, 120),
             postureReminderEnabled = prefs.getBoolean(KEY_POSTURE_REMINDER, true),
-            postureIntervalMinutes = prefs.getInt(KEY_POSTURE_INTERVAL_MIN, 50).coerceIn(20, 120)
+            postureIntervalMinutes = prefs.getInt(KEY_POSTURE_INTERVAL_MIN, 50).coerceIn(20, 120),
+            modules = parseTopBarModulesJson(prefs.getString(KEY_TOP_BAR_MODULES, null))
         )
+    }
+
+    fun setModules(modules: List<TopBarModuleConfig>) {
+        val normalized = if (modules.isEmpty()) defaultTopBarModules() else modules
+        prefs.edit().putString(KEY_TOP_BAR_MODULES, serializeTopBarModulesJson(normalized)).apply()
+        _settings.value = _settings.value.copy(modules = normalized)
+        val musicOn = normalized.firstOrNull { it.id == TopBarModuleId.MUSIC }?.enabled ?: true
+        runCatching { com.example.sharkmentor.core.audio.MusicPlayerHub.setEnabled(appContext, musicOn) }
+    }
+
+    fun setModuleEnabled(id: TopBarModuleId, enabled: Boolean) {
+        setModules(toggleTopBarModule(_settings.value.modules, id, enabled))
+    }
+
+    fun setModuleSize(id: TopBarModuleId, size: TopBarModuleSize) {
+        setModules(resizeTopBarModule(_settings.value.modules, id, size))
+    }
+
+    fun moveModule(fromIndex: Int, toIndex: Int) {
+        setModules(moveTopBarModule(_settings.value.modules, fromIndex, toIndex))
+    }
+
+    fun resetModulesToDefault() {
+        setModules(defaultTopBarModules())
     }
 
     private fun readStringList(key: String): List<String> {
@@ -520,6 +656,7 @@ class TopBarPreferences private constructor(context: Context) {
         private const val KEY_HYDRATION_INTERVAL_MIN = "hydration_interval_minutes"
         private const val KEY_POSTURE_REMINDER = "posture_reminder_enabled"
         private const val KEY_POSTURE_INTERVAL_MIN = "posture_interval_minutes"
+        private const val KEY_TOP_BAR_MODULES = "top_bar_modules_v1"
 
         const val MAX_CUSTOM_TEXTS = 10
         const val MIN_AI_QUOTES = 5

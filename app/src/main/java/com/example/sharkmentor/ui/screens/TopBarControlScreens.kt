@@ -8,12 +8,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,15 +24,26 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DragHandle
+import androidx.compose.material.icons.rounded.Email
+import androidx.compose.material.icons.rounded.Event
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Timer
 import androidx.compose.material.icons.rounded.WbSunny
@@ -49,10 +62,13 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,16 +77,26 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sharkmentor.core.audio.MusicPlayerHub
+import com.example.sharkmentor.core.audio.MusicPlayerSkin
 import com.example.sharkmentor.data.topbar.TopBarAnimationType
 import com.example.sharkmentor.data.topbar.TopBarFontOption
+import com.example.sharkmentor.data.topbar.TopBarModuleConfig
+import com.example.sharkmentor.data.topbar.TopBarModuleId
+import com.example.sharkmentor.data.topbar.TopBarModuleSize
 import com.example.sharkmentor.data.topbar.TopBarPreferences
 import com.example.sharkmentor.data.topbar.TopBarRefreshInterval
 import com.example.sharkmentor.data.topbar.TopBarSettings
@@ -83,6 +109,14 @@ import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
 
+private fun moduleIconFor(id: TopBarModuleId): ImageVector = when (id) {
+    TopBarModuleId.WEATHER -> Icons.Rounded.WbSunny
+    TopBarModuleId.TEXT_BAR -> Icons.Rounded.TextFields
+    TopBarModuleId.MUSIC -> Icons.Rounded.Album
+    TopBarModuleId.MESSAGES -> Icons.Rounded.Email
+    TopBarModuleId.COUNTDOWN -> Icons.Rounded.Event
+}
+
 @Composable
 fun TopBarControlHubContent(
     settings: TopBarSettings,
@@ -92,8 +126,21 @@ fun TopBarControlHubContent(
     onOpenWeatherSettings: () -> Unit,
     onOpenTextSettings: () -> Unit,
     onOpenCountdownSettings: () -> Unit,
-    onToggleInAppSuggestions: ((Boolean) -> Unit)? = null
+    onToggleInAppSuggestions: ((Boolean) -> Unit)? = null,
+    onMoveModule: ((Int, Int) -> Unit)? = null,
+    onToggleModule: ((TopBarModuleId, Boolean) -> Unit)? = null,
+    onResizeModule: ((TopBarModuleId, TopBarModuleSize) -> Unit)? = null,
+    onResetModules: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    LaunchedEffect(context) {
+        MusicPlayerHub.ensureInitialized(context)
+        MusicPlayerHub.refreshPermissionsAndSessions(context)
+    }
+    val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
+    val mediaAccessGranted by MusicPlayerHub.mediaAccessGranted.collectAsStateWithLifecycle()
+    val musicModuleEnabled = settings.isModuleEnabled(TopBarModuleId.MUSIC)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -101,6 +148,186 @@ fun TopBarControlHubContent(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // 1. Live Interactive Top Bar Preview
+        SectionContainer(title = "Canlı Üst Panel Önizlemesi") {
+            TopBarLivePreviewBar(
+                settings = settings,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 14.dp)
+            )
+        }
+
+        // 2. Drag-to-Reorder, Toggle, and Resize Modules
+        if (onMoveModule != null && onToggleModule != null && onResizeModule != null) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "ÜST PANEL MODÜLLERİ",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = "Sürükleyerek sırayı değiştirin, açıp kapatın ve boyut seçin",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (onResetModules != null) {
+                        TextButton(
+                            onClick = onResetModules,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.RestartAlt,
+                                contentDescription = "Sıfırla",
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Sıfırla", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        val modules = settings.modules
+                        modules.forEachIndexed { index, module ->
+                            if (index > 0) SectionDivider()
+                            TopBarModuleEditorRow(
+                                module = module,
+                                index = index,
+                                totalCount = modules.size,
+                                onMove = onMoveModule,
+                                onToggle = { onToggleModule(module.id, it) },
+                                onResize = { onResizeModule(module.id, it) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Integrated Music Player Controls (synced directly with Top Bar Music module)
+        if (musicModuleEnabled) {
+            SectionContainer(title = "Müzik Çalar & Kaynaklar") {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Medya Kontrol İzni",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (mediaAccessGranted) {
+                                    "Aktif • Çalan şarkı tüm ekranlarda otomatik görünür"
+                                } else {
+                                    "Spotify ve YouTube Music kontrolü için gerekli"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (mediaAccessGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (!mediaAccessGranted) {
+                            OutlinedButton(
+                                onClick = { MusicPlayerHub.openMediaAccessSettings(context) },
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        } else {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "Aktif",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Spotify'ı Aç", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        OutlinedButton(
+                            onClick = { MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("YouTube Music'i Aç", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Text(
+                        text = "Çalar Teması",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp)
+                    ) {
+                        items(MusicPlayerSkin.entries, key = { it.id }) { skin ->
+                            val isChosen = musicSelectedSkin == skin
+                            Surface(
+                                onClick = { MusicPlayerHub.setSkin(context, skin) },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ) {
+                                Text(
+                                    text = skin.displayTitle,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. General Top Bar Behavior
         SectionContainer(title = "Üst Bar Görünümü") {
             SwitchSettingRow(
                 title = "Baloncukları Kapat",
@@ -110,15 +337,15 @@ fun TopBarControlHubContent(
             )
             SectionDivider()
             SwitchSettingRow(
-                title = "Üst Bar Menüsünü Gizle",
-                subtitle = "Üst bar kontrol kısayolunu kapatır",
+                title = "Üst Bar Modüllerini Gizle",
+                subtitle = "Tüm üst panel modüllerini geçici olarak kapatır",
                 checked = settings.hideTopBarMenu,
                 onCheckedChange = onToggleHideTopBarMenu
             )
             SectionDivider()
             SwitchSettingRow(
                 title = "Odak Sırasında Gizle",
-                subtitle = "Odak oturumu başlarken üst barı otomatik kapatır",
+                subtitle = "Odak oturumu başlarken üst paneli otomatik sadeleştirir",
                 checked = settings.hideDuringFocus,
                 onCheckedChange = onToggleHideDuringFocus
             )
@@ -133,7 +360,8 @@ fun TopBarControlHubContent(
             }
         }
 
-        SectionContainer(title = "İçerik & Modüller") {
+        // 5. Module Detail Settings
+        SectionContainer(title = "İçerik Ayarları") {
             NavigationSettingRow(
                 icon = Icons.Rounded.TextFields,
                 title = "Üst Bar Yazıları & Sıklık",
@@ -151,6 +379,297 @@ fun TopBarControlHubContent(
                 title = "Sınav Geri Sayımı",
                 onClick = onOpenCountdownSettings
             )
+        }
+    }
+}
+
+@Composable
+private fun TopBarLivePreviewBar(
+    settings: TopBarSettings,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val enabledModules = settings.modules.filter { it.enabled }
+    val showBubble = !settings.hideBubbles
+    val hasTextBar = !settings.hideTopBarMenu && enabledModules.any { it.id == TopBarModuleId.TEXT_BAR }
+
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = colorScheme.surface,
+        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                text = "Shark",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = colorScheme.onSurface
+            )
+
+            if (!hasTextBar) {
+                Spacer(modifier = Modifier.weight(1f))
+            }
+
+            if (!settings.hideTopBarMenu) {
+                enabledModules.forEach { mod ->
+                    val s = mod.size.scale
+                    val pillColor = if (showBubble) colorScheme.surfaceVariant.copy(alpha = 0.7f) else Color.Transparent
+                    val pillBorder = if (showBubble) BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)) else null
+
+                    when (mod.id) {
+                        TopBarModuleId.WEATHER -> {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = pillColor,
+                                border = pillBorder,
+                                modifier = Modifier.graphicsLayer { scaleX = s; scaleY = s }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(Icons.Rounded.WbSunny, null, tint = colorScheme.primary, modifier = Modifier.size(11.dp))
+                                    Text("22°", fontSize = 9.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.onSurface)
+                                }
+                            }
+                        }
+                        TopBarModuleId.TEXT_BAR -> {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = pillColor,
+                                border = pillBorder,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .graphicsLayer { scaleY = s.coerceIn(0.88f, 1.10f) }
+                            ) {
+                                Text(
+                                    text = "Yazı & Öneri...",
+                                    fontSize = 9.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                        TopBarModuleId.MUSIC -> {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (showBubble) colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent,
+                                border = if (showBubble) BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)) else null,
+                                modifier = Modifier.graphicsLayer { scaleX = s; scaleY = s }
+                            ) {
+                                Box(modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)) {
+                                    Icon(Icons.Rounded.Album, null, tint = colorScheme.primary, modifier = Modifier.size(12.dp))
+                                }
+                            }
+                        }
+                        TopBarModuleId.MESSAGES -> {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = pillColor,
+                                border = pillBorder,
+                                modifier = Modifier.graphicsLayer { scaleX = s; scaleY = s }
+                            ) {
+                                Box(modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp)) {
+                                    Icon(Icons.Rounded.Email, null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(11.dp))
+                                }
+                            }
+                        }
+                        TopBarModuleId.COUNTDOWN -> {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = if (showBubble) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+                                border = if (showBubble) BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f)) else null,
+                                modifier = Modifier.graphicsLayer { scaleX = s; scaleY = s }
+                            ) {
+                                Text(
+                                    text = "94g",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Icon(
+                imageVector = Icons.Rounded.Menu,
+                contentDescription = null,
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TopBarModuleEditorRow(
+    module: TopBarModuleConfig,
+    index: Int,
+    totalCount: Int,
+    onMove: (Int, Int) -> Unit,
+    onToggle: (Boolean) -> Unit,
+    onResize: (TopBarModuleSize) -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val stepPx = with(density) { 58.dp.toPx() }
+    val latestIndex by rememberUpdatedState(index)
+    val latestTotal by rememberUpdatedState(totalCount)
+    val latestOnMove by rememberUpdatedState(onMove)
+    var dragAccumY by remember(module.id) { mutableFloatStateOf(0f) }
+    var isDragging by remember(module.id) { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (isDragging) colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
+            )
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Drag Handle (vertical drag swaps module position immediately)
+            Box(
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(colorScheme.surfaceVariant.copy(alpha = if (isDragging) 0.9f else 0.45f))
+                    .pointerInput(module.id) {
+                        detectVerticalDragGestures(
+                            onDragStart = {
+                                isDragging = true
+                                dragAccumY = 0f
+                            },
+                            onDragEnd = {
+                                isDragging = false
+                                dragAccumY = 0f
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                dragAccumY = 0f
+                            },
+                            onVerticalDrag = { change, dragAmount ->
+                                change.consume()
+                                dragAccumY += dragAmount
+                                if (dragAccumY > stepPx && latestIndex < latestTotal - 1) {
+                                    latestOnMove(latestIndex, latestIndex + 1)
+                                    dragAccumY = 0f
+                                } else if (dragAccumY < -stepPx && latestIndex > 0) {
+                                    latestOnMove(latestIndex, latestIndex - 1)
+                                    dragAccumY = 0f
+                                }
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.DragHandle,
+                    contentDescription = "Sürükleyerek Sırala",
+                    tint = if (isDragging) colorScheme.primary else colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Icon(
+                imageVector = moduleIconFor(module.id),
+                contentDescription = null,
+                tint = if (module.enabled) colorScheme.primary else colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                modifier = Modifier.size(19.dp)
+            )
+
+            Text(
+                text = module.id.label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (module.enabled) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (module.enabled) colorScheme.onSurface else colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+
+            // Quick 1-tap Up / Down arrows alongside drag handle
+            IconButton(
+                onClick = { if (index > 0) onMove(index, index - 1) },
+                enabled = index > 0,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowUp,
+                    contentDescription = "Yukarı Taşı",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            IconButton(
+                onClick = { if (index < totalCount - 1) onMove(index, index + 1) },
+                enabled = index < totalCount - 1,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = "Aşağı Taşı",
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+
+            Switch(
+                checked = module.enabled,
+                onCheckedChange = onToggle
+            )
+        }
+
+        if (module.enabled) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 40.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Boyut:",
+                    fontSize = 11.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+                TopBarModuleSize.entries.forEach { sizeOpt ->
+                    val chosen = module.size == sizeOpt
+                    Surface(
+                        onClick = { onResize(sizeOpt) },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (chosen) colorScheme.primary else colorScheme.surface,
+                        border = BorderStroke(
+                            1.dp,
+                            if (chosen) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                        )
+                    ) {
+                        Text(
+                            text = sizeOpt.label,
+                            fontSize = 11.sp,
+                            fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
+                            color = if (chosen) colorScheme.onPrimary else colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }
