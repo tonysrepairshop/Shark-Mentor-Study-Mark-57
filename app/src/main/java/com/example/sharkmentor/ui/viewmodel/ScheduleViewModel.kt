@@ -41,16 +41,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
     private val _weeklySchedule = MutableStateFlow<WeeklyScheduleData?>(null)
     val weeklySchedule: StateFlow<WeeklyScheduleData?> = _weeklySchedule.asStateFlow()
 
-    private val syncRepository = com.example.sharkmentor.data.repository.StudentSyncRepository(
-        com.google.firebase.firestore.FirebaseFirestore.getInstance(),
-        com.google.firebase.auth.FirebaseAuth.getInstance()
-    )
     private var institutionScheduleListener: com.google.firebase.firestore.ListenerRegistration? = null
 
     init {
         institutionSyncListener.start()
         loadSchedules()
-        listenToStudentSchedule()
     }
 
     override fun onCleared() {
@@ -58,28 +53,6 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         institutionScheduleListener = null
         institutionSyncListener.stop()
         super.onCleared()
-    }
-
-    private fun listenToStudentSchedule() {
-        if (com.google.firebase.auth.FirebaseAuth.getInstance().currentUser == null) return
-        viewModelScope.launch {
-            syncRepository.observeStudentProfile()
-                .catch { _weeklySchedule.value = null }
-                .collect { profile ->
-                    if (profile != null) {
-                        @Suppress("UNCHECKED_CAST")
-                        val scheduleMap = profile["customScheduleData"] as? Map<String, Any>
-                        if (scheduleMap != null) {
-                            val parsed = parseScheduleFromMap(scheduleMap)
-                            _weeklySchedule.value = parsed
-                        } else {
-                            _weeklySchedule.value = null
-                        }
-                    } else {
-                        _weeklySchedule.value = null
-                    }
-                }
-        }
     }
 
     private fun loadSchedules() {
@@ -99,7 +72,10 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
                         val doc = db.collection("students").document(uid).get().await()
                         val coachId = doc.getString("coachId")
                         val isCorporate = doc.getBoolean("isCorporate") ?: false
-                        val hasCustomSchedule = doc.get("customScheduleData") != null
+                        @Suppress("UNCHECKED_CAST")
+                        val scheduleMap = doc.get("customScheduleData") as? Map<String, Any>
+                        _weeklySchedule.value = scheduleMap?.let { parseScheduleFromMap(it) }
+                        val hasCustomSchedule = scheduleMap != null
                         if (!coachId.isNullOrBlank() || isCorporate) {
                             if (hasCustomSchedule) {
                                 isReadOnly = false

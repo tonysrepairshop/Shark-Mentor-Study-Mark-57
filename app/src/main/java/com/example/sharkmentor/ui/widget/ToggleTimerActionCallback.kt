@@ -53,36 +53,13 @@ class ToggleTimerActionCallback : ActionCallback {
             }
 
             TimerPhase.IDLE -> {
-                val modeToStart = currentState.currentMode.takeIf { it != TimerMode.BREAK } ?: TimerMode.POMODORO
-                val startIntent = Intent(context, FocusTimerService::class.java).apply {
-                    action = FocusTimerService.ACTION_START
-                    putExtra(FocusTimerService.EXTRA_MODE, modeToStart.name)
-                    putExtra(FocusTimerService.EXTRA_POMODORO_MINUTES, currentState.customPomodoroDurationMinutes)
-                    putExtra(FocusTimerService.EXTRA_BREAK_MINUTES, currentState.breakDurationMinutes)
-                    putExtra(FocusTimerService.EXTRA_SUBJECT, "Genel Odak")
+                // Open HomeScreen's Mode + Focus Tag/Label picker instead of silently starting "Genel Odak"
+                val openIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra("EXTRA_TARGET_ROUTE", "home")
+                    putExtra("EXTRA_START_FOCUS", true)
                 }
-
-                val started = runCatching {
-                    context.startForegroundService(startIntent)
-                }.isSuccess
-
-                if (started) {
-                    val durationMin = when (modeToStart) {
-                        TimerMode.STOPWATCH -> 24 * 60
-                        TimerMode.BLOCK_90 -> 90
-                        else -> currentState.customPomodoroDurationMinutes
-                    }
-                    sessionManager.startSession(durationMinutes = durationMin, subject = "Genel Odak")
-                    withTimeoutOrNull(800L) {
-                        FocusTimerService.timerStateFlow.first { it.timerPhase == TimerPhase.FOCUSING }
-                    }
-                } else {
-                    val openIntent = Intent(context, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        putExtra("EXTRA_START_FOCUS", true)
-                    }
-                    runCatching { context.startActivity(openIntent) }
-                }
+                runCatching { context.startActivity(openIntent) }
             }
         }
 

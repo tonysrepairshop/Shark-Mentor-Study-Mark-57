@@ -41,7 +41,7 @@ class ChatPackBackupManager(
         private const val PREFS_NAME = "shark_mentor_chat_pack_cache"
         private const val KEY_CACHE_PREFIX = "chat_pack_cache_"
         private const val KEY_PACK_HASH_PREFIX = "chat_pack_hash_"
-        private const val DEBOUNCE_MILLIS = 3_000L
+        private const val DEBOUNCE_MILLIS = 45_000L // Coalesce rapid chat bursts into 1 pack write per 45s
     }
 
     private val prefs: SharedPreferences =

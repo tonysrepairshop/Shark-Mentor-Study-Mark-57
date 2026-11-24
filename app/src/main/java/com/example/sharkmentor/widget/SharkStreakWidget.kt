@@ -235,6 +235,16 @@ private fun CompactWaterStreakLayout(
             ),
             maxLines = 1
         )
+        Spacer(modifier = GlanceModifier.height(2.dp))
+        Text(
+            text = "Hedef: ${snapshot.streakCount.coerceAtMost(snapshot.streakGoalDays)}/${snapshot.streakGoalDays}g",
+            style = TextStyle(
+                color = WidgetThemeTokens.WaterDropAqua,
+                fontWeight = FontWeight.Bold,
+                fontSize = 9.sp
+            ),
+            maxLines = 1
+        )
     }
 }
 
@@ -249,6 +259,8 @@ private fun FullWaterStreakLayout(
     isExpanded: Boolean,
     startFocusIntent: Intent
 ) {
+    val activeTier = com.example.sharkmentor.data.repository.StreakGoalTier.fromTargetDays(snapshot.streakGoalDays)
+    val clampedGoalProgress = snapshot.streakCount.coerceAtMost(activeTier.targetDays)
     Column(modifier = GlanceModifier.fillMaxSize()) {
         // Header row: Water Drop + "Su Serisi" + Status Pill + Refresh
         Row(
@@ -378,6 +390,26 @@ private fun FullWaterStreakLayout(
                     ),
                     maxLines = 2
                 )
+
+                Spacer(modifier = GlanceModifier.height(4.dp))
+
+                // Active Duolingo-style Streak Goal progress & reward preview pill
+                Box(
+                    modifier = GlanceModifier
+                        .background(WidgetThemeTokens.ElevatedCardBg)
+                        .cornerRadius(7.dp)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "Hedef $clampedGoalProgress/${activeTier.targetDays}g • +${activeTier.leaguePointsReward}p +${activeTier.freezeReward}❄️",
+                        style = TextStyle(
+                            color = WidgetThemeTokens.WaterDropAqua,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        maxLines = 1
+                    )
+                }
             }
         }
 

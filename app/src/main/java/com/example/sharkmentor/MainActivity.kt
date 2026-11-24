@@ -239,26 +239,9 @@ class MainActivity : ComponentActivity() {
                 targetRouteState = "home"
             }
             intent.removeExtra("EXTRA_START_FOCUS")
-            val timerState = com.example.sharkmentor.core.service.FocusTimerService.timerStateFlow.value
-            if (timerState.timerPhase == com.example.sharkmentor.core.timer.TimerPhase.IDLE) {
-                val modeToStart = timerState.currentMode
-                    .takeIf { it != com.example.sharkmentor.core.timer.TimerMode.BREAK }
-                    ?: com.example.sharkmentor.core.timer.TimerMode.POMODORO
-                val startIntent = Intent(this, com.example.sharkmentor.core.service.FocusTimerService::class.java).apply {
-                    action = com.example.sharkmentor.core.service.FocusTimerService.ACTION_START
-                    putExtra(com.example.sharkmentor.core.service.FocusTimerService.EXTRA_MODE, modeToStart.name)
-                    putExtra(
-                        com.example.sharkmentor.core.service.FocusTimerService.EXTRA_POMODORO_MINUTES,
-                        timerState.customPomodoroDurationMinutes
-                    )
-                    putExtra(
-                        com.example.sharkmentor.core.service.FocusTimerService.EXTRA_BREAK_MINUTES,
-                        timerState.breakDurationMinutes
-                    )
-                    putExtra(com.example.sharkmentor.core.service.FocusTimerService.EXTRA_SUBJECT, "Genel Odak")
-                }
-                runCatching { startForegroundService(startIntent) }
-            }
+            // Route cleanly into HomeScreen so the student picks timer mode + focus tag/label
+            // (or jumps straight to their active running timer with zero mode conflicts).
+            com.example.sharkmentor.core.timer.FocusLaunchNavBus.requestOpenFocusLaunchPicker()
         }
 
         when (intent.action) {

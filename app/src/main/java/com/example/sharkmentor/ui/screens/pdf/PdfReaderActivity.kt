@@ -941,6 +941,7 @@ fun PdfReaderScreen(
         if (isFlushingDrawings && showToast) return
         if (showToast) isFlushingDrawings = true
         val appCtx = context.applicationContext
+        pageControllers.values.forEach { it.closeActiveTextBox() }
         val strokeSnapshots = pageControllers.entries.associate { (idx, ctrl) -> idx to ctrl.strokes.toList() }
         val boxSnapshots = pageControllers.entries.associate { (idx, ctrl) -> idx to ctrl.textBoxes.toList() }
         val pageSnap = currentPageIndex

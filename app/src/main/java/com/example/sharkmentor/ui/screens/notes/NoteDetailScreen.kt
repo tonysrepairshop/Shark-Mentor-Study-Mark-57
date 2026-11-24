@@ -424,16 +424,10 @@ fun NoteDetailScreen(
             DrawingController(
                 maxHistorySteps = 60,
                 onStrokesChanged = { updatedStrokes ->
-                    val targetId = vmNoteId
-                    drawingScope.launch(Dispatchers.IO) {
-                        DrawingSerializer.saveNotePageDrawing(context, targetId, pageIdx, updatedStrokes)
-                    }
+                    viewModel.saveNotePageDrawingImmediately(context, vmNoteId, pageIdx, updatedStrokes)
                 },
                 onTextBoxesChanged = { updatedBoxes ->
-                    val targetId = vmNoteId
-                    drawingScope.launch(Dispatchers.IO) {
-                        DrawingSerializer.saveNotePageTextBoxes(context, targetId, pageIdx, updatedBoxes)
-                    }
+                    viewModel.saveNotePageTextBoxesImmediately(context, vmNoteId, pageIdx, updatedBoxes)
                 }
             ).also { ctrl ->
                 ctrl.bindPreferencesContext(context)
@@ -1264,15 +1258,14 @@ fun NoteDetailScreen(
             overrideContent = fullContent
         )
         pageDrawingControllers.forEach { (idx, ctrl) ->
-            viewModel.saveNotePageDrawingImmediately(
+            ctrl.closeActiveTextBox()
+            viewModel.saveNotePageAnnotationsImmediately(
                 context = context,
                 targetNoteId = vmNoteId,
                 pageIndex = idx,
-                strokes = ctrl.strokes
+                strokes = ctrl.strokes,
+                textBoxes = ctrl.textBoxes
             )
-            drawingScope.launch(Dispatchers.IO) {
-                DrawingSerializer.saveNotePageTextBoxes(context, vmNoteId, idx, ctrl.textBoxes)
-            }
         }
     }
 

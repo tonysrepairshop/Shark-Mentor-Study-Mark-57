@@ -6,15 +6,19 @@ import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.data.local.dao.NoteDao
 import com.example.sharkmentor.data.local.entity.NoteEntity
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 class NoteRepositoryImpl(
     private val noteDao: NoteDao,
@@ -23,81 +27,158 @@ class NoteRepositoryImpl(
 
     companion object {
         private const val TAG = "NoteRepositoryImpl"
+        private const val PREFS_NOTE_QUOTA = "note_sync_quota_prefs"
+        private const val KEY_LAST_PULL_MS = "last_notes_pull_ms"
+        private const val KEY_LAST_UID = "last_notes_pull_uid"
+        private const val PULL_COOLDOWN_MS = 15L * 60L * 1000L // 15 minutes
+        private const val NOTES_QUERY_LIMIT = 150L
+        private const val CLOUD_WRITE_DEBOUNCE_MS = 12_000L // 12 seconds per note
+
+        private val sharedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        private val pendingNotes = ConcurrentHashMap<String, NoteEntity>()
+        private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
+        private val lastSyncedHashByNoteId = ConcurrentHashMap<String, String>()
+
+        private fun computeNoteContentHash(note: NoteEntity): String {
+            val payload = "${note.title}|${note.content}|${note.colorHex}|${note.isPinned}"
+            return runCatching {
+                val digest = MessageDigest.getInstance("SHA-256")
+                    .digest(payload.toByteArray(Charsets.UTF_8))
+                digest.joinToString("") { "%02x".format(it) }
+            }.getOrElse { payload.hashCode().toString() }
+        }
+
+        /**
+         * Immediately flushes any debounced note edits to Firestore (called on editor exit / onCleared)
+         * so zero user edits are lost while eliminating keystroke write storms.
+         */
+        fun flushPendingCloudWrites(context: Context) {
+            val appCtx = context.applicationContext
+            val snapshot = pendingNotes.entries.toList()
+            if (snapshot.isEmpty()) return
+            sharedScope.launch {
+                val fs = GoogleServicesHelper.getFirebaseFirestore(appCtx) ?: return@launch
+                val uid = runCatching {
+                    FirebaseAuth.getInstance().currentUser?.uid
+                        ?: GoogleServicesHelper.getFirebaseAuth(appCtx)?.currentUser?.uid
+                }.getOrNull() ?: return@launch
+                snapshot.forEach { (noteId, note) ->
+                    pendingWriteJobs.remove(noteId)?.cancel()
+                    if (pendingNotes.remove(noteId, note)) {
+                        pushNoteToFirestoreInternal(fs, uid, note)
+                    }
+                }
+            }
+        }
+
+        private suspend fun pushNoteToFirestoreInternal(
+            fs: com.google.firebase.firestore.FirebaseFirestore,
+            uid: String,
+            note: NoteEntity
+        ) {
+            val hash = computeNoteContentHash(note)
+            val cacheKey = "${uid}_${note.id}"
+            if (lastSyncedHashByNoteId[cacheKey] == hash) return
+            val noteMap = mapOf(
+                "id" to note.id,
+                "title" to note.title,
+                "content" to note.content,
+                "colorHex" to note.colorHex,
+                "isPinned" to note.isPinned,
+                "pinned" to note.isPinned,
+                "createdAt" to note.createdAt,
+                "updatedAt" to note.updatedAt,
+                "isSynced" to true
+            )
+            runCatching {
+                fs.collection("users").document(uid)
+                    .collection("notes").document(note.id)
+                    .set(noteMap)
+                    .await()
+                lastSyncedHashByNoteId[cacheKey] = hash
+            }.onFailure { e ->
+                Log.w(TAG, "Firestore note sync failed (saved locally in Room): ${e.message}")
+            }
+        }
     }
 
-    private val firestore by lazy { GoogleServicesHelper.getFirebaseFirestore(context) }
-    private val repositoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var notesListenerRegistration: ListenerRegistration? = null
+    private val appContext = context.applicationContext
+    private val firestore by lazy { GoogleServicesHelper.getFirebaseFirestore(appContext) }
 
     private val currentUid: String?
         get() = try {
             FirebaseAuth.getInstance().currentUser?.uid
-                ?: GoogleServicesHelper.getFirebaseAuth(context)?.currentUser?.uid
+                ?: GoogleServicesHelper.getFirebaseAuth(appContext)?.currentUser?.uid
         } catch (e: Exception) {
             null
         }
 
-    private fun attachRemoteListenerIfAuthenticated() {
-        val currentUser = try {
-            FirebaseAuth.getInstance().currentUser
-                ?: GoogleServicesHelper.getFirebaseAuth(context)?.currentUser
-        } catch (e: Exception) {
-            null
-        }
-        if (currentUser == null) {
-            // Operate strictly in offline/Room-only mode when unauthenticated
-            notesListenerRegistration?.remove()
-            notesListenerRegistration = null
-            return
-        }
-
-        if (notesListenerRegistration != null) return
-        val uid = currentUser.uid
+    /**
+     * Quota-safe bounded one-shot pull (max 150 docs, 15-min cooldown, auto-bypassed if local Room is empty).
+     * Eliminates the previous unlimited live snapshot listener that echoed every local edit and burned reads.
+     */
+    private fun pullRemoteNotesIfDue(force: Boolean = false) {
+        val uid = currentUid ?: return
         val fs = firestore ?: return
 
-        try {
-            notesListenerRegistration = fs.collection("users")
-                .document(uid)
-                .collection("notes")
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        if (error.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
-                            notesListenerRegistration?.remove()
-                            notesListenerRegistration = null
-                            return@addSnapshotListener
+        sharedScope.launch {
+            runCatching {
+                val prefs = appContext.getSharedPreferences(PREFS_NOTE_QUOTA, Context.MODE_PRIVATE)
+                val lastPullMs = prefs.getLong(KEY_LAST_PULL_MS, 0L)
+                val lastUid = prefs.getString(KEY_LAST_UID, null)
+                val now = System.currentTimeMillis()
+                val localEmpty = runCatching { noteDao.getNoteCount() == 0 }.getOrDefault(false)
+                if (!force && !localEmpty && lastUid == uid && (now - lastPullMs) < PULL_COOLDOWN_MS) {
+                    return@launch
+                }
+
+                val snapshot = fs.collection("users")
+                    .document(uid)
+                    .collection("notes")
+                    .limit(NOTES_QUERY_LIMIT)
+                    .get()
+                    .await()
+
+                snapshot.documents.forEach { doc ->
+                    runCatching {
+                        if (doc.getBoolean("isDeleted") == true) {
+                            noteDao.deleteNoteById(doc.id)
+                            return@runCatching
                         }
-                        Log.w(TAG, "Firestore notes listener error (operating offline): ${error.message}")
-                        return@addSnapshotListener
-                    }
-                    if (snapshot == null) return@addSnapshotListener
-                    repositoryScope.launch {
-                        snapshot.documents.forEach { doc ->
-                            runCatching {
-                                val entity = NoteEntity(
-                                    id = doc.id,
-                                    title = doc.getString("title") ?: "",
-                                    content = doc.getString("content") ?: "",
-                                    colorHex = doc.getString("colorHex") ?: "#F8FAFC",
-                                    isPinned = doc.getBoolean("isPinned") ?: doc.getBoolean("pinned") ?: false,
-                                    createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis(),
-                                    updatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis(),
-                                    isSynced = true
-                                )
-                                noteDao.upsertNote(entity)
-                            }.onFailure { e ->
-                                Log.w(TAG, "Failed to parse remote note ${doc.id}: ${e.message}")
-                            }
+                        val remoteUpdatedAt = doc.getLong("updatedAt") ?: System.currentTimeMillis()
+                        val existing = noteDao.getNoteById(doc.id)
+                        if (existing != null && (!existing.isSynced || existing.updatedAt > remoteUpdatedAt)) {
+                            return@runCatching
                         }
+                        val entity = NoteEntity(
+                            id = doc.id,
+                            title = doc.getString("title") ?: "",
+                            content = doc.getString("content") ?: "",
+                            colorHex = doc.getString("colorHex") ?: "#F8FAFC",
+                            isPinned = doc.getBoolean("isPinned") ?: doc.getBoolean("pinned") ?: false,
+                            createdAt = doc.getLong("createdAt") ?: existing?.createdAt ?: System.currentTimeMillis(),
+                            updatedAt = remoteUpdatedAt,
+                            isSynced = true
+                        )
+                        noteDao.upsertNote(entity)
+                        lastSyncedHashByNoteId["${uid}_${entity.id}"] = computeNoteContentHash(entity)
+                    }.onFailure { e ->
+                        Log.w(TAG, "Failed to parse remote note ${doc.id}: ${e.message}")
                     }
                 }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not attach Firestore notes listener: ${e.message}")
+                prefs.edit()
+                    .putLong(KEY_LAST_PULL_MS, now)
+                    .putString(KEY_LAST_UID, uid)
+                    .apply()
+            }.onFailure { e ->
+                Log.w(TAG, "Quota-safe notes pull skipped (offline/error): ${e.message}")
+            }
         }
     }
 
     override fun getAllNotesFlow(): Flow<List<NoteEntity>> {
         return noteDao.getAllNotesFlow()
-            .onStart { attachRemoteListenerIfAuthenticated() }
+            .onStart { pullRemoteNotesIfDue(force = false) }
             .catch { e ->
                 Log.e(TAG, "Error observing notes from Room: ${e.message}", e)
                 emit(emptyList())
@@ -123,26 +204,20 @@ class NoteRepositoryImpl(
                 return@withContext
             }
 
-            try {
-                val noteMap = mapOf(
-                    "id" to updatedNote.id,
-                    "title" to updatedNote.title,
-                    "content" to updatedNote.content,
-                    "colorHex" to updatedNote.colorHex,
-                    "isPinned" to updatedNote.isPinned,
-                    "pinned" to updatedNote.isPinned,
-                    "createdAt" to updatedNote.createdAt,
-                    "updatedAt" to updatedNote.updatedAt,
-                    "isSynced" to true
-                )
-                firestore?.collection("users")?.document(uid)
-                    ?.collection("notes")?.document(updatedNote.id)
-                    ?.set(noteMap)
-                    ?.addOnFailureListener { e ->
-                        Log.w(TAG, "Firestore note sync failed (saved locally in Room): ${e.message}")
-                    }
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to sync note to Firestore: ${e.message}")
+            val contentHash = computeNoteContentHash(updatedNote)
+            if (lastSyncedHashByNoteId["${uid}_${updatedNote.id}"] == contentHash) {
+                return@withContext
+            }
+
+            // Coalesce rapid typing/editing into 1 Firestore write every 12s (flushed on editor close)
+            pendingNotes[updatedNote.id] = updatedNote
+            pendingWriteJobs[updatedNote.id]?.cancel()
+            pendingWriteJobs[updatedNote.id] = sharedScope.launch {
+                delay(CLOUD_WRITE_DEBOUNCE_MS)
+                val latest = pendingNotes.remove(updatedNote.id) ?: return@launch
+                pendingWriteJobs.remove(updatedNote.id)
+                val fs = firestore ?: return@launch
+                pushNoteToFirestoreInternal(fs, uid, latest)
             }
         }
     }
@@ -153,12 +228,15 @@ class NoteRepositoryImpl(
 
     override suspend fun deleteNote(noteId: String) {
         withContext(Dispatchers.IO) {
+            pendingWriteJobs.remove(noteId)?.cancel()
+            pendingNotes.remove(noteId)
             noteDao.deleteNoteById(noteId)
 
             val uid = currentUid
             if (FirebaseAuth.getInstance().currentUser == null || uid == null) {
                 return@withContext
             }
+            lastSyncedHashByNoteId.remove("${uid}_$noteId")
 
             try {
                 firestore?.collection("users")?.document(uid)

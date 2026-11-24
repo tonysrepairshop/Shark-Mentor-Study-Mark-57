@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Calendar
 import java.util.Locale
@@ -1582,6 +1583,13 @@ object SharkBadgeCatalog {
         return getUnlockedBadgeIds(context)
     }
 
+    private val badgeSyncScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
+    private var pendingBadgeSyncJob: kotlinx.coroutines.Job? = null
+    @Volatile
+    private var lastBadgePayloadHashByUid: Pair<String, String>? = null
+
     fun syncShowcaseAndBadgesToCloud(
         context: Context,
         uid: String,
@@ -1590,10 +1598,11 @@ object SharkBadgeCatalog {
         mentorPoints: Int = getMentorPoints(context),
         badgeProgress: Map<String, Int> = getBadgeProgressCounts(context),
         weeklyBonusSeconds: Long = getWeeklyBonusSeconds(context),
-        weekKey: String = currentIsoWeekKey()
+        weekKey: String = currentIsoWeekKey(),
+        forceImmediate: Boolean = false
     ) {
         if (uid.isBlank() || uid == "local_student" || uid == "student_default") return
-        val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return
+        val appCtx = context.applicationContext
         val cleanShowcase = showcaseIds
             .map { it.trim().substringBefore(":") }
             .filter { BADGE_MAP.containsKey(it) }
@@ -1603,35 +1612,58 @@ object SharkBadgeCatalog {
             .map { it.trim().substringBefore(":") }
             .filter { BADGE_MAP.containsKey(it) }
             .distinct()
-        val cleanProgress = badgeProgress.filter { (k, v) -> BADGE_MAP.containsKey(k) && v > 0 }
+            .sorted()
+        val cleanProgress = badgeProgress
+            .filter { (k, v) -> BADGE_MAP.containsKey(k) && v > 0 }
+            .toSortedMap()
         val safeBonus = weeklyBonusSeconds.coerceAtLeast(0L)
 
-        val studentUpdate = hashMapOf<String, Any>(
-            "showcaseBadges" to cleanShowcase,
-            "showcaseBadgeIds" to cleanShowcase,
-            "unlockedBadges" to cleanUnlocked,
-            "badgeProgress" to cleanProgress,
-            "mentorPoints" to mentorPoints,
-            "weeklyBonusByWeek" to mapOf(weekKey to safeBonus)
-        )
-        runCatching {
-            db.collection("students").document(uid)
-                .set(studentUpdate, SetOptions.merge())
-        }.onFailure {
-            Log.w("SharkBadgeCatalog", "Failed syncing badges to students/$uid: ${it.message}")
+        val payloadSignature = "$cleanShowcase|$cleanUnlocked|$mentorPoints|$cleanProgress|$weekKey:$safeBonus"
+        val prev = lastBadgePayloadHashByUid
+        if (!forceImmediate && prev != null && prev.first == uid && prev.second == payloadSignature) {
+            return
         }
 
-        val leagueUpdate = hashMapOf<String, Any>(
-            "showcaseBadges" to cleanShowcase,
-            "showcaseBadgeIds" to cleanShowcase,
-            "badgeProgress" to cleanProgress,
-            "mentorPoints" to mentorPoints,
-            "weeklyBonusByWeek" to mapOf(weekKey to safeBonus)
-        )
-        runCatching {
-            db.collection("institutions").document("GLOBAL_INDIVIDUAL")
-                .collection("weeklyLeague").document(uid)
-                .set(leagueUpdate, SetOptions.merge())
+        pendingBadgeSyncJob?.cancel()
+        val delayMs = if (forceImmediate) 0L else 8_000L
+        pendingBadgeSyncJob = badgeSyncScope.launch {
+            if (delayMs > 0L) {
+                kotlinx.coroutines.delay(delayMs)
+            }
+            val db = GoogleServicesHelper.getFirebaseFirestore(appCtx) ?: return@launch
+            val studentUpdate = hashMapOf<String, Any>(
+                "showcaseBadges" to cleanShowcase,
+                "showcaseBadgeIds" to cleanShowcase,
+                "unlockedBadges" to cleanUnlocked,
+                "badgeProgress" to cleanProgress,
+                "mentorPoints" to mentorPoints,
+                "weeklyBonusByWeek" to mapOf(weekKey to safeBonus)
+            )
+            val studentOk = runCatching {
+                db.collection("students").document(uid)
+                    .set(studentUpdate, SetOptions.merge())
+                    .await()
+                true
+            }.onFailure {
+                Log.w("SharkBadgeCatalog", "Failed syncing badges to students/$uid: ${it.message}")
+            }.getOrDefault(false)
+
+            val leagueUpdate = hashMapOf<String, Any>(
+                "showcaseBadges" to cleanShowcase,
+                "showcaseBadgeIds" to cleanShowcase,
+                "badgeProgress" to cleanProgress,
+                "mentorPoints" to mentorPoints,
+                "weeklyBonusByWeek" to mapOf(weekKey to safeBonus)
+            )
+            runCatching {
+                db.collection("institutions").document("GLOBAL_INDIVIDUAL")
+                    .collection("weeklyLeague").document(uid)
+                    .set(leagueUpdate, SetOptions.merge())
+                    .await()
+            }
+            if (studentOk) {
+                lastBadgePayloadHashByUid = uid to payloadSignature
+            }
         }
     }
 

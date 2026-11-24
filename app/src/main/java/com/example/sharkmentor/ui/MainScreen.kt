@@ -395,7 +395,12 @@ fun MainScreen(
                                     enterTransition  = { fadeIn() },
                                     exitTransition   = { fadeOut() },
                                 ) {
-                        composable(Screen.Focus.route)      { HomeScreen(onNavigateToSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } }) }
+                        composable(Screen.Focus.route) {
+                            HomeScreen(
+                                onNavigateToSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
+                                onNavigateToPlans = { navController.navigate(Screen.Dashboard.route) { launchSingleTop = true } }
+                            )
+                        }
                         composable(Screen.Dashboard.route)     { PlansScreen(onNavigateToSchedule = { navController.navigate(Screen.Schedule.route) { launchSingleTop = true } }) }
                         composable(Screen.Resources.route) {
                             var isTopicOpen by androidx.compose.runtime.remember { mutableStateOf(false) }

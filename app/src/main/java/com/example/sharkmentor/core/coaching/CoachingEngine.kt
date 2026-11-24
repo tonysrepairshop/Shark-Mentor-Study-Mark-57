@@ -545,6 +545,9 @@ object CoachingEngine {
 
     // ── Offline-First Live Presence Broadcast (Shark League & Friends) ───────
 
+    @Volatile
+    private var lastPushedPresenceKey: String? = null
+
     fun updateLivePresenceOfflineFirst(
         context: Context,
         isStudying: Boolean,
@@ -554,6 +557,7 @@ object CoachingEngine {
         ensureInitialized(context)
         val appCtx = context.applicationContext
         val cleanSubject = formatCleanLeagueSubject(subject).ifBlank { "Odak" }
+        val effectiveSubject = if (isStudying) cleanSubject else ""
         val effectiveStart = if (isStudying) {
             if (_livePresence.value.isStudying && _livePresence.value.startedAtMillis > 0L) {
                 _livePresence.value.startedAtMillis
@@ -562,10 +566,21 @@ object CoachingEngine {
             }
         } else 0L
 
+        val prev = _livePresence.value
+        val presenceKey = "$isStudying|$effectiveSubject"
+        // Skip duplicate Firestore writes when state is already synced and identical
+        if (!prev.pendingCloudFlush &&
+            prev.isStudying == isStudying &&
+            prev.activeSubject == effectiveSubject &&
+            lastPushedPresenceKey == presenceKey
+        ) {
+            return
+        }
+
         val connected = FocusSessionRecorder.isNetworkConnected(appCtx)
         val nextPresence = LiveFocusPresence(
             isStudying = isStudying,
-            activeSubject = if (isStudying) cleanSubject else "",
+            activeSubject = effectiveSubject,
             startedAtMillis = effectiveStart,
             pendingCloudFlush = !connected
         )
@@ -573,7 +588,7 @@ object CoachingEngine {
 
         prefs(appCtx).edit()
             .putBoolean(KEY_PRESENCE_STUDYING, isStudying)
-            .putString(KEY_PRESENCE_SUBJECT, if (isStudying) cleanSubject else "")
+            .putString(KEY_PRESENCE_SUBJECT, effectiveSubject)
             .putLong(KEY_PRESENCE_STARTED_AT, effectiveStart)
             .putBoolean(KEY_PRESENCE_NEEDS_FLUSH, !connected)
             .apply()
@@ -588,13 +603,14 @@ object CoachingEngine {
     /**
      * Called on periodic timer ticks and network reconnects so an offline-started
      * focus session automatically publishes its live status ("Masada • AYT Kimya")
-     * to Shark League as soon as connectivity becomes available.
+     * to Shark League as soon as connectivity becomes available — without burning
+     * redundant Firestore writes when already synced.
      */
     fun flushPendingPresenceIfConnected(context: Context) {
         ensureInitialized(context)
         val appCtx = context.applicationContext
         val current = _livePresence.value
-        if (!current.pendingCloudFlush && !current.isStudying) return
+        if (!current.pendingCloudFlush) return
         if (!FocusSessionRecorder.isNetworkConnected(appCtx)) return
         pushLivePresenceToFirestore(appCtx, current)
     }
@@ -603,6 +619,7 @@ object CoachingEngine {
         val uid = GoogleServicesHelper.getCurrentUser(context = context)?.uid ?: return
         val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return
         val cleanLeagueSubject = formatCleanLeagueSubject(presence.activeSubject).ifBlank { "Odak" }
+        val presenceKey = "${presence.isStudying}|${if (presence.isStudying) cleanLeagueSubject else ""}"
 
         val studentData: Map<String, Any> = if (presence.isStudying) {
             mapOf(
@@ -620,29 +637,16 @@ object CoachingEngine {
             )
         }
 
+        // Single canonical presence write on students/{uid} (removed dead global_league mirror)
         db.collection("students").document(uid)
             .set(studentData, SetOptions.merge())
             .addOnSuccessListener {
+                lastPushedPresenceKey = presenceKey
                 if (_livePresence.value.pendingCloudFlush) {
                     _livePresence.value = _livePresence.value.copy(pendingCloudFlush = false)
                     prefs(context).edit().putBoolean(KEY_PRESENCE_NEEDS_FLUSH, false).apply()
                 }
             }
-
-        val leagueData: Map<String, Any> = if (presence.isStudying) {
-            mapOf(
-                "isStudying" to true,
-                "activeSubject" to cleanLeagueSubject,
-                "activeSessionStartedAtMillis" to presence.startedAtMillis
-            )
-        } else {
-            mapOf(
-                "isStudying" to false,
-                "activeSubject" to ""
-            )
-        }
-        db.collection("global_league").document(uid)
-            .set(leagueData, SetOptions.merge())
     }
 
     // ── Target Compass & 7-Day Daily Goal Ledger Refresh ─────────────────────

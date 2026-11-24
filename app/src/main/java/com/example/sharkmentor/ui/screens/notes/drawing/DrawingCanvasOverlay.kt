@@ -468,15 +468,27 @@ fun DrawingCanvasOverlay(
                 }
                 if (!multiTouchScroll && !movedTooFar && canvasSize.width > 10 && canvasSize.height > 10) {
                     if (controller.activeTextBoxId != null) {
-                        controller.selectTextBox(null)
+                        // Outside tap cleanly commits & closes editor — NEVER deletes non-empty text
+                        controller.closeActiveTextBox()
                     } else {
-                        val xf = (startPos.x / canvasSize.width.toFloat()).coerceIn(0.03f, 0.56f)
-                        val yf = (startPos.y / canvasSize.height.toFloat()).coerceIn(0.03f, 0.84f)
-                        controller.addTextBox(
-                            xFraction = xf,
-                            yFraction = yf,
-                            defaultColorArgb = defaultTextBoxColor.toArgb()
-                        )
+                        val tapXf = (startPos.x / canvasSize.width.toFloat()).coerceIn(0f, 1f)
+                        val tapYf = (startPos.y / canvasSize.height.toFloat()).coerceIn(0f, 1f)
+                        val hitBox = controller.textBoxes.lastOrNull { box ->
+                            tapXf in (box.xFraction - 0.02f)..(box.xFraction + box.widthFraction + 0.02f) &&
+                                tapYf in (box.yFraction - 0.02f)..(box.yFraction + 0.14f)
+                        }
+                        if (hitBox != null) {
+                            controller.selectTextBox(hitBox.id)
+                        } else {
+                            val xf = tapXf.coerceIn(0.03f, 0.36f)
+                            val yf = tapYf.coerceIn(0.03f, 0.82f)
+                            controller.addTextBox(
+                                xFraction = xf,
+                                yFraction = yf,
+                                widthFraction = 0.62f,
+                                defaultColorArgb = defaultTextBoxColor.toArgb()
+                            )
+                        }
                     }
                 }
             }
@@ -951,7 +963,7 @@ fun DrawingCanvasOverlay(
             }
         }
 
-        // 5. Rich-Text Boxes Layer (editable in TEXT_BOX tool mode; visible read-only pass-through otherwise)
+        // 5. Rich-Text Boxes Layer (GoodNotes-style: editable in TEXT_BOX mode, cleanly visible & preserved always)
         if (controller.textBoxes.isNotEmpty() && canvasSize.width > 0 && canvasSize.height > 0) {
             val isTextBoxToolActive = activeTool == DrawingTool.TEXT_BOX && !isCapturingScreenshot
             val colorScheme = MaterialTheme.colorScheme
@@ -968,7 +980,7 @@ fun DrawingCanvasOverlay(
 
                 val offsetX = (box.xFraction * canvasW).roundToInt()
                 val offsetY = (box.yFraction * canvasH).roundToInt()
-                val boxWidthDp = with(density) { (box.widthFraction * canvasW).toDp().coerceAtLeast(96.dp) }
+                val boxWidthDp = with(density) { (box.widthFraction * canvasW).toDp().coerceAtLeast(136.dp) }
                 val baseFont = NoteFontOption.fromName(box.baseFontName).resolveFontFamily()
                 val baseSizeSp = box.baseFontSizeSp.coerceIn(
                     NoteRichTextHelper.MIN_FONT_SIZE_SP,
@@ -983,20 +995,20 @@ fun DrawingCanvasOverlay(
                     }
                     Surface(
                         modifier = Modifier
-                            .zIndex(12f)
+                            .zIndex(14f)
                             .offset { IntOffset(offsetX, offsetY) }
                             .width(boxWidthDp),
-                        shape = RoundedCornerShape(10.dp),
-                        color = surfaceColor.copy(alpha = 0.92f),
-                        shadowElevation = 6.dp,
+                        shape = RoundedCornerShape(14.dp),
+                        color = surfaceColor.copy(alpha = 0.96f),
+                        shadowElevation = 8.dp,
                         border = BorderStroke(1.5.dp, primaryColor)
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
-                            // Drag handle + Done + Delete header
+                            // GoodNotes-style header: Drag Handle + A-/A+ + Explicit Trash + Safe "Tamam" Save Pill
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(primaryColor.copy(alpha = 0.12f))
+                                    .background(primaryColor.copy(alpha = 0.10f))
                                     .pointerInput(box.id, canvasW, canvasH) {
                                         detectDragGestures { change, dragAmount ->
                                             change.consume()
@@ -1008,41 +1020,105 @@ fun DrawingCanvasOverlay(
                                             )
                                         }
                                     }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                                    .padding(horizontal = 8.dp, vertical = 5.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.DragIndicator,
-                                    contentDescription = "Taşı",
-                                    tint = primaryColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
-                                    IconButton(
-                                        onClick = { controller.selectTextBox(null) },
-                                        modifier = Modifier.size(22.dp)
+                                    Icon(
+                                        imageVector = Icons.Default.DragIndicator,
+                                        contentDescription = "Taşı",
+                                        tint = primaryColor,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "Taşı",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = primaryColor.copy(alpha = 0.85f)
+                                    )
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    // Quick Font Size Stepper (A- / A+)
+                                    Surface(
+                                        onClick = { controller.stepTextBoxFontSize(-2f) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = surfaceColor.copy(alpha = 0.9f),
+                                        border = BorderStroke(0.8.dp, colorScheme.outlineVariant)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Tamam",
-                                            tint = primaryColor,
-                                            modifier = Modifier.size(14.dp)
+                                        Text(
+                                            text = "A−",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                         )
                                     }
-                                    IconButton(
-                                        onClick = { controller.deleteTextBox(box.id) },
-                                        modifier = Modifier.size(22.dp)
+                                    Surface(
+                                        onClick = { controller.stepTextBoxFontSize(2f) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = surfaceColor.copy(alpha = 0.9f),
+                                        border = BorderStroke(0.8.dp, colorScheme.outlineVariant)
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Metin kutusunu sil",
-                                            tint = colorScheme.error,
-                                            modifier = Modifier.size(14.dp)
+                                        Text(
+                                            text = "A+",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                                         )
+                                    }
+
+                                    // Explicit Trash button (ONLY this deletes the box — never confused with Close!)
+                                    Surface(
+                                        onClick = { controller.deleteTextBox(box.id) },
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = colorScheme.errorContainer.copy(alpha = 0.85f)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 3.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Metin kutusunu sil",
+                                                tint = colorScheme.error,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
+
+                                    // Explicit Save & Close pill ("Tamam") — commits & preserves text cleanly
+                                    Surface(
+                                        onClick = { controller.closeActiveTextBox() },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = primaryColor
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Kaydet ve Kapat",
+                                                tint = colorScheme.onPrimary,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = "Tamam",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.onPrimary
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1050,7 +1126,8 @@ fun DrawingCanvasOverlay(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .heightIn(min = 42.dp)
+                                    .padding(horizontal = 12.dp, vertical = 9.dp)
                             ) {
                                 BasicTextField(
                                     value = controller.activeTextBoxFieldValue,
@@ -1059,7 +1136,7 @@ fun DrawingCanvasOverlay(
                                         color = baseTextColor,
                                         fontSize = baseSizeSp,
                                         fontFamily = baseFont,
-                                        lineHeight = (box.baseFontSizeSp * 1.35f).sp
+                                        lineHeight = (box.baseFontSizeSp * 1.38f).sp
                                     ),
                                     cursorBrush = SolidColor(primaryColor),
                                     modifier = Modifier
@@ -1069,8 +1146,8 @@ fun DrawingCanvasOverlay(
                                         Box(modifier = Modifier.fillMaxWidth()) {
                                             if (controller.activeTextBoxFieldValue.text.isEmpty()) {
                                                 Text(
-                                                    text = "Metin yazın...",
-                                                    color = baseTextColor.copy(alpha = 0.4f),
+                                                    text = "Notunuzu yazın...",
+                                                    color = baseTextColor.copy(alpha = 0.42f),
                                                     fontSize = baseSizeSp,
                                                     fontFamily = baseFont
                                                 )
@@ -1081,18 +1158,24 @@ fun DrawingCanvasOverlay(
                                 )
                             }
 
-                            // Bottom-right horizontal width resize handle
+                            // Bottom-right horizontal width resize pill handle
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(end = 4.dp, bottom = 3.dp),
-                                horizontalArrangement = Arrangement.End
+                                    .padding(start = 10.dp, end = 6.dp, bottom = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
+                                Text(
+                                    text = "${box.baseFontSizeSp.roundToInt()} pt",
+                                    fontSize = 9.sp,
+                                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
                                 Box(
                                     modifier = Modifier
-                                        .size(width = 22.dp, height = 10.dp)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(primaryColor.copy(alpha = 0.25f))
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(primaryColor.copy(alpha = 0.16f))
+                                        .border(0.8.dp, primaryColor.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
                                         .pointerInput(box.id, canvasW) {
                                             detectDragGestures { change, dragAmount ->
                                                 change.consume()
@@ -1103,7 +1186,16 @@ fun DrawingCanvasOverlay(
                                                 )
                                             }
                                         }
-                                )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "↔",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = primaryColor
+                                    )
+                                }
                             }
                         }
                     }
@@ -1112,21 +1204,32 @@ fun DrawingCanvasOverlay(
                         NoteRichTextHelper.parseTaggedText(box.taggedContent)
                     }
                     val boxModifier = Modifier
-                        .zIndex(if (isTextBoxToolActive) 6f else 2f)
+                        .zIndex(if (isTextBoxToolActive) 7f else 2f)
                         .offset { IntOffset(offsetX, offsetY) }
                         .width(boxWidthDp)
                         .then(
                             if (isTextBoxToolActive) {
                                 Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(surfaceColor.copy(alpha = 0.55f))
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(surfaceColor.copy(alpha = 0.72f))
                                     .border(
                                         1.dp,
-                                        primaryColor.copy(alpha = 0.45f),
-                                        RoundedCornerShape(8.dp)
+                                        primaryColor.copy(alpha = 0.48f),
+                                        RoundedCornerShape(10.dp)
                                     )
+                                    .pointerInput(box.id, canvasW, canvasH) {
+                                        detectDragGestures { change, dragAmount ->
+                                            change.consume()
+                                            val current = controller.textBoxes.firstOrNull { it.id == box.id } ?: return@detectDragGestures
+                                            controller.moveTextBox(
+                                                id = box.id,
+                                                xFraction = current.xFraction + (dragAmount.x / canvasW),
+                                                yFraction = current.yFraction + (dragAmount.y / canvasH)
+                                            )
+                                        }
+                                    }
                                     .clickable { controller.selectTextBox(box.id) }
-                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
                             } else {
                                 Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                             }
@@ -1135,7 +1238,7 @@ fun DrawingCanvasOverlay(
                     Box(modifier = boxModifier) {
                         if (parsed.text.isEmpty() && isTextBoxToolActive) {
                             Text(
-                                text = "Metin kutusu",
+                                text = "Dokun ve yaz...",
                                 color = baseTextColor.copy(alpha = 0.45f),
                                 fontSize = baseSizeSp,
                                 fontFamily = baseFont
@@ -1147,7 +1250,7 @@ fun DrawingCanvasOverlay(
                                     color = baseTextColor,
                                     fontSize = baseSizeSp,
                                     fontFamily = baseFont,
-                                    lineHeight = (box.baseFontSizeSp * 1.35f).sp
+                                    lineHeight = (box.baseFontSizeSp * 1.38f).sp
                                 )
                             )
                         }

@@ -211,10 +211,11 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Live Resources Listener (Kütüphane)
+        // Live Resources Listener (Kütüphane) — strictly capped at 100 docs for Firebase quota protection
         runCatching {
             resourcesListener = fs.collection("resources")
                 .whereEqualTo("studentId", uid)
+                .limit(100)
                 .addSnapshotListener { snapshots, error ->
                     if (error != null) {
                         Log.w("ResourceSync", "Kaynak dinleme hatası (offline): ${error.message}")
@@ -375,6 +376,34 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val pendingResourceSyncJobs = java.util.concurrent.ConcurrentHashMap<Long, kotlinx.coroutines.Job>()
+    private val pendingResourcesToSync = java.util.concurrent.ConcurrentHashMap<Long, ResourceEntity>()
+
+    private fun scheduleDebouncedResourceSync(resource: ResourceEntity) {
+        pendingResourcesToSync[resource.id] = resource
+        pendingResourceSyncJobs[resource.id]?.cancel()
+        pendingResourceSyncJobs[resource.id] = viewModelScope.launch(Dispatchers.IO) {
+            kotlinx.coroutines.delay(3_000L)
+            val latest = pendingResourcesToSync.remove(resource.id) ?: return@launch
+            pendingResourceSyncJobs.remove(resource.id)
+            if (!syncResourceToFirestore(latest)) {
+                SyncWorker.enqueueImmediateSync(getApplication())
+            }
+        }
+    }
+
+    private fun flushPendingResourceSyncs() {
+        val pending = pendingResourcesToSync.entries.toList()
+        if (pending.isEmpty()) return
+        val appCtx = getApplication<Application>()
+        pending.forEach { (id, _) ->
+            pendingResourceSyncJobs.remove(id)?.cancel()
+            pendingResourcesToSync.remove(id)
+        }
+        // Any remaining unsynced rows in Room (isSynced = false) are guaranteed to upload via SyncWorker
+        SyncWorker.enqueueImmediateSync(appCtx)
+    }
+
     fun updateResource(resource: ResourceEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             val updated = resource.copy(
@@ -382,11 +411,8 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                 lastModifiedMillis = System.currentTimeMillis()
             )
             dao?.updateResource(updated)
-            val synced = syncResourceToFirestore(updated)
+            scheduleDebouncedResourceSync(updated)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
-            if (!synced) {
-                SyncWorker.enqueueImmediateSync(getApplication())
-            }
         }
     }
 
@@ -406,9 +432,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             )
             dao?.updateResource(updated)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
-            if (!syncResourceToFirestore(updated)) {
-                SyncWorker.enqueueImmediateSync(getApplication())
-            }
+            scheduleDebouncedResourceSync(updated)
         }
     }
 
@@ -428,9 +452,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             )
             dao?.updateResource(updated)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
-            if (!syncResourceToFirestore(updated)) {
-                SyncWorker.enqueueImmediateSync(getApplication())
-            }
+            scheduleDebouncedResourceSync(updated)
         }
     }
 
@@ -447,9 +469,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
             )
             dao?.updateResource(updated)
             com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
-            if (!syncResourceToFirestore(updated)) {
-                SyncWorker.enqueueImmediateSync(getApplication())
-            }
+            scheduleDebouncedResourceSync(updated)
         }
     }
 
@@ -610,9 +630,6 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
                     runCatching {
                         db.collection("students").document(uid).set(targetData, SetOptions.merge()).await()
                     }
-                    runCatching {
-                        db.collection("users").document(uid).set(targetData, SetOptions.merge()).await()
-                    }
                 }
                 com.example.sharkmentor.core.coaching.CoachingEngine.refreshTargetAndLedgerAsync(getApplication())
                 com.example.sharkmentor.core.coaching.StudentDossierManager.syncInBackground(getApplication())
@@ -659,6 +676,7 @@ class GoalsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        flushPendingResourceSyncs()
         com.example.sharkmentor.data.sync.TopicCloudSyncManager.flushPendingInBackground(getApplication())
         authStateListener?.let { listener ->
             runCatching { GoogleServicesHelper.getFirebaseAuth(getApplication())?.removeAuthStateListener(listener) }

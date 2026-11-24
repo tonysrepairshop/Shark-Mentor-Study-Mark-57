@@ -18,6 +18,9 @@ interface NoteDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAllNotes(notes: List<NoteEntity>)
 
+    @Query("SELECT COUNT(*) FROM notes")
+    suspend fun getNoteCount(): Int
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNoteById(id: String)
 }

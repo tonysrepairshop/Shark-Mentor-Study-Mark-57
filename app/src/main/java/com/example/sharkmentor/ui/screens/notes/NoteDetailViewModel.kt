@@ -21,6 +21,7 @@ import com.example.sharkmentor.data.repository.NoteRepository
 import com.example.sharkmentor.data.repository.NoteRepositoryImpl
 import com.example.sharkmentor.ui.screens.notes.drawing.DrawingSerializer
 import com.example.sharkmentor.ui.screens.notes.drawing.DrawingStroke
+import com.example.sharkmentor.ui.screens.notes.drawing.DrawingTextBox
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -427,6 +428,50 @@ KESİN DAVRANIŞ KURALLARI:
         }
     }
 
+    fun saveNotePageTextBoxesImmediately(
+        context: Context,
+        targetNoteId: String,
+        pageIndex: Int,
+        textBoxes: List<DrawingTextBox>
+    ) {
+        if (targetNoteId.isBlank()) return
+        val appCtx = context.applicationContext
+        val snapshot = textBoxes.toList()
+        persistenceScope.launch {
+            runCatching {
+                DrawingSerializer.saveNotePageTextBoxes(appCtx, targetNoteId, pageIndex, snapshot)
+            }.onFailure { e ->
+                Log.e("NoteDetailVM", "saveNotePageTextBoxesImmediately failed for $targetNoteId p$pageIndex", e)
+            }
+        }
+    }
+
+    fun saveNotePageAnnotationsImmediately(
+        context: Context,
+        targetNoteId: String,
+        pageIndex: Int,
+        strokes: List<DrawingStroke>,
+        textBoxes: List<DrawingTextBox>
+    ) {
+        if (targetNoteId.isBlank()) return
+        val appCtx = context.applicationContext
+        val strokeSnapshot = strokes.toList()
+        val boxSnapshot = textBoxes.toList()
+        persistenceScope.launch {
+            runCatching {
+                DrawingSerializer.saveNotePageAnnotations(
+                    appCtx,
+                    targetNoteId,
+                    pageIndex,
+                    strokeSnapshot,
+                    boxSnapshot
+                )
+            }.onFailure { e ->
+                Log.e("NoteDetailVM", "saveNotePageAnnotationsImmediately failed for $targetNoteId p$pageIndex", e)
+            }
+        }
+    }
+
     fun analyzeNoteWithAi(
         query: String,
         scope: DocumentAiScope = DocumentAiScope.CURRENT_PAGE,
@@ -732,6 +777,7 @@ KESİN DAVRANIŞ KURALLARI:
 
     override fun onCleared() {
         aiAnalysisJob?.cancel()
+        appContext?.let { NoteRepositoryImpl.flushPendingCloudWrites(it) }
         super.onCleared()
     }
 

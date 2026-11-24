@@ -227,6 +227,7 @@ object DrawingSerializer {
         return loadNotePageDrawing(context, noteId, pageIndex = 0)
     }
 
+    @Synchronized
     fun saveNotePageAnnotations(
         context: Context,
         noteId: String,
@@ -248,6 +249,7 @@ object DrawingSerializer {
         }
     }
 
+    @Synchronized
     fun loadNotePageAnnotations(
         context: Context,
         noteId: String,
@@ -264,6 +266,7 @@ object DrawingSerializer {
         }
     }
 
+    @Synchronized
     fun saveNotePageDrawing(
         context: Context,
         noteId: String,
@@ -275,6 +278,7 @@ object DrawingSerializer {
         saveNotePageAnnotations(context, noteId, pageIndex, strokes, existingBoxes)
     }
 
+    @Synchronized
     fun saveNotePageTextBoxes(
         context: Context,
         noteId: String,

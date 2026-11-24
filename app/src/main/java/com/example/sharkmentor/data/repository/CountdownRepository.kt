@@ -400,7 +400,8 @@ class CountdownRepository private constructor(context: Context) {
             return
         }
 
-        val (studentPayload, userPayload, configPayload) = buildCloudPayloads(state)
+        // Single canonical write to students/{uid} (cuts countdown Firestore writes by 67%)
+        val (studentPayload, _, _) = buildCloudPayloads(state)
         db.collection("students").document(uid)
             .set(studentPayload, SetOptions.merge())
             .addOnSuccessListener {
@@ -414,30 +415,15 @@ class CountdownRepository private constructor(context: Context) {
                 Log.w(TAG, "Immediate countdown push failed (will retry via SyncWorker): ${e.message}")
                 SyncWorker.enqueueImmediateSync(appContext)
             }
-
-        runCatching {
-            db.collection("users").document(uid).set(userPayload, SetOptions.merge())
-        }
-        runCatching {
-            db.document("users/$uid/countdown_settings/config").set(configPayload, SetOptions.merge())
-        }
     }
 
     private suspend fun pushStateToCloudSuspend(uid: String, state: ExamCountdownState): Boolean {
         val db = GoogleServicesHelper.getFirebaseFirestore(appContext) ?: return false
-        val (studentPayload, userPayload, configPayload) = buildCloudPayloads(state)
+        val (studentPayload, _, _) = buildCloudPayloads(state)
         return try {
             db.collection("students").document(uid)
                 .set(studentPayload, SetOptions.merge())
                 .await()
-            runCatching {
-                db.collection("users").document(uid).set(userPayload, SetOptions.merge()).await()
-            }
-            runCatching {
-                db.document("users/$uid/countdown_settings/config")
-                    .set(configPayload, SetOptions.merge())
-                    .await()
-            }
             true
         } catch (e: Exception) {
             Log.w(TAG, "Suspended countdown push failed: ${e.message}")

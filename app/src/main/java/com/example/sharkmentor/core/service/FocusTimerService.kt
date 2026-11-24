@@ -315,6 +315,28 @@ class FocusTimerService : Service() {
     // ── Timer control handlers ───────────────────────────────────────────────
 
     private fun handleStart(mode: TimerMode, intentPomodoro: Int?, intentBreak: Int?, subject: String = "Genel") {
+        val previousState = _timerStateFlow.value
+        // Prevent mode-switch timer collisions: cancel any running jobs & finalize active focus session cleanly
+        tickerJob?.cancel()
+        tickerJob = null
+        watchdogJob?.cancel()
+        watchdogJob = null
+        afkJob?.cancel()
+        afkJob = null
+        if (previousState.timerPhase != TimerPhase.IDLE && previousState.currentMode != TimerMode.BREAK) {
+            val prevElapsed = computeAccurateElapsedMillis(previousState)
+            if (prevElapsed >= 60_000L) {
+                FocusSessionRecorder.finalizeSession(
+                    context = applicationContext,
+                    elapsedMillis = prevElapsed,
+                    modeName = previousState.currentMode.displayName,
+                    subjectName = activeSubjectName,
+                    phoneLiftCount = previousState.phoneLiftCount,
+                    screenOnMillis = currentScreenOnMillis()
+                )
+            }
+        }
+
         val resolvedSubject = subject.trim().takeIf { it.isNotBlank() && it != "Genel" }
             ?: runCatching {
                 com.example.sharkmentor.core.coaching.CoachingEngine.ensureInitialized(applicationContext)
@@ -331,7 +353,7 @@ class FocusTimerService : Service() {
             activeSessionUuid = null
         }
         updatePresenceInFirestore(mode != TimerMode.BREAK, activeSubjectName)
-        val current = _timerStateFlow.value
+        val current = previousState
 
         totalScreenOnMillis = 0L
         lastScreenOnTimestamp = if (getSystemService(PowerManager::class.java).isInteractive)

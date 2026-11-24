@@ -74,6 +74,7 @@ class ProfileViewModel @JvmOverloads constructor(
         val registration = runCatching {
             db.collection("meetings")
                 .whereEqualTo("studentId", uid)
+                .limit(30)
                 .addSnapshotListener { snap, error ->
                     if (error != null) {
                         trySend(emptyList())

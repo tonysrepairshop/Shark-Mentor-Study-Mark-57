@@ -828,8 +828,8 @@ class DrawingController(
         if (tool != DrawingTool.LASSO) {
             clearSelection()
         }
-        if (tool != DrawingTool.TEXT_BOX) {
-            activeTextBoxId = null
+        if (tool != DrawingTool.TEXT_BOX && activeTextBoxId != null) {
+            closeActiveTextBox()
         }
         when {
             tool.isPenTool -> {
@@ -885,7 +885,7 @@ class DrawingController(
         }
     }
 
-    // ── Text Box Operations (Rich-Text Parity with Notes) ────────────────────
+    // ── Text Box Operations (GoodNotes-style safe commit, never loses text on close) ──
 
     fun setInitialTextBoxes(loaded: List<DrawingTextBox>) {
         textBoxes = loaded
@@ -895,10 +895,54 @@ class DrawingController(
         }
     }
 
+    /**
+     * Safely commits the active text box and closes editing mode.
+     * - If the text box contains ANY non-blank text, it is ALWAYS saved and preserved on the page.
+     * - Only truly empty placeholder boxes (created accidentally with zero text) are pruned cleanly.
+     */
+    fun closeActiveTextBox() {
+        val closingId = activeTextBoxId ?: return
+        val currentField = activeTextBoxFieldValue
+        val plainText = currentField.text.trim()
+        activeTextBoxId = null
+        activeTextBoxFieldValue = TextFieldValue("")
+
+        if (plainText.isEmpty()) {
+            // Prune blank placeholder only; never touch non-empty boxes
+            val existing = textBoxes.firstOrNull { it.id == closingId }
+            val existingPlain = existing?.let { NoteRichTextHelper.parseTaggedText(it.taggedContent).text.trim() }.orEmpty()
+            if (existing != null && existingPlain.isEmpty()) {
+                val pruned = textBoxes.filterNot { it.id == closingId }
+                textBoxes = pruned
+                onTextBoxesChanged(pruned)
+            }
+            return
+        }
+
+        val tagged = NoteRichTextHelper.toTaggedString(currentField.annotatedString)
+        val updated = textBoxes.map { box ->
+            if (box.id == closingId) {
+                box.copy(
+                    taggedContent = tagged,
+                    baseFontName = textBoxFontOption.name,
+                    baseFontSizeSp = textBoxFontSizeSp,
+                    baseTextColorArgb = textBoxTextColor?.toArgb() ?: box.baseTextColorArgb
+                )
+            } else {
+                box
+            }
+        }
+        textBoxes = updated
+        onTextBoxesChanged(updated)
+    }
+
     fun selectTextBox(id: String?) {
         if (id == null) {
-            activeTextBoxId = null
+            closeActiveTextBox()
             return
+        }
+        if (activeTextBoxId != null && activeTextBoxId != id) {
+            closeActiveTextBox()
         }
         val target = textBoxes.firstOrNull { it.id == id } ?: return
         activeTextBoxId = target.id
@@ -926,13 +970,18 @@ class DrawingController(
     fun addTextBox(
         xFraction: Float = 0.14f,
         yFraction: Float = 0.18f,
-        widthFraction: Float = 0.56f,
+        widthFraction: Float = 0.62f,
         defaultColorArgb: Int? = null
     ): DrawingTextBox {
+        if (activeTextBoxId != null) {
+            closeActiveTextBox()
+        }
+        val clampedWidth = widthFraction.coerceIn(0.24f, 0.92f)
+        val maxX = (0.96f - clampedWidth).coerceAtLeast(0.02f)
         val box = DrawingTextBox(
-            xFraction = xFraction.coerceIn(0.02f, 0.72f),
+            xFraction = xFraction.coerceIn(0.02f, maxX),
             yFraction = yFraction.coerceIn(0.02f, 0.84f),
-            widthFraction = widthFraction.coerceIn(0.24f, 0.92f),
+            widthFraction = clampedWidth,
             taggedContent = "",
             baseFontName = textBoxFontOption.name,
             baseFontSizeSp = textBoxFontSizeSp,
@@ -1021,12 +1070,19 @@ class DrawingController(
         val id = activeTextBoxId ?: return
         if (!activeTextBoxFieldValue.selection.collapsed && color != null) {
             commitActiveTextBoxValue(NoteRichTextHelper.applyColorToSelection(activeTextBoxFieldValue, color))
-        } else if (activeTextBoxFieldValue.text.isEmpty()) {
+        } else {
+            // Update whole box base color (and full text when collapsed) for immediate GoodNotes-style feedback
             val updated = textBoxes.map { box ->
                 if (box.id == id) box.copy(baseTextColorArgb = color?.toArgb()) else box
             }
             textBoxes = updated
-            onTextBoxesChanged(updated)
+            if (color != null && activeTextBoxFieldValue.text.isNotEmpty()) {
+                val fullSel = activeTextBoxFieldValue.copy(selection = TextRange(0, activeTextBoxFieldValue.text.length))
+                val colored = NoteRichTextHelper.applyColorToSelection(fullSel, color)
+                commitActiveTextBoxValue(colored.copy(selection = activeTextBoxFieldValue.selection))
+            } else {
+                onTextBoxesChanged(updated)
+            }
         }
     }
 
@@ -1043,12 +1099,18 @@ class DrawingController(
         val id = activeTextBoxId ?: return
         if (!activeTextBoxFieldValue.selection.collapsed) {
             commitActiveTextBoxValue(NoteRichTextHelper.applyFontFamilyToSelection(activeTextBoxFieldValue, font))
-        } else if (activeTextBoxFieldValue.text.isEmpty()) {
+        } else {
             val updated = textBoxes.map { box ->
                 if (box.id == id) box.copy(baseFontName = font.name) else box
             }
             textBoxes = updated
-            onTextBoxesChanged(updated)
+            if (activeTextBoxFieldValue.text.isNotEmpty()) {
+                val fullSel = activeTextBoxFieldValue.copy(selection = TextRange(0, activeTextBoxFieldValue.text.length))
+                val styled = NoteRichTextHelper.applyFontFamilyToSelection(fullSel, font)
+                commitActiveTextBoxValue(styled.copy(selection = activeTextBoxFieldValue.selection))
+            } else {
+                onTextBoxesChanged(updated)
+            }
         }
     }
 
@@ -1058,13 +1120,23 @@ class DrawingController(
         val id = activeTextBoxId ?: return
         if (!activeTextBoxFieldValue.selection.collapsed) {
             commitActiveTextBoxValue(NoteRichTextHelper.applyFontSizeToSelection(activeTextBoxFieldValue, clamped))
-        } else if (activeTextBoxFieldValue.text.isEmpty()) {
+        } else {
             val updated = textBoxes.map { box ->
                 if (box.id == id) box.copy(baseFontSizeSp = clamped) else box
             }
             textBoxes = updated
-            onTextBoxesChanged(updated)
+            if (activeTextBoxFieldValue.text.isNotEmpty()) {
+                val fullSel = activeTextBoxFieldValue.copy(selection = TextRange(0, activeTextBoxFieldValue.text.length))
+                val resized = NoteRichTextHelper.applyFontSizeToSelection(fullSel, clamped)
+                commitActiveTextBoxValue(resized.copy(selection = activeTextBoxFieldValue.selection))
+            } else {
+                onTextBoxesChanged(updated)
+            }
         }
+    }
+
+    fun stepTextBoxFontSize(deltaSp: Float) {
+        applyTextBoxFontSize(textBoxFontSizeSp + deltaSp)
     }
 
     fun toggleTextBoxListPrefix(prefix: String) {

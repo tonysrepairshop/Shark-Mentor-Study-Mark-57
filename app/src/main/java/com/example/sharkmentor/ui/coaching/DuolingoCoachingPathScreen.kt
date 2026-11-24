@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Pause
@@ -54,6 +55,7 @@ import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -86,8 +88,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -722,16 +726,21 @@ fun FocusTopicLaunchDialog(
     onAddCustomTitle: (String) -> Unit,
     onRemoveCustomTitle: (String) -> Unit,
     onConfirmStart: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    allowModeSelection: Boolean = false,
+    onSelectMode: (TimerMode) -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val selectableModes = remember {
+        listOf(TimerMode.STOPWATCH, TimerMode.BLOCK_90, TimerMode.POMODORO)
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = colorScheme.surface,
         title = {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = "Çalışma Başlığı Seç",
+                    text = if (allowModeSelection) "Odak Modu & Etiket Seç" else "Çalışma Başlığı Seç",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface
@@ -744,16 +753,54 @@ fun FocusTopicLaunchDialog(
             }
         },
         text = {
-            FocusTopicSelectorCard(
-                availableTitles = availableTitles,
-                customTitles = customTitles,
-                selectedTitle = selectedTitle,
-                subNote = subNote,
-                onSelectTitle = onSelectTitle,
-                onSubNoteChange = onSubNoteChange,
-                onAddCustomTitle = onAddCustomTitle,
-                onRemoveCustomTitle = onRemoveCustomTitle
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (allowModeSelection) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        selectableModes.forEach { candidate ->
+                            val isChosen = candidate == mode
+                            val shortLabel = when (candidate) {
+                                TimerMode.STOPWATCH -> "Kronometre"
+                                TimerMode.BLOCK_90 -> "90 dk"
+                                TimerMode.POMODORO -> "Pomodoro"
+                                else -> candidate.displayName
+                            }
+                            Surface(
+                                onClick = { onSelectMode(candidate) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isChosen) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                border = BorderStroke(
+                                    width = if (isChosen) 1.4.dp else 1.dp,
+                                    color = if (isChosen) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Text(
+                                    text = shortLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isChosen) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                    color = if (isChosen) colorScheme.onPrimary else colorScheme.onSurface,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                FocusTopicSelectorCard(
+                    availableTitles = availableTitles,
+                    customTitles = customTitles,
+                    selectedTitle = selectedTitle,
+                    subNote = subNote,
+                    onSelectTitle = onSelectTitle,
+                    onSubNoteChange = onSubNoteChange,
+                    onAddCustomTitle = onAddCustomTitle,
+                    onRemoveCustomTitle = onRemoveCustomTitle
+                )
+            }
         },
         confirmButton = {
             Button(
@@ -1348,8 +1395,31 @@ private fun StudentDossierEditorDialog(
 }
 
 /**
- * Full-Screen Duolingo-Style Guided Daily Path & Comprehensive Support Cockpit
- * rendered when [AppStudyMode.REAL_COACHING] ("Koçluk Yolu") is active.
+ * Pure JVM-testable helper returning the other 6 ISO days (1=Mon..7=Sun) excluding [todayIso],
+ * ordered chronologically starting from tomorrow and wrapping around the week.
+ */
+fun buildOtherPreviewDayOrder(todayIso: Int): List<Int> {
+    val safeToday = todayIso.coerceIn(1, 7)
+    return (1..6).map { offset -> ((safeToday - 1 + offset) % 7) + 1 }
+}
+
+/**
+ * Pure JVM-testable horizontal bias in [-1f, 1f] for Duolingo winding S-curve map nodes.
+ * Produces a smooth organic wave: center -> left -> center -> right -> center.
+ */
+fun computeMapNodeHorizontalBias(index: Int): Float = when (index % 4) {
+    1 -> -0.58f
+    3 -> 0.58f
+    else -> 0f
+}
+
+/**
+ * Full-Screen Duolingo-Style Today-Only Interactive Winding Map rendered when
+ * [AppStudyMode.REAL_COACHING] ("Koçluk Yolu") is active.
+ *
+ * - Displays ONLY TODAY's milestones across the entire viewport as an immersive winding map.
+ * - Other days of the week are strictly read-only previews via [OtherDaysPreviewDialog]
+ *   (full weekly editing/detail remains in the Planlar tab).
  */
 @Composable
 fun DuolingoCoachingPathView(
@@ -1366,6 +1436,7 @@ fun DuolingoCoachingPathView(
     onResumeFocus: () -> Unit,
     onStopFocus: () -> Unit,
     onNavigateToSharkAi: () -> Unit = {},
+    onNavigateToPlans: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1492,10 +1563,11 @@ fun DuolingoCoachingPathView(
         return
     }
 
+    // Main map is ALWAYS locked strictly to TODAY (no day-by-day split tabs!)
     val todayIso = remember {
         CoachingEngine.calendarDayToIso(Calendar.getInstance().get(Calendar.DAY_OF_WEEK))
     }
-    var selectedDayIso by remember { mutableIntStateOf(todayIso) }
+    val otherPreviewDays = remember(todayIso) { buildOtherPreviewDayOrder(todayIso) }
 
     // Observe active plan folder & tasks + library resources + topic mastery goals
     val activeFolders by db.planDao().getAllActiveFolders().collectAsStateWithLifecycle(initialValue = emptyList())
@@ -1526,6 +1598,7 @@ fun DuolingoCoachingPathView(
     var showPlanReadinessDialog by remember { mutableStateOf(false) }
     var isSundayCheckInPrompt by remember { mutableStateOf(false) }
     var showSundayBanner by remember { mutableStateOf(PlanReadinessNavBus.shouldShowSundayBanner(context)) }
+    var showOtherDaysPreview by remember { mutableStateOf(false) }
 
     val triggerRebalanceNow: () -> Unit = {
         if (!isRebalancingWeek) {
@@ -1565,32 +1638,52 @@ fun DuolingoCoachingPathView(
             }
     }
 
-    // Build daily Duolingo path nodes (shows Video step ONLY for verified video-enabled concept books)
-    val dayTasks = remember(allFolderTasks, selectedDayIso) {
-        allFolderTasks.filter { it.dayOfWeek == selectedDayIso }
+    // Build TODAY-ONLY interactive map nodes
+    val todayTasks = remember(allFolderTasks, todayIso) {
+        allFolderTasks.filter { it.dayOfWeek == todayIso }
     }
 
-    val pathNodes = remember(
-        dayTasks,
+    val todayNodes = remember(
+        todayTasks,
         libraryResources,
         bookAssignments,
         coachLedger,
         topicGoals,
         campBindings,
-        selectedDayIso,
+        todayIso,
         completedNodeIds,
         targetContext
     ) {
         buildDuolingoDayNodes(
             context = context,
-            dayIso = selectedDayIso,
-            dayTasks = dayTasks,
+            dayIso = todayIso,
+            dayTasks = todayTasks,
             libraryResources = libraryResources,
             bookAssignments = bookAssignments,
             coachLedger = coachLedger,
             topicGoals = topicGoals,
             targetContext = targetContext,
             completedNodeIds = completedNodeIds
+        )
+    }
+
+    // Read-Only Other Days Preview Dialog (strictly preview — detailed management lives in Planlar)
+    if (showOtherDaysPreview) {
+        OtherDaysPreviewDialog(
+            todayIso = todayIso,
+            otherDayIsos = otherPreviewDays,
+            allFolderTasks = allFolderTasks,
+            libraryResources = libraryResources,
+            bookAssignments = bookAssignments,
+            coachLedger = coachLedger,
+            topicGoals = topicGoals,
+            targetContext = targetContext,
+            completedNodeIds = completedNodeIds,
+            onOpenPlansTab = {
+                showOtherDaysPreview = false
+                onNavigateToPlans()
+            },
+            onDismiss = { showOtherDaysPreview = false }
         )
     }
 
@@ -1743,533 +1836,153 @@ fun DuolingoCoachingPathView(
         )
     }
 
+    val completedCount = todayNodes.count { it.isCompleted }
+    val totalNodes = todayNodes.size.coerceAtLeast(1)
+    val pathProgressFraction by animateFloatAsState(
+        targetValue = completedCount.toFloat() / totalNodes.toFloat(),
+        label = "coaching_today_map_progress"
+    )
+    val firstIncompleteIndex = todayNodes.indexOfFirst { !it.isCompleted }.let {
+        if (it == -1) todayNodes.lastIndex else it
+    }
+    val isMonochromeTheme =
+        colorScheme.primary.red == colorScheme.primary.green &&
+            colorScheme.primary.green == colorScheme.primary.blue &&
+            colorScheme.secondary.red == colorScheme.secondary.green
+    val completedAccent = if (isMonochromeTheme) colorScheme.primary else Color(0xFF10B981)
+    val allDone = todayNodes.isNotEmpty() && completedCount == todayNodes.size
+
+    val mapBackdropBrush = Brush.verticalGradient(
+        colors = listOf(
+            colorScheme.primaryContainer.copy(alpha = 0.16f),
+            colorScheme.background,
+            colorScheme.tertiaryContainer.copy(alpha = 0.12f),
+            colorScheme.background
+        )
+    )
+
     Column(
         modifier = modifier
-            .widthIn(max = 680.dp)
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .background(mapBackdropBrush),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Mode Switcher
-        StudyModeHeaderSwitcher(
-            currentMode = AppStudyMode.REAL_COACHING,
-            onModeChange = onSwitchMode
-        )
-
-        // 1a. Official Calendar Sunday Check-In Prompt Banner (if today is Sunday & not yet updated)
-        if (showSundayBanner) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.primaryContainer.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Pazar Günü Haftalık Kontrol",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
-                        IconButton(
-                            onClick = {
-                                PlanReadinessNavBus.dismissSundayBannerToday(context)
-                                showSundayBanner = false
-                            },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Kapat",
-                                tint = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    Text(
-                        text = "Haftanın son günü Pazar. Yeni haftanın esnek planı eksik görevlerini devredip güncel seviyene tam uyum sağlasın diye konu hakimiyetini ve kitaplarını güncelle.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colorScheme.onSurface
-                    )
-                    Button(
-                        onClick = {
-                            isSundayCheckInPrompt = true
-                            showPlanReadinessDialog = true
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        contentPadding = PaddingValues(vertical = 8.dp)
-                    ) {
-                        Text("Konu & Kitapları Güncelle", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        // 1b. Adaptive Efficiency Suggestion (when high-hour target + missed tasks occur; respects student veto!)
-        efficiencySuggestion?.let { suggestion ->
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
-                border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Verimlilik Önerisi",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.secondary
-                    )
-                    Text(
-                        text = suggestion.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colorScheme.onSurface
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                StudentDossierManager.recordEfficiencyDecision(
-                                    context = context,
-                                    acceptedLowerHours = true,
-                                    newWeekdayMins = suggestion.recommendedWeekdayMinutes,
-                                    newWeekendMins = suggestion.recommendedWeekendMinutes
-                                )
-                                Toast.makeText(context, "8-9 saat verimlilik denemesi aktif", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("8-9 Saati Dene", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                        OutlinedButton(
-                            onClick = {
-                                StudentDossierManager.recordEfficiencyDecision(
-                                    context = context,
-                                    acceptedLowerHours = false
-                                )
-                                Toast.makeText(context, "Mevcut yüksek hedefin korunacak", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.weight(1f),
-                            contentPadding = PaddingValues(vertical = 8.dp)
-                        ) {
-                            Text("Mevcut Hedefim Kalsın", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Macro Target Compass Banner ("Ana Pusula")
-        val compassBrush = Brush.horizontalGradient(
-            colors = listOf(
-                colorScheme.primaryContainer.copy(alpha = 0.78f),
-                colorScheme.tertiaryContainer.copy(alpha = 0.50f),
-                colorScheme.surfaceVariant.copy(alpha = 0.55f)
-            )
-        )
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = Color.Transparent,
-            border = BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.48f)),
+        // ── 1. Compact Floating Top Bar (Mode Switcher + Today HUD) ──
+        Column(
             modifier = Modifier
+                .widthIn(max = 680.dp)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(18.dp))
-                .background(compassBrush)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(11.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = colorScheme.primary,
-                        shadowElevation = 2.dp,
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = Icons.Default.Explore,
-                                contentDescription = null,
-                                tint = colorScheme.onPrimary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Ana Hedef Pusulası",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.primary,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = targetContext.compassHeadline(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                if (targetContext.examType.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = colorScheme.primary.copy(alpha = 0.16f),
-                        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
-                    ) {
-                        Text(
-                            text = targetContext.examType,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-            }
-        }
+            StudyModeHeaderSwitcher(
+                currentMode = AppStudyMode.REAL_COACHING,
+                onModeChange = onSwitchMode
+            )
 
-        // 3. Live Active Focus Cockpit (when timer is actively running or paused)
-        AnimatedVisibility(
-            visible = timerState.timerPhase != TimerPhase.IDLE,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
+            // Sleek Single-Row Today Mission HUD (keeps 80%+ of screen pure winding map!)
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surface,
-                border = BorderStroke(1.5.dp, colorScheme.primary),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        val cleanCockpitSubj = CoachingEngine.formatCleanLeagueSubject(
-                            timerState.activeSubject.ifBlank { CoachingEngine.buildFormattedFocusSubject() }
-                        ).ifBlank { "Odak" }
-                        Text(
-                            text = "Masada • $cleanCockpitSubj",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = FocusTimerService.formatMillis(timerState.displayMillis),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = colorScheme.onSurface
-                        )
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val isPaused = timerState.timerPhase == TimerPhase.PAUSED
-                        FilledTonalIconButtonSmall(
-                            icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                            tint = colorScheme.primary,
-                            onClick = { if (isPaused) onResumeFocus() else onPauseFocus() }
-                        )
-                        FilledTonalIconButtonSmall(
-                            icon = Icons.Default.Stop,
-                            tint = colorScheme.error,
-                            onClick = onStopFocus
-                        )
-                    }
-                }
-            }
-        }
-
-        // 4. Daily Study Goal & Live Variance (-/+) Card
-        DailyGoalProgressCard(
-            goalStatus = goalStatus,
-            useAiGoal = useAiGoal,
-            onEditGoalClick = onEditDailyGoal
-        )
-
-        // 5. Adaptive AI Coach Weekly Variance Card ("Çarşamba az çalıştın, Perşembe çok...")
-        if (weeklyAdvice != null || recentLedger.isNotEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                shape = RoundedCornerShape(18.dp),
+                color = colorScheme.surface.copy(alpha = 0.94f),
+                border = BorderStroke(
+                    1.2.dp,
+                    if (allDone) completedAccent.copy(alpha = 0.5f) else colorScheme.primary.copy(alpha = 0.3f)
+                ),
+                shadowElevation = 2.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Bugün • ${CoachingEngine.isoDayLabelTr(todayIso)}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (allDone) completedAccent.copy(alpha = 0.18f) else colorScheme.primary.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = "$completedCount/${todayNodes.size}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = if (allDone) completedAccent else colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "${goalStatus.formattedWorked()} / ${goalStatus.formattedTarget()}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.clickable { onEditDailyGoal() }
+                                )
+                                if (targetContext.examType.isNotBlank()) {
+                                    Text(
+                                        text = "• ${targetContext.examType}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.TrendingUp,
-                                contentDescription = null,
-                                tint = colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = "AI Koç Tempo & Sapma Analizi",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface
-                            )
-                        }
-
-                        Surface(
-                            onClick = {
-                                if (isRebalancingWeek) return@Surface
-                                isSundayCheckInPrompt = false
-                                showPlanReadinessDialog = true
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = colorScheme.primary.copy(alpha = 0.14f),
-                            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.4f))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            // Read-only Preview Other Days button
+                            Surface(
+                                onClick = { showOtherDaysPreview = true },
+                                shape = RoundedCornerShape(10.dp),
+                                color = colorScheme.secondaryContainer.copy(alpha = 0.75f),
+                                border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.35f))
                             ) {
-                                if (isRebalancingWeek) {
-                                    CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.8.dp)
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoFixHigh,
-                                        contentDescription = null,
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                }
-                                Text(
-                                    text = "Programı Kurgula",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-
-                    // 7-day mini bar strip
-                    if (recentLedger.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            recentLedger.forEach { entry ->
-                                val ratio = (entry.workedMinutes.toFloat() / entry.targetMinutes.coerceAtLeast(1).toFloat())
-                                    .coerceIn(0.08f, 1.25f)
-                                val barColor = when {
-                                    entry.deltaMinutes >= 0 -> colorScheme.primary
-                                    entry.workedMinutes > 0 -> colorScheme.secondary
-                                    else -> colorScheme.outlineVariant
-                                }
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Text(
-                                        text = if (entry.workedMinutes > 0) "${entry.workedMinutes / 60}s" else "-",
-                                        fontSize = 9.sp,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth(0.62f)
-                                            .height((34f * (ratio / 1.25f)).coerceAtLeast(4f).dp)
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(barColor)
+                                    Icon(
+                                        imageVector = Icons.Default.Visibility,
+                                        contentDescription = "Diğer Günleri Önizle",
+                                        tint = colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(14.dp)
                                     )
                                     Text(
-                                        text = entry.dayLabelTr.take(3),
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorScheme.onSurface
+                                        text = "Önizle",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSecondaryContainer
                                     )
                                 }
                             }
-                        }
-                    }
 
-                    if (weeklyAdvice != null) {
-                        Text(
-                            text = weeklyAdvice.conciseMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-
-        // 5b. Book coaching roles & priorities are managed in the Books tab & Shark AI (removed single-book Home hijack)
-
-        // 6. 7-Day Selector Strip for Duolingo Path
-        val shortDays = listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz")
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
-        ) {
-            shortDays.forEachIndexed { idx, label ->
-                val dayNum = idx + 1
-                val isSelected = selectedDayIso == dayNum
-                val isToday = todayIso == dayNum
-                Surface(
-                    onClick = { selectedDayIso = dayNum },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    color = when {
-                        isSelected -> colorScheme.primary
-                        isToday -> colorScheme.primaryContainer.copy(alpha = 0.55f)
-                        else -> colorScheme.surfaceVariant.copy(alpha = 0.45f)
-                    },
-                    border = BorderStroke(
-                        width = if (isSelected || isToday) 1.3.dp else 1.dp,
-                        color = when {
-                            isSelected -> colorScheme.primary
-                            isToday -> colorScheme.primary.copy(alpha = 0.6f)
-                            else -> colorScheme.outlineVariant.copy(alpha = 0.35f)
-                        }
-                    ),
-                    shadowElevation = if (isSelected) 2.dp else 0.dp
-                ) {
-                    Column(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Medium,
-                            color = when {
-                                isSelected -> colorScheme.onPrimary
-                                isToday -> colorScheme.primary
-                                else -> colorScheme.onSurface
-                            }
-                        )
-                        Box(
-                            modifier = Modifier
-                                .size(if (isToday) 5.dp else 4.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when {
-                                        isSelected -> colorScheme.onPrimary
-                                        isToday -> colorScheme.primary
-                                        else -> Color.Transparent
-                                    }
-                                )
-                        )
-                    }
-                }
-            }
-        }
-
-        // 7. Duolingo-Style Winding Daily Node Path
-        val completedCount = pathNodes.count { it.isCompleted }
-        val totalNodes = pathNodes.size.coerceAtLeast(1)
-        val pathProgressFraction by animateFloatAsState(
-            targetValue = completedCount.toFloat() / totalNodes.toFloat(),
-            label = "coaching_path_progress"
-        )
-        val firstIncompleteIndex = pathNodes.indexOfFirst { !it.isCompleted }.let {
-            if (it == -1) pathNodes.lastIndex else it
-        }
-        val isMonochromeTheme =
-            colorScheme.primary.red == colorScheme.primary.green &&
-                colorScheme.primary.green == colorScheme.primary.blue &&
-                colorScheme.secondary.red == colorScheme.secondary.green
-        val completedAccent = if (isMonochromeTheme) colorScheme.primary else Color(0xFF10B981)
-        val allDone = pathNodes.isNotEmpty() && completedCount == pathNodes.size
-        val hasVerifiedVideoStep = pathNodes.any { it.kind == DuolingoNodeKind.VIDEO_CAMP }
-
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = colorScheme.surface,
-            border = BorderStroke(
-                1.2.dp,
-                if (allDone) completedAccent.copy(alpha = 0.55f) else colorScheme.primary.copy(alpha = 0.25f)
-            ),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${CoachingEngine.isoDayLabelTr(selectedDayIso)} Yol Haritası",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = colorScheme.onSurface
-                        )
-                        Text(
-                            text = if (hasVerifiedVideoStep) {
-                                "Konu & Video • Soru Pekiştirme • 1-3-7 Tekrar"
-                            } else {
-                                "Soru & Odak • 1-3-7 Tekrar • Mini Kontrol"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (weeklyAdvice == null && recentLedger.isEmpty()) {
+                            // Rebalance / Plan Kurgula button
                             Surface(
                                 onClick = {
                                     if (!isRebalancingWeek) {
@@ -2277,121 +1990,725 @@ fun DuolingoCoachingPathView(
                                         showPlanReadinessDialog = true
                                     }
                                 },
-                                shape = RoundedCornerShape(50),
+                                shape = RoundedCornerShape(10.dp),
                                 color = colorScheme.primary.copy(alpha = 0.14f),
                                 border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f))
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                Box(
+                                    modifier = Modifier.padding(7.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.AutoFixHigh,
-                                        contentDescription = "Planı Kurgula",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Text(
-                                        text = "Kurgula",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.primary
-                                    )
+                                    if (isRebalancingWeek) {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.8.dp)
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.AutoFixHigh,
+                                            contentDescription = "Programı Kurgula",
+                                            tint = colorScheme.primary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = if (allDone) completedAccent.copy(alpha = 0.16f) else colorScheme.primary.copy(alpha = 0.15f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (allDone) completedAccent.copy(alpha = 0.45f) else colorScheme.primary.copy(alpha = 0.35f)
-                            )
-                        ) {
+                    }
+
+                    LinearProgressIndicator(
+                        progress = { pathProgressFraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(CircleShape),
+                        color = if (allDone) completedAccent else colorScheme.primary,
+                        trackColor = colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Live Focus Cockpit appears ONLY while timer is actively running/paused
+            AnimatedVisibility(
+                visible = timerState.timerPhase != TimerPhase.IDLE,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = colorScheme.surface,
+                    border = BorderStroke(1.4.dp, colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            val cleanCockpitSubj = CoachingEngine.formatCleanLeagueSubject(
+                                timerState.activeSubject.ifBlank { CoachingEngine.buildFormattedFocusSubject() }
+                            ).ifBlank { "Odak" }
                             Text(
-                                text = "$completedCount / ${pathNodes.size} Adım",
+                                text = "Masada • $cleanCockpitSubj",
                                 style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = FocusTimerService.formatMillis(timerState.displayMillis),
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = if (allDone) completedAccent else colorScheme.primary,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                color = colorScheme.onSurface
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            val isPaused = timerState.timerPhase == TimerPhase.PAUSED
+                            FilledTonalIconButtonSmall(
+                                icon = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                tint = colorScheme.primary,
+                                onClick = { if (isPaused) onResumeFocus() else onPauseFocus() }
+                            )
+                            FilledTonalIconButtonSmall(
+                                icon = Icons.Default.Stop,
+                                tint = colorScheme.error,
+                                onClick = onStopFocus
                             )
                         }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                LinearProgressIndicator(
-                    progress = { pathProgressFraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(7.dp)
-                        .clip(CircleShape),
-                    color = if (allDone) completedAccent else colorScheme.primary,
-                    trackColor = colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                pathNodes.forEachIndexed { idx, node ->
-                    val isCurrentActive = idx == firstIncompleteIndex && !node.isCompleted
-                    val horizShiftDp = when (idx % 4) {
-                        1 -> (-12).dp
-                        3 -> 12.dp
-                        else -> 0.dp
-                    }
-
-                    DuolingoPathNodeCard(
-                        node = node,
-                        isCurrentStep = isCurrentActive,
-                        completedAccent = completedAccent,
+            // Optional Sunday Check-in Banner (only on Sunday if not dismissed)
+            if (showSundayBanner) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .offset(x = horizShiftDp),
-                        onClick = {
-                            when (node.kind) {
-                                DuolingoNodeKind.VIDEO_CAMP -> activeStudioNode = node
-                                DuolingoNodeKind.PRACTICE_FOCUS -> activePracticeNode = node
-                                DuolingoNodeKind.ERROR_REVIEW -> activeMiniCheckNode = node
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Pazar Kontrolü: Yeni haftayı kurgula",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = {
+                                    isSundayCheckInPrompt = true
+                                    showPlanReadinessDialog = true
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("Güncelle", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                            IconButton(
+                                onClick = {
+                                    PlanReadinessNavBus.dismissSundayBannerToday(context)
+                                    showSundayBanner = false
+                                },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(Icons.Default.Close, contentDescription = "Kapat", modifier = Modifier.size(15.dp))
                             }
                         }
-                    )
+                    }
+                }
+            }
 
-                    if (idx < pathNodes.lastIndex) {
-                        val lineDone = node.isCompleted
-                        val connectorColor = when {
-                            lineDone -> completedAccent
-                            isCurrentActive -> colorScheme.primary.copy(alpha = 0.7f)
-                            else -> colorScheme.outlineVariant.copy(alpha = 0.75f)
-                        }
-                        Canvas(
-                            modifier = Modifier
-                                .width(40.dp)
-                                .height(26.dp)
+            // Optional Adaptive Efficiency Suggestion (dismissible)
+            efficiencySuggestion?.let { suggestion ->
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = suggestion.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colorScheme.onSurface
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            val centerX = size.width / 2f
-                            drawLine(
-                                color = connectorColor,
-                                start = Offset(centerX, 0f),
-                                end = Offset(centerX, size.height),
-                                strokeWidth = if (lineDone || isCurrentActive) 6.5f else 5f,
-                                cap = StrokeCap.Round,
-                                pathEffect = if (lineDone) null else PathEffect.dashPathEffect(floatArrayOf(9f, 7f), 0f)
-                            )
-                            drawCircle(
-                                color = connectorColor,
-                                radius = if (lineDone) 4.5f else 3.5f,
-                                center = Offset(centerX, size.height / 2f)
-                            )
+                            Button(
+                                onClick = {
+                                    StudentDossierManager.recordEfficiencyDecision(
+                                        context = context,
+                                        acceptedLowerHours = true,
+                                        newWeekdayMins = suggestion.recommendedWeekdayMinutes,
+                                        newWeekendMins = suggestion.recommendedWeekendMinutes
+                                    )
+                                    Toast.makeText(context, "8-9 saat verimlilik denemesi aktif", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(vertical = 6.dp)
+                            ) {
+                                Text("8-9 Saati Dene", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    StudentDossierManager.recordEfficiencyDecision(
+                                        context = context,
+                                        acceptedLowerHours = false
+                                    )
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(vertical = 6.dp)
+                            ) {
+                                Text("Hedefim Kalsın", fontSize = 11.sp)
+                            }
                         }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        // ── 2. FULL-SCREEN TODAY-ONLY WINDING DUOLINGO MAP ──
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .widthIn(max = 680.dp)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            todayNodes.forEachIndexed { idx, node ->
+                val isCurrentActive = idx == firstIncompleteIndex && !node.isCompleted
+                val currentBias = computeMapNodeHorizontalBias(idx)
+                val nextBias = if (idx < todayNodes.lastIndex) {
+                    computeMapNodeHorizontalBias(idx + 1)
+                } else {
+                    0f
+                }
+
+                FullScreenMapMilestoneStation(
+                    node = node,
+                    stepNumber = idx + 1,
+                    horizontalBias = currentBias,
+                    isCurrentStep = isCurrentActive,
+                    completedAccent = completedAccent,
+                    onClick = {
+                        when (node.kind) {
+                            DuolingoNodeKind.VIDEO_CAMP -> activeStudioNode = node
+                            DuolingoNodeKind.PRACTICE_FOCUS -> activePracticeNode = node
+                            DuolingoNodeKind.ERROR_REVIEW -> activeMiniCheckNode = node
+                        }
+                    }
+                )
+
+                // Smooth S-Curve Bezier Road Connector to the next milestone (or finish trophy)
+                val roadDone = node.isCompleted
+                val roadColor = when {
+                    roadDone -> completedAccent
+                    isCurrentActive -> colorScheme.primary.copy(alpha = 0.78f)
+                    else -> colorScheme.outlineVariant.copy(alpha = 0.7f)
+                }
+                WindingMapBezierConnector(
+                    fromBias = currentBias,
+                    toBias = nextBias,
+                    color = roadColor,
+                    isSolid = roadDone,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                )
+            }
+
+            // Finish Trophy Station at the end of Today's Map
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = if (allDone) completedAccent.copy(alpha = 0.16f) else colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                border = BorderStroke(
+                    width = if (allDone) 1.8.dp else 1.dp,
+                    color = if (allDone) completedAccent else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                ),
+                modifier = Modifier.fillMaxWidth(0.86f)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (allDone) completedAccent else colorScheme.primary.copy(alpha = 0.16f),
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.EmojiEvents,
+                                contentDescription = "Günün Hedefi",
+                                tint = if (allDone) Color.White else colorScheme.primary,
+                                modifier = Modifier.size(25.dp)
+                            )
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (allDone) "Günün Rotası Tamamlandı!" else "Günün Bitiş Noktası",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = if (allDone) completedAccent else colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (allDone) {
+                                "Bugünkü tüm ${todayNodes.size} adımı tamamladın. Harika tempo!"
+                            } else {
+                                "$completedCount / ${todayNodes.size} adım tamamlandı • Kalan: ${todayNodes.size - completedCount}"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Subtle bottom preview & Planlar quick actions
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { showOtherDaysPreview = true },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(vertical = 10.dp)
+                ) {
+                    Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Diğer Günleri Önizle", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+                OutlinedButton(
+                    onClick = onNavigateToPlans,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(vertical = 10.dp)
+                ) {
+                    Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Planlar Sekmesi", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(26.dp))
+        }
     }
+}
+
+@Composable
+private fun WindingMapBezierConnector(
+    fromBias: Float,
+    toBias: Float,
+    color: Color,
+    isSolid: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val centerX = size.width / 2f
+        val maxShift = (size.width * 0.24f).coerceAtMost(92.dp.toPx())
+        val startX = centerX + (fromBias * maxShift)
+        val endX = centerX + (toBias * maxShift)
+        val path = Path().apply {
+            moveTo(startX, 0f)
+            cubicTo(
+                startX, size.height * 0.52f,
+                endX, size.height * 0.48f,
+                endX, size.height
+            )
+        }
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(
+                width = if (isSolid) 5.5.dp.toPx() else 4.dp.toPx(),
+                cap = StrokeCap.Round,
+                pathEffect = if (isSolid) null else PathEffect.dashPathEffect(floatArrayOf(14f, 12f), 0f)
+            )
+        )
+    }
+}
+
+@Composable
+private fun FullScreenMapMilestoneStation(
+    node: DuolingoPathNode,
+    stepNumber: Int,
+    horizontalBias: Float,
+    isCurrentStep: Boolean,
+    completedAccent: Color,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val stepKindAccent = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.primary
+        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.tertiary
+        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.secondary
+    }
+    val stepKindOnAccent = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.onPrimary
+        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.onTertiary
+        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.onSecondary
+    }
+    val nodeAccent = if (node.isCompleted) completedAccent else stepKindAccent
+    val nodeIcon = when (node.kind) {
+        DuolingoNodeKind.VIDEO_CAMP -> Icons.Default.PlayCircleOutline
+        DuolingoNodeKind.PRACTICE_FOCUS -> Icons.Default.Book
+        DuolingoNodeKind.ERROR_REVIEW -> Icons.Default.Quiz
+    }
+    val shiftDp = (horizontalBias * 74f).dp
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset(x = shiftDp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Floating Duolingo-style "BAŞLA!" callout over the active next station
+        if (isCurrentStep) {
+            Surface(
+                onClick = onClick,
+                shape = RoundedCornerShape(10.dp),
+                color = nodeAccent,
+                shadowElevation = 4.dp
+            ) {
+                Text(
+                    text = when (node.kind) {
+                        DuolingoNodeKind.VIDEO_CAMP -> "SIRADA • İZLE"
+                        DuolingoNodeKind.PRACTICE_FOCUS -> "SIRADA • BAŞLA"
+                        DuolingoNodeKind.ERROR_REVIEW -> "SIRADA • KONTROL"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    letterSpacing = 0.6.sp,
+                    color = stepKindOnAccent,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+            }
+        }
+
+        // Iconic 3D-rimmed Circular Medallion Station
+        Box(contentAlignment = Alignment.Center) {
+            if (isCurrentStep) {
+                Box(
+                    modifier = Modifier
+                        .size(84.dp)
+                        .clip(CircleShape)
+                        .background(nodeAccent.copy(alpha = 0.16f))
+                        .border(2.dp, nodeAccent.copy(alpha = 0.55f), CircleShape)
+                )
+            }
+            // Subtle 3D bottom lip
+            Box(
+                modifier = Modifier
+                    .offset(y = 4.dp)
+                    .size(68.dp)
+                    .clip(CircleShape)
+                    .background(nodeAccent.copy(alpha = if (node.isCompleted || isCurrentStep) 0.42f else 0.2f))
+            )
+            Surface(
+                onClick = onClick,
+                shape = CircleShape,
+                color = when {
+                    node.isCompleted -> completedAccent
+                    isCurrentStep -> nodeAccent
+                    else -> colorScheme.surface
+                },
+                border = BorderStroke(
+                    width = if (isCurrentStep || node.isCompleted) 2.5.dp else 2.dp,
+                    color = nodeAccent
+                ),
+                shadowElevation = if (isCurrentStep) 6.dp else 2.dp,
+                modifier = Modifier.size(68.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = if (node.isCompleted) Icons.Default.Check else nodeIcon,
+                        contentDescription = node.topic,
+                        tint = when {
+                            node.isCompleted -> Color.White
+                            isCurrentStep -> stepKindOnAccent
+                            else -> nodeAccent
+                        },
+                        modifier = Modifier.size(30.dp)
+                    )
+                }
+            }
+            // Step number badge on top-right of medallion
+            Surface(
+                shape = CircleShape,
+                color = colorScheme.surface,
+                border = BorderStroke(1.2.dp, nodeAccent),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 2.dp, y = (-2).dp)
+                    .size(22.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "$stepNumber",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = nodeAccent
+                    )
+                }
+            }
+        }
+
+        // Concise Map Label Pill right below the medallion
+        Surface(
+            onClick = onClick,
+            shape = RoundedCornerShape(14.dp),
+            color = colorScheme.surface.copy(alpha = 0.94f),
+            border = BorderStroke(
+                width = if (isCurrentStep) 1.4.dp else 1.dp,
+                color = if (isCurrentStep) nodeAccent else colorScheme.outlineVariant.copy(alpha = 0.55f)
+            ),
+            shadowElevation = if (isCurrentStep) 3.dp else 1.dp,
+            modifier = Modifier.widthIn(min = 176.dp, max = 236.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = node.kind.badgeLabel,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = nodeAccent,
+                    maxLines = 1
+                )
+                Text(
+                    text = "${node.subject} • ${node.topic}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = node.subtitle,
+                    fontSize = 10.sp,
+                    color = colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Read-only Preview Dialog for the other 6 days of the week.
+ * Keeps the main Coaching Path screen 100% focused on TODAY'S map while letting the student
+ * quickly glance at upcoming days or jump directly into the detailed Planlar tab.
+ */
+@Composable
+private fun OtherDaysPreviewDialog(
+    todayIso: Int,
+    otherDayIsos: List<Int>,
+    allFolderTasks: List<PlanEntity>,
+    libraryResources: List<ResourceEntity>,
+    bookAssignments: Map<Long, BookCoachingAssignment>,
+    coachLedger: AiCoachLedger,
+    topicGoals: List<TopicGoalEntity>,
+    targetContext: StudentTargetContext,
+    completedNodeIds: Set<String>,
+    onOpenPlansTab: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
+    var previewDayIso by remember(otherDayIsos) { mutableIntStateOf(otherDayIsos.firstOrNull() ?: 1) }
+
+    val previewTasks = remember(allFolderTasks, previewDayIso) {
+        allFolderTasks.filter { it.dayOfWeek == previewDayIso }
+    }
+    val previewNodes = remember(
+        previewTasks,
+        libraryResources,
+        bookAssignments,
+        coachLedger,
+        topicGoals,
+        previewDayIso,
+        completedNodeIds,
+        targetContext
+    ) {
+        buildDuolingoDayNodes(
+            context = context,
+            dayIso = previewDayIso,
+            dayTasks = previewTasks,
+            libraryResources = libraryResources,
+            bookAssignments = bookAssignments,
+            coachLedger = coachLedger,
+            topicGoals = topicGoals,
+            targetContext = targetContext,
+            completedNodeIds = completedNodeIds
+        )
+    }
+
+    val tomorrowIso = otherDayIsos.firstOrNull()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colorScheme.surface,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = "Diğer Günlerin Önizlemesi",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "Sadece önizleme • Detaylı düzenleme Planlar sekmesinde",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Other-6-days selector chips (starting with tomorrow)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    otherDayIsos.forEach { dayIso ->
+                        val isSel = dayIso == previewDayIso
+                        val shortName = CoachingEngine.isoDayLabelTr(dayIso).take(3)
+                        val chipText = if (dayIso == tomorrowIso) "Yarın ($shortName)" else shortName
+                        Surface(
+                            onClick = { previewDayIso = dayIso },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isSel) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSel) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
+                        ) {
+                            Text(
+                                text = chipText,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isSel) FontWeight.ExtraBold else FontWeight.SemiBold,
+                                color = if (isSel) colorScheme.onPrimary else colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = "${CoachingEngine.isoDayLabelTr(previewDayIso)} (${previewNodes.size} adım)",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.primary
+                )
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    previewNodes.forEachIndexed { idx, node ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(9.dp)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = colorScheme.primary.copy(alpha = 0.14f),
+                                    modifier = Modifier.size(26.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "${idx + 1}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${node.subject} • ${node.topic}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${node.kind.badgeLabel} • ${node.subtitle}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenPlansTab,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Planlar Sekmesine Git", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Bugüne Dön")
+            }
+        }
+    )
 }
 
 @Composable
@@ -2408,195 +2725,6 @@ private fun FilledTonalIconButtonSmall(
     ) {
         Box(contentAlignment = Alignment.Center) {
             Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        }
-    }
-}
-
-@Composable
-private fun DuolingoPathNodeCard(
-    node: DuolingoPathNode,
-    isCurrentStep: Boolean,
-    completedAccent: Color,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val stepKindAccent = when (node.kind) {
-        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.primary
-        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.tertiary
-        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.secondary
-    }
-    val stepKindContainer = when (node.kind) {
-        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.primaryContainer
-        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.tertiaryContainer
-        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.secondaryContainer
-    }
-    val stepKindOnAccent = when (node.kind) {
-        DuolingoNodeKind.VIDEO_CAMP -> colorScheme.onPrimary
-        DuolingoNodeKind.PRACTICE_FOCUS -> colorScheme.onTertiary
-        DuolingoNodeKind.ERROR_REVIEW -> colorScheme.onSecondary
-    }
-    val nodeAccent = if (node.isCompleted) completedAccent else stepKindAccent
-    val nodeIcon = when (node.kind) {
-        DuolingoNodeKind.VIDEO_CAMP -> Icons.Default.PlayCircleOutline
-        DuolingoNodeKind.PRACTICE_FOCUS -> Icons.Default.Book
-        DuolingoNodeKind.ERROR_REVIEW -> Icons.Default.Quiz
-    }
-
-    val cardBackgroundBrush = when {
-        node.isCompleted -> Brush.horizontalGradient(
-            listOf(
-                completedAccent.copy(alpha = 0.10f),
-                colorScheme.surfaceVariant.copy(alpha = 0.35f)
-            )
-        )
-        isCurrentStep -> Brush.horizontalGradient(
-            listOf(
-                stepKindContainer.copy(alpha = 0.72f),
-                stepKindContainer.copy(alpha = 0.28f),
-                colorScheme.surfaceVariant.copy(alpha = 0.45f)
-            )
-        )
-        else -> Brush.horizontalGradient(
-            listOf(
-                stepKindContainer.copy(alpha = 0.26f),
-                colorScheme.surfaceVariant.copy(alpha = 0.48f)
-            )
-        )
-    }
-
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
-        color = Color.Transparent,
-        border = BorderStroke(
-            width = if (isCurrentStep) 1.8.dp else 1.dp,
-            color = when {
-                node.isCompleted -> completedAccent.copy(alpha = 0.55f)
-                isCurrentStep -> nodeAccent
-                else -> nodeAccent.copy(alpha = 0.32f)
-            }
-        ),
-        shadowElevation = if (isCurrentStep) 4.dp else 0.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(cardBackgroundBrush)
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(11.dp)
-        ) {
-            // Subtle vertical color rail indicating step identity
-            Box(
-                modifier = Modifier
-                    .width(4.dp)
-                    .height(42.dp)
-                    .clip(CircleShape)
-                    .background(nodeAccent.copy(alpha = if (isCurrentStep || node.isCompleted) 0.95f else 0.55f))
-            )
-
-            // Circular Duolingo Node Badge
-            Surface(
-                shape = CircleShape,
-                color = when {
-                    node.isCompleted -> completedAccent
-                    isCurrentStep -> nodeAccent
-                    else -> nodeAccent.copy(alpha = 0.16f)
-                },
-                border = BorderStroke(
-                    width = 2.dp,
-                    color = nodeAccent
-                ),
-                modifier = Modifier.size(46.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = if (node.isCompleted) Icons.Default.Check else nodeIcon,
-                        contentDescription = null,
-                        tint = when {
-                            node.isCompleted -> Color.White
-                            isCurrentStep -> stepKindOnAccent
-                            else -> nodeAccent
-                        },
-                        modifier = Modifier.size(23.dp)
-                    )
-                }
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = nodeAccent.copy(alpha = 0.16f)
-                    ) {
-                        Text(
-                            text = node.kind.badgeLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = nodeAccent,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                    if (isCurrentStep) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = nodeAccent
-                        ) {
-                            Text(
-                                text = "Sırada",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = stepKindOnAccent,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(3.dp))
-
-                Text(
-                    text = "${node.subject} • ${node.topic}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Text(
-                    text = node.subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = if (node.isCompleted) completedAccent.copy(alpha = 0.16f) else nodeAccent
-            ) {
-                Text(
-                    text = when {
-                        node.isCompleted -> "Tamam"
-                        node.kind == DuolingoNodeKind.VIDEO_CAMP -> "İzle"
-                        node.kind == DuolingoNodeKind.PRACTICE_FOCUS -> "Başla"
-                        else -> "Kontrol"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (node.isCompleted) completedAccent else stepKindOnAccent,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                )
-            }
         }
     }
 }

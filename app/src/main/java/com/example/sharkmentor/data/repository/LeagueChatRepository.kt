@@ -270,6 +270,7 @@ class LeagueChatRepository @Inject constructor(
                 .document(questionMessageId)
                 .collection("solutions")
                 .orderBy("submittedAtMillis", Query.Direction.ASCENDING)
+                .limit(40)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         trySend(emptyList())
@@ -1112,6 +1113,7 @@ class LeagueChatRepository @Inject constructor(
         val registration: ListenerRegistration? = runCatching {
             db.collection(LEAGUE_CHATS_COLLECTION)
                 .whereArrayContains("participantIds", uid)
+                .limit(40)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         Log.w(TAG, "observeDmThreads error: ${error.message}")
@@ -1200,6 +1202,7 @@ class LeagueChatRepository @Inject constructor(
             db.collection("user_blocks")
                 .document(effectiveUid)
                 .collection("blocked")
+                .limit(80)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         trySend(emptySet())
@@ -1298,6 +1301,7 @@ class LeagueChatRepository @Inject constructor(
             db.collection("students")
                 .document(effectiveUid)
                 .collection("badges")
+                .limit(80)
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
                         trySend(emptyList())

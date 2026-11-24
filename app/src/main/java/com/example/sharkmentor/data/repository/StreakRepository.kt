@@ -2,6 +2,7 @@ package com.example.sharkmentor.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.example.sharkmentor.core.badges.SharkBadgeCatalog
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.core.widget.WidgetUpdateManager
 import com.example.sharkmentor.data.local.SharkMentorDatabase
@@ -21,6 +22,141 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
+/**
+ * Duolingo-style consecutive-day Streak Goal tiers ("Hedef Seri").
+ * Longer consecutive streaks yield super-linearly larger League bonuses and Streak Freezes.
+ */
+enum class StreakGoalTier(
+    val targetDays: Int,
+    val title: String,
+    val badgeTitle: String,
+    val leaguePointsReward: Int,
+    val weeklyLeagueBonusSeconds: Long,
+    val freezeReward: Int
+) {
+    DAYS_7(
+        targetDays = 7,
+        title = "7 Günlük Seri",
+        badgeTitle = "Haftalık Akıntı",
+        leaguePointsReward = 150,
+        weeklyLeagueBonusSeconds = 900L,   // +15 dk haftalık lig bonusu
+        freezeReward = 1
+    ),
+    DAYS_14(
+        targetDays = 14,
+        title = "14 Günlük Seri",
+        badgeTitle = "Dalga Ustası",
+        leaguePointsReward = 350,
+        weeklyLeagueBonusSeconds = 1800L,  // +30 dk haftalık lig bonusu
+        freezeReward = 2
+    ),
+    DAYS_30(
+        targetDays = 30,
+        title = "30 Günlük Seri",
+        badgeTitle = "Derin Deniz Şampiyonu",
+        leaguePointsReward = 900,
+        weeklyLeagueBonusSeconds = 3600L,  // +60 dk haftalık lig bonusu
+        freezeReward = 3
+    ),
+    DAYS_50(
+        targetDays = 50,
+        title = "50 Günlük Seri",
+        badgeTitle = "Efsane Megalodon",
+        leaguePointsReward = 2000,
+        weeklyLeagueBonusSeconds = 5400L,  // +90 dk haftalık lig bonusu
+        freezeReward = 5
+    );
+
+    companion object {
+        val ALL_TIERS: List<StreakGoalTier> = entries.sortedBy { it.targetDays }
+        val VALID_TARGET_DAYS: Set<Int> = ALL_TIERS.map { it.targetDays }.toSet()
+
+        fun fromTargetDays(days: Int): StreakGoalTier =
+            ALL_TIERS.firstOrNull { it.targetDays == days } ?: DAYS_7
+
+        fun sanitizeGoalDays(days: Int): Int =
+            if (days in VALID_TARGET_DAYS) days else DAYS_7.targetDays
+
+        fun nextRecommendedGoal(currentStreak: Int, claimedMilestones: Set<Int>): StreakGoalTier {
+            return ALL_TIERS.firstOrNull { tier ->
+                tier.targetDays !in claimedMilestones || currentStreak < tier.targetDays
+            } ?: DAYS_50
+        }
+    }
+}
+
+data class StreakGoalEvaluationResult(
+    val newlyUnlockedTiers: List<StreakGoalTier>,
+    val totalLeaguePointsEarned: Int,
+    val totalWeeklyBonusSecondsEarned: Long,
+    val totalFreezesEarned: Int,
+    val updatedClaimedMilestones: Set<Int>,
+    val nextGoalDays: Int
+)
+
+/**
+ * Pure JVM-testable evaluator for Streak Goal completion and progressive rewards.
+ *
+ * Rules:
+ * - If the student's active goal (or any lower/selected tier up to the active goal) is reached
+ *   by [currentStreak] and hasn't been claimed yet in [claimedMilestones], it is unlocked once.
+ * - Longer goals scale non-linearly in both League Points and Streak Freezes.
+ * - Strictly idempotent: claiming the same milestone twice returns empty rewards.
+ * - Auto-advances [nextGoalDays] to the next unclaimed tier (`7 -> 14 -> 30 -> 50`).
+ */
+fun evaluateStreakGoalMilestone(
+    currentStreak: Int,
+    selectedGoalDays: Int,
+    claimedMilestones: Set<Int>
+): StreakGoalEvaluationResult {
+    val safeGoal = StreakGoalTier.sanitizeGoalDays(selectedGoalDays)
+    val safeClaimed = claimedMilestones.filter { it in StreakGoalTier.VALID_TARGET_DAYS }.toSet()
+    if (currentStreak <= 0) {
+        return StreakGoalEvaluationResult(
+            newlyUnlockedTiers = emptyList(),
+            totalLeaguePointsEarned = 0,
+            totalWeeklyBonusSecondsEarned = 0L,
+            totalFreezesEarned = 0,
+            updatedClaimedMilestones = safeClaimed,
+            nextGoalDays = safeGoal
+        )
+    }
+
+    // Unlock the active selected goal (and any crossed lower tier not yet claimed) once reached
+    val unlocked = StreakGoalTier.ALL_TIERS.filter { tier ->
+        tier.targetDays <= safeGoal &&
+            currentStreak >= tier.targetDays &&
+            tier.targetDays !in safeClaimed
+    }
+
+    if (unlocked.isEmpty()) {
+        return StreakGoalEvaluationResult(
+            newlyUnlockedTiers = emptyList(),
+            totalLeaguePointsEarned = 0,
+            totalWeeklyBonusSecondsEarned = 0L,
+            totalFreezesEarned = 0,
+            updatedClaimedMilestones = safeClaimed,
+            nextGoalDays = safeGoal
+        )
+    }
+
+    val updatedClaimed = safeClaimed + unlocked.map { it.targetDays }
+    val nextGoal = StreakGoalTier.ALL_TIERS
+        .firstOrNull { it.targetDays > safeGoal && it.targetDays !in updatedClaimed }
+        ?.targetDays
+        ?: StreakGoalTier.ALL_TIERS.firstOrNull { it.targetDays !in updatedClaimed }?.targetDays
+        ?: safeGoal
+
+    return StreakGoalEvaluationResult(
+        newlyUnlockedTiers = unlocked,
+        totalLeaguePointsEarned = unlocked.sumOf { it.leaguePointsReward },
+        totalWeeklyBonusSecondsEarned = unlocked.sumOf { it.weeklyLeagueBonusSeconds },
+        totalFreezesEarned = unlocked.sumOf { it.freezeReward },
+        updatedClaimedMilestones = updatedClaimed,
+        nextGoalDays = nextGoal
+    )
+}
+
 data class StreakState(
     val streakCount: Int = 0,
     val streakFreezeAvailable: Int = 0,
@@ -28,7 +164,10 @@ data class StreakState(
     val wasFrozenToday: Boolean = false,
     val daysSinceLastStudy: Int = 0,
     val completedDates: Set<String> = emptySet(),
-    val updatedAtMillis: Long = 0L
+    val updatedAtMillis: Long = 0L,
+    val streakGoalDays: Int = StreakGoalTier.DAYS_7.targetDays,
+    val claimedGoalMilestones: Set<Int> = emptySet(),
+    val lastRewardedGoalDays: Int = 0
 )
 
 data class StreakMergeDecision(
@@ -41,11 +180,11 @@ data class StreakMergeDecision(
  * Pure JVM-testable two-way Water Streak ("Su Serisi") merge resolver for multi-device sync.
  *
  * Guarantees:
- * - A fresh device / reinstall restores the user's exact streak, freezes, last date, and
- *   rolling 14-day completed-date history without resetting to 0.
+ * - A fresh device / reinstall restores the user's exact streak, freezes, last date,
+ *   active streak goal (`7/14/30/50`), claimed milestones, and rolling 14-day completed-date history.
  * - Cross-device concurrent study picks the most recent active streak date, never regresses
- *   streakCount on the same day, unions completedDates (last 14 days), and resolves freeze
- *   changes via updatedAtMillis.
+ *   streakCount on the same day, unions completedDates & claimedGoalMilestones, and resolves
+ *   goal/freeze changes via updatedAtMillis.
  */
 fun resolveStreakMerge(
     local: StreakState,
@@ -54,12 +193,25 @@ fun resolveStreakMerge(
     localPendingSync: Boolean = false
 ): StreakMergeDecision {
     val mergedDates = trimRecentIsoDates(local.completedDates + remote.completedDates)
+    val mergedClaimed = (local.claimedGoalMilestones + remote.claimedGoalMilestones)
+        .filter { it in StreakGoalTier.VALID_TARGET_DAYS }
+        .toSet()
+    val resolvedGoalDays = when {
+        remote.updatedAtMillis > local.updatedAtMillis -> StreakGoalTier.sanitizeGoalDays(remote.streakGoalDays)
+        local.updatedAtMillis > remote.updatedAtMillis -> StreakGoalTier.sanitizeGoalDays(local.streakGoalDays)
+        else -> maxOf(
+            StreakGoalTier.sanitizeGoalDays(local.streakGoalDays),
+            StreakGoalTier.sanitizeGoalDays(remote.streakGoalDays)
+        )
+    }
 
     val localDate = parseIsoDateOrNull(local.lastStreakDate)
     val remoteDate = parseIsoDateOrNull(remote.lastStreakDate)
 
-    val localHasData = local.streakCount > 0 || localDate != null || local.completedDates.isNotEmpty()
-    val remoteHasData = remote.streakCount > 0 || remoteDate != null || remote.completedDates.isNotEmpty()
+    val localHasData = local.streakCount > 0 || localDate != null || local.completedDates.isNotEmpty() ||
+        local.claimedGoalMilestones.isNotEmpty() || local.streakGoalDays != StreakGoalTier.DAYS_7.targetDays
+    val remoteHasData = remote.streakCount > 0 || remoteDate != null || remote.completedDates.isNotEmpty() ||
+        remote.claimedGoalMilestones.isNotEmpty() || remote.streakGoalDays != StreakGoalTier.DAYS_7.targetDays
 
     if (!localHasData && !remoteHasData) {
         return StreakMergeDecision(
@@ -72,7 +224,10 @@ fun resolveStreakMerge(
     if (!localHasData && remoteHasData) {
         val merged = remote.copy(
             completedDates = mergedDates,
-            daysSinceLastStudy = computeDaysSinceDate(remoteDate, today)
+            daysSinceLastStudy = computeDaysSinceDate(remoteDate, today),
+            streakGoalDays = StreakGoalTier.sanitizeGoalDays(remote.streakGoalDays),
+            claimedGoalMilestones = mergedClaimed,
+            lastRewardedGoalDays = local.lastRewardedGoalDays
         )
         return StreakMergeDecision(
             merged = merged,
@@ -85,6 +240,8 @@ fun resolveStreakMerge(
         val merged = local.copy(
             completedDates = mergedDates,
             daysSinceLastStudy = computeDaysSinceDate(localDate, today),
+            streakGoalDays = StreakGoalTier.sanitizeGoalDays(local.streakGoalDays),
+            claimedGoalMilestones = mergedClaimed,
             updatedAtMillis = if (local.updatedAtMillis > 0L) local.updatedAtMillis else System.currentTimeMillis()
         )
         return StreakMergeDecision(
@@ -99,13 +256,11 @@ fun resolveStreakMerge(
         remoteDate != null && localDate == null -> remote
         localDate != null && remoteDate == null -> local
         remoteDate != null && localDate != null && remoteDate.isAfter(localDate) -> {
-            // Remote has a strictly newer study day (e.g. Device A studied today, Device B yesterday)
             val resolvedCount = if (
                 ChronoUnit.DAYS.between(localDate, remoteDate) == 1L &&
                 remote.streakCount < local.streakCount + 1 &&
                 local.streakCount > 0
             ) {
-                // Protect against stale cloud count if Device A had missed a prior sync
                 maxOf(remote.streakCount, local.streakCount + 1)
             } else {
                 remote.streakCount
@@ -125,7 +280,6 @@ fun resolveStreakMerge(
             local.copy(streakCount = resolvedCount)
         }
         else -> {
-            // Same lastStreakDate (or both null with legacy streakCount only)
             val bestCount = maxOf(local.streakCount, remote.streakCount)
             val bestFreeze = when {
                 remote.updatedAtMillis > local.updatedAtMillis -> remote.streakFreezeAvailable
@@ -151,18 +305,25 @@ fun resolveStreakMerge(
     val finalMerged = winner.copy(
         completedDates = finalDates,
         daysSinceLastStudy = computeDaysSinceDate(winnerDate, today),
-        updatedAtMillis = maxOf(winner.updatedAtMillis, local.updatedAtMillis, remote.updatedAtMillis)
+        updatedAtMillis = maxOf(winner.updatedAtMillis, local.updatedAtMillis, remote.updatedAtMillis),
+        streakGoalDays = resolvedGoalDays,
+        claimedGoalMilestones = mergedClaimed,
+        lastRewardedGoalDays = local.lastRewardedGoalDays
     )
 
     val localChanged = finalMerged.streakCount != local.streakCount ||
         finalMerged.streakFreezeAvailable != local.streakFreezeAvailable ||
         finalMerged.lastStreakDate != local.lastStreakDate ||
-        finalMerged.completedDates != local.completedDates
+        finalMerged.completedDates != local.completedDates ||
+        finalMerged.streakGoalDays != local.streakGoalDays ||
+        finalMerged.claimedGoalMilestones != local.claimedGoalMilestones
 
     val cloudDiffers = finalMerged.streakCount != remote.streakCount ||
         finalMerged.streakFreezeAvailable != remote.streakFreezeAvailable ||
         finalMerged.lastStreakDate != remote.lastStreakDate ||
-        finalMerged.completedDates != remote.completedDates
+        finalMerged.completedDates != remote.completedDates ||
+        finalMerged.streakGoalDays != remote.streakGoalDays ||
+        finalMerged.claimedGoalMilestones != remote.claimedGoalMilestones
 
     return StreakMergeDecision(
         merged = finalMerged,
@@ -199,7 +360,6 @@ class StreakRepository(private val context: Context) {
         get() = getOrInitSharedFlow(appContext).asStateFlow()
 
     init {
-        // Refresh shared flow from disk on construction
         getOrInitSharedFlow(appContext).value = readStateFromPrefs()
     }
 
@@ -212,14 +372,86 @@ class StreakRepository(private val context: Context) {
             trimRecentIsoDates(storedDates)
         }
         val daysSince = computeDaysSince(lastDateStr, LocalDate.now())
+        val goalDays = StreakGoalTier.sanitizeGoalDays(
+            prefs.getInt(KEY_GOAL_DAYS, StreakGoalTier.DAYS_7.targetDays)
+        )
+        val claimedSet = prefs.getStringSet(KEY_CLAIMED_MILESTONES, emptySet())
+            .orEmpty()
+            .mapNotNull { it.toIntOrNull() }
+            .filter { it in StreakGoalTier.VALID_TARGET_DAYS }
+            .toSet()
         return StreakState(
             streakCount = prefs.getInt(KEY_STREAK_COUNT, 0),
-            streakFreezeAvailable = prefs.getInt(KEY_FREEZE_AVAILABLE, 0),
+            streakFreezeAvailable = prefs.getInt(KEY_FREEZE_AVAILABLE, 0).coerceIn(0, MAX_STREAK_FREEZES),
             lastStreakDate = lastDateStr,
             daysSinceLastStudy = daysSince,
             completedDates = combinedDates,
-            updatedAtMillis = prefs.getLong(KEY_UPDATED_AT, 0L)
+            updatedAtMillis = prefs.getLong(KEY_UPDATED_AT, 0L),
+            streakGoalDays = goalDays,
+            claimedGoalMilestones = claimedSet,
+            lastRewardedGoalDays = prefs.getInt(KEY_LAST_REWARDED_GOAL, 0)
         )
+    }
+
+    /**
+     * Allows the student to pick their active Duolingo-style Streak Goal (`7`, `14`, `30`, or `50` gün).
+     * If their current consecutive streak already satisfies the newly picked unclaimed goal,
+     * immediately awards the tiered League Points + Streak Freezes once (idempotent).
+     */
+    fun setStreakGoalDays(targetDays: Int): StreakGoalEvaluationResult {
+        val safeTarget = StreakGoalTier.sanitizeGoalDays(targetDays)
+        val current = readStateFromPrefs()
+        val eval = evaluateStreakGoalMilestone(
+            currentStreak = current.streakCount,
+            selectedGoalDays = safeTarget,
+            claimedMilestones = current.claimedGoalMilestones
+        )
+        val newFreeze = (current.streakFreezeAvailable + eval.totalFreezesEarned)
+            .coerceIn(0, MAX_STREAK_FREEZES)
+        val rewardedGoal = eval.newlyUnlockedTiers.maxOfOrNull { it.targetDays } ?: current.lastRewardedGoalDays
+        val updatedState = current.copy(
+            streakFreezeAvailable = newFreeze,
+            streakGoalDays = if (eval.newlyUnlockedTiers.isNotEmpty()) eval.nextGoalDays else safeTarget,
+            claimedGoalMilestones = eval.updatedClaimedMilestones,
+            lastRewardedGoalDays = rewardedGoal,
+            updatedAtMillis = System.currentTimeMillis()
+        )
+        if (eval.newlyUnlockedTiers.isNotEmpty()) {
+            grantLeagueGoalRewards(eval)
+        }
+        persistState(updatedState, markPendingSync = true, syncCloudNow = true)
+        return eval
+    }
+
+    fun acknowledgeGoalReward() {
+        val current = readStateFromPrefs()
+        if (current.lastRewardedGoalDays == 0) return
+        prefs.edit().putInt(KEY_LAST_REWARDED_GOAL, 0).apply()
+        getOrInitSharedFlow(appContext).value = current.copy(lastRewardedGoalDays = 0)
+    }
+
+    private fun grantLeagueGoalRewards(eval: StreakGoalEvaluationResult) {
+        if (eval.totalLeaguePointsEarned <= 0 && eval.totalWeeklyBonusSecondsEarned <= 0L) return
+        runCatching {
+            if (eval.totalLeaguePointsEarned > 0) {
+                SharkBadgeCatalog.addMentorPoints(appContext, eval.totalLeaguePointsEarned)
+            }
+            if (eval.totalWeeklyBonusSecondsEarned > 0L) {
+                SharkBadgeCatalog.addWeeklyBonusSeconds(appContext, eval.totalWeeklyBonusSecondsEarned)
+            }
+            val uid = GoogleServicesHelper.getCurrentUser(context = appContext)
+                ?.takeUnless { it.isAnonymous }
+                ?.uid
+            if (!uid.isNullOrBlank() && uid != "student_default") {
+                SharkBadgeCatalog.syncShowcaseAndBadgesToCloud(
+                    context = appContext,
+                    uid = uid,
+                    forceImmediate = true
+                )
+            }
+        }.onFailure { e ->
+            Log.w(TAG, "Failed crediting streak goal league rewards: ${e.message}")
+        }
     }
 
     /**
@@ -241,6 +473,7 @@ class StreakRepository(private val context: Context) {
             var newStreak = state.streakCount
             var newFreeze = state.streakFreezeAvailable
             var wasFrozen = false
+            var streakWasBroken = false
 
             if (state.lastStreakDate.isNotBlank()) {
                 val lastDate = parseIsoDateOrNull(state.lastStreakDate)
@@ -257,6 +490,7 @@ class StreakRepository(private val context: Context) {
                             } else {
                                 newStreak = 1
                                 newFreeze = 0
+                                streakWasBroken = true
                             }
                         }
                         daysBetween <= 0L -> newStreak = newStreak.coerceAtLeast(1)
@@ -268,11 +502,23 @@ class StreakRepository(private val context: Context) {
                 newStreak = 1
             }
 
-            // Earn a streak freeze automatically every 7 continuous days (capped at 3)
-            if (newStreak > 0 && newStreak % 7 == 0 && newFreeze < 3) {
+            // Base automatic freeze bonus every 7 continuous days if not covered by a goal milestone
+            val activeClaimed = if (streakWasBroken) emptySet() else state.claimedGoalMilestones
+            val activeGoal = if (streakWasBroken) StreakGoalTier.DAYS_7.targetDays else state.streakGoalDays
+            val goalEval = evaluateStreakGoalMilestone(
+                currentStreak = newStreak,
+                selectedGoalDays = activeGoal,
+                claimedMilestones = activeClaimed
+            )
+
+            if (goalEval.newlyUnlockedTiers.isNotEmpty()) {
+                newFreeze = (newFreeze + goalEval.totalFreezesEarned).coerceIn(0, MAX_STREAK_FREEZES)
+                grantLeagueGoalRewards(goalEval)
+            } else if (newStreak > 0 && newStreak % 7 == 0 && newFreeze < MAX_STREAK_FREEZES) {
                 newFreeze += 1
             }
 
+            val rewardedGoal = goalEval.newlyUnlockedTiers.maxOfOrNull { it.targetDays } ?: state.lastRewardedGoalDays
             val newState = StreakState(
                 streakCount = newStreak,
                 streakFreezeAvailable = newFreeze,
@@ -280,7 +526,10 @@ class StreakRepository(private val context: Context) {
                 wasFrozenToday = wasFrozen,
                 daysSinceLastStudy = 0,
                 completedDates = trimRecentIsoDates(state.completedDates + todayStr),
-                updatedAtMillis = System.currentTimeMillis()
+                updatedAtMillis = System.currentTimeMillis(),
+                streakGoalDays = goalEval.nextGoalDays,
+                claimedGoalMilestones = goalEval.updatedClaimedMilestones,
+                lastRewardedGoalDays = rewardedGoal
             )
 
             persistState(newState, markPendingSync = true, syncCloudNow = true)
@@ -324,7 +573,6 @@ class StreakRepository(private val context: Context) {
 
         val lastStudyDateFromSessions = roomCompletedDates.firstOrNull()
 
-        // Compute continuous streak ending today or yesterday using combined Room + Cloud dates
         var computedStreak = 0
         if (combinedDateSet.isNotEmpty()) {
             var cursor = if (combinedDateSet.contains(today)) today else today.minusDays(1)
@@ -348,6 +596,7 @@ class StreakRepository(private val context: Context) {
 
         var resolvedFreeze = existing.streakFreezeAvailable
         var wasFrozen = existing.wasFrozenToday
+        var streakWasBroken = false
         if (newlyCompletedToday && existingLastDate != null && daysGapFromExisting > 1L) {
             val missedDays = (daysGapFromExisting - 1L).toInt()
             if (resolvedFreeze >= missedDays) {
@@ -355,6 +604,7 @@ class StreakRepository(private val context: Context) {
                 wasFrozen = true
             } else {
                 resolvedFreeze = 0
+                streakWasBroken = true
             }
         }
 
@@ -370,7 +620,18 @@ class StreakRepository(private val context: Context) {
             else -> 0
         }
 
-        if (newlyCompletedToday && finalStreak > 0 && finalStreak % 7 == 0 && resolvedFreeze < 3) {
+        val activeClaimed = if (streakWasBroken || finalStreak == 0) emptySet() else existing.claimedGoalMilestones
+        val activeGoal = if (streakWasBroken) StreakGoalTier.DAYS_7.targetDays else existing.streakGoalDays
+        val goalEval = evaluateStreakGoalMilestone(
+            currentStreak = finalStreak,
+            selectedGoalDays = activeGoal,
+            claimedMilestones = activeClaimed
+        )
+
+        if (goalEval.newlyUnlockedTiers.isNotEmpty()) {
+            resolvedFreeze = (resolvedFreeze + goalEval.totalFreezesEarned).coerceIn(0, MAX_STREAK_FREEZES)
+            grantLeagueGoalRewards(goalEval)
+        } else if (newlyCompletedToday && finalStreak > 0 && finalStreak % 7 == 0 && resolvedFreeze < MAX_STREAK_FREEZES) {
             resolvedFreeze += 1
         }
 
@@ -395,10 +656,14 @@ class StreakRepository(private val context: Context) {
             existingIsoDates + roomIsoDates + listOfNotNull(finalLastDateStr.takeIf { it.isNotBlank() })
         )
 
+        val rewardedGoal = goalEval.newlyUnlockedTiers.maxOfOrNull { it.targetDays } ?: existing.lastRewardedGoalDays
         val changed = finalStreak != existing.streakCount ||
             resolvedFreeze != existing.streakFreezeAvailable ||
             finalLastDateStr != existing.lastStreakDate ||
-            mergedIsoDates != existing.completedDates
+            mergedIsoDates != existing.completedDates ||
+            goalEval.nextGoalDays != existing.streakGoalDays ||
+            goalEval.updatedClaimedMilestones != existing.claimedGoalMilestones ||
+            rewardedGoal != existing.lastRewardedGoalDays
 
         val resolvedState = StreakState(
             streakCount = finalStreak,
@@ -407,11 +672,15 @@ class StreakRepository(private val context: Context) {
             wasFrozenToday = wasFrozen,
             daysSinceLastStudy = daysSince,
             completedDates = mergedIsoDates,
-            updatedAtMillis = if (changed) System.currentTimeMillis() else existing.updatedAtMillis
+            updatedAtMillis = if (changed) System.currentTimeMillis() else existing.updatedAtMillis,
+            streakGoalDays = goalEval.nextGoalDays,
+            claimedGoalMilestones = goalEval.updatedClaimedMilestones,
+            lastRewardedGoalDays = rewardedGoal
         )
 
         if (changed) {
             val shouldPush = newlyCompletedToday ||
+                goalEval.newlyUnlockedTiers.isNotEmpty() ||
                 resolvedState.streakCount > existing.streakCount ||
                 resolvedState.lastStreakDate > existing.lastStreakDate
             persistState(
@@ -440,7 +709,7 @@ class StreakRepository(private val context: Context) {
     }
 
     /**
-     * Applies a live Firestore `students/{uid}` (or `users/{uid}`) snapshot without blocking the UI.
+     * Applies a live Firestore `students/{uid}` snapshot without blocking the UI.
      * Returns true if local state changed (caller can refresh home widgets).
      */
     fun applyRemoteSnapshot(snapshot: DocumentSnapshot?): Boolean {
@@ -464,11 +733,11 @@ class StreakRepository(private val context: Context) {
 
     /**
      * Full two-way cloud synchronization:
-     * 1. Reads Water Streak from `students/{uid}` (reusing [prefetchedStudentDoc] when available)
-     *    with one-shot migration fallback to `users/{uid}` for pre-Mark-61 users.
+     * 1. Reads Water Streak & Streak Goal from canonical `students/{uid}` (reusing [prefetchedStudentDoc]
+     *    when available) with one-shot migration fallback to `users/{uid}` for pre-Mark-61 users.
      * 2. Merges local + remote losslessly via [resolveStreakMerge].
-     * 3. Updates local storage & widgets if remote was newer, and pushes back to BOTH
-     *    `students/{uid}` and `users/{uid}` if local was newer or pending.
+     * 3. Updates local storage & widgets if remote was newer, and pushes ONLY to canonical `students/{uid}`
+     *    (50% fewer Firestore writes than dual-writing users/{uid}).
      */
     suspend fun pullAndMergeFromCloud(
         prefetchedStudentDoc: DocumentSnapshot? = null
@@ -537,7 +806,12 @@ class StreakRepository(private val context: Context) {
         val pending = prefs.getBoolean(KEY_PENDING_SYNC, false)
         val state = readStateFromPrefs()
         if (!pending) return@withContext 0
-        if (state.streakCount <= 0 && state.lastStreakDate.isBlank() && state.completedDates.isEmpty()) {
+        if (state.streakCount <= 0 &&
+            state.lastStreakDate.isBlank() &&
+            state.completedDates.isEmpty() &&
+            state.claimedGoalMilestones.isEmpty() &&
+            state.streakGoalDays == StreakGoalTier.DAYS_7.targetDays
+        ) {
             prefs.edit().putBoolean(KEY_PENDING_SYNC, false).apply()
             return@withContext 0
         }
@@ -567,6 +841,9 @@ class StreakRepository(private val context: Context) {
             .remove(KEY_COMPLETED_DATES)
             .remove(KEY_UPDATED_AT)
             .remove(KEY_PENDING_SYNC)
+            .remove(KEY_GOAL_DAYS)
+            .remove(KEY_CLAIMED_MILESTONES)
+            .remove(KEY_LAST_REWARDED_GOAL)
             .apply()
         getOrInitSharedFlow(appContext).value = StreakState()
     }
@@ -579,13 +856,22 @@ class StreakRepository(private val context: Context) {
         val trimmedDates = trimRecentIsoDates(
             state.completedDates + listOfNotNull(state.lastStreakDate.takeIf { it.isNotBlank() })
         )
-        val normalized = state.copy(completedDates = trimmedDates)
+        val safeClaimed = state.claimedGoalMilestones.filter { it in StreakGoalTier.VALID_TARGET_DAYS }.toSet()
+        val normalized = state.copy(
+            streakFreezeAvailable = state.streakFreezeAvailable.coerceIn(0, MAX_STREAK_FREEZES),
+            completedDates = trimmedDates,
+            streakGoalDays = StreakGoalTier.sanitizeGoalDays(state.streakGoalDays),
+            claimedGoalMilestones = safeClaimed
+        )
         prefs.edit()
             .putInt(KEY_STREAK_COUNT, normalized.streakCount)
             .putInt(KEY_FREEZE_AVAILABLE, normalized.streakFreezeAvailable)
             .putString(KEY_LAST_DATE, normalized.lastStreakDate)
             .putStringSet(KEY_COMPLETED_DATES, trimmedDates)
             .putLong(KEY_UPDATED_AT, normalized.updatedAtMillis)
+            .putInt(KEY_GOAL_DAYS, normalized.streakGoalDays)
+            .putStringSet(KEY_CLAIMED_MILESTONES, safeClaimed.map { it.toString() }.toSet())
+            .putInt(KEY_LAST_REWARDED_GOAL, normalized.lastRewardedGoalDays)
             .putBoolean(KEY_PENDING_SYNC, markPendingSync)
             .apply()
         getOrInitSharedFlow(appContext).value = normalized
@@ -603,12 +889,17 @@ class StreakRepository(private val context: Context) {
         val recentDates = trimRecentIsoDates(
             state.completedDates + listOfNotNull(state.lastStreakDate.takeIf { it.isNotBlank() })
         ).sortedDescending()
+        val claimedSorted = state.claimedGoalMilestones
+            .filter { it in StreakGoalTier.VALID_TARGET_DAYS }
+            .sorted()
         return hashMapOf(
             "streakCount" to state.streakCount,
             "streakDays" to state.streakCount,
-            "streakFreezeAvailable" to state.streakFreezeAvailable,
+            "streakFreezeAvailable" to state.streakFreezeAvailable.coerceIn(0, MAX_STREAK_FREEZES),
             "lastStreakDate" to state.lastStreakDate,
             "waterStreakCompletedDates" to recentDates,
+            "streakGoalDays" to StreakGoalTier.sanitizeGoalDays(state.streakGoalDays),
+            "claimedStreakGoalMilestones" to claimedSorted,
             "streakUpdatedAt" to ts
         )
     }
@@ -623,6 +914,7 @@ class StreakRepository(private val context: Context) {
             return
         }
 
+        // Single canonical write to students/{uid} (50% fewer Firestore writes; no redundant users/{uid} mirror)
         val data = buildCloudPayload(state)
         db.collection("students").document(uid)
             .set(data, SetOptions.merge())
@@ -636,12 +928,6 @@ class StreakRepository(private val context: Context) {
                 Log.w(TAG, "Failed to sync water streak to students/$uid (will retry via SyncWorker): ${e.message}")
                 SyncWorker.enqueueImmediateSync(appContext)
             }
-
-        db.collection("users").document(uid)
-            .set(data, SetOptions.merge())
-            .addOnFailureListener { e ->
-                Log.w(TAG, "Failed to mirror water streak to users/$uid: ${e.message}")
-            }
     }
 
     private suspend fun pushStateToFirestoreSuspend(uid: String, state: StreakState): Boolean {
@@ -649,9 +935,6 @@ class StreakRepository(private val context: Context) {
         val data = buildCloudPayload(state)
         return try {
             db.collection("students").document(uid).set(data, SetOptions.merge()).await()
-            runCatching {
-                db.collection("users").document(uid).set(data, SetOptions.merge()).await()
-            }
             true
         } catch (e: Exception) {
             Log.w(TAG, "Suspended water streak push failed: ${e.message}")
@@ -664,28 +947,44 @@ class StreakRepository(private val context: Context) {
             doc.contains("streakDays") ||
             doc.contains("lastStreakDate") ||
             doc.contains("streakFreezeAvailable") ||
-            doc.contains("waterStreakCompletedDates")
+            doc.contains("waterStreakCompletedDates") ||
+            doc.contains("streakGoalDays") ||
+            doc.contains("claimedStreakGoalMilestones")
         if (!hasStreakField) return null
 
         val countFromPrimary = readIntField(doc, "streakCount")
         val countFromLegacy = readIntField(doc, "streakDays")
         val count = maxOf(countFromPrimary ?: 0, countFromLegacy ?: 0).coerceAtLeast(0)
-        val freeze = (readIntField(doc, "streakFreezeAvailable") ?: 0).coerceIn(0, 3)
+        val freeze = (readIntField(doc, "streakFreezeAvailable") ?: 0).coerceIn(0, MAX_STREAK_FREEZES)
         val lastDate = doc.getString("lastStreakDate")?.trim().orEmpty()
         val updatedAt = (readLongField(doc, "streakUpdatedAt") ?: 0L).coerceAtLeast(0L)
         val rawDates = (doc.get("waterStreakCompletedDates") as? List<*>)
             ?.mapNotNull { it?.toString()?.trim() }
             .orEmpty()
         val dates = trimRecentIsoDates(rawDates + listOfNotNull(lastDate.takeIf { it.isNotBlank() }))
+        val goalDays = StreakGoalTier.sanitizeGoalDays(
+            readIntField(doc, "streakGoalDays") ?: StreakGoalTier.DAYS_7.targetDays
+        )
+        val claimed = (doc.get("claimedStreakGoalMilestones") as? List<*>)
+            ?.mapNotNull { (it as? Number)?.toInt() ?: it?.toString()?.toIntOrNull() }
+            ?.filter { it in StreakGoalTier.VALID_TARGET_DAYS }
+            ?.toSet()
+            .orEmpty()
 
-        if (count == 0 && freeze == 0 && lastDate.isBlank() && dates.isEmpty()) return null
+        if (count == 0 && freeze == 0 && lastDate.isBlank() && dates.isEmpty() && claimed.isEmpty() &&
+            goalDays == StreakGoalTier.DAYS_7.targetDays
+        ) {
+            return null
+        }
         return StreakState(
             streakCount = count,
             streakFreezeAvailable = freeze,
             lastStreakDate = lastDate,
             daysSinceLastStudy = computeDaysSinceDate(parseIsoDateOrNull(lastDate), LocalDate.now()),
             completedDates = dates,
-            updatedAtMillis = updatedAt
+            updatedAtMillis = updatedAt,
+            streakGoalDays = goalDays,
+            claimedGoalMilestones = claimed
         )
     }
 
@@ -708,8 +1007,12 @@ class StreakRepository(private val context: Context) {
         private const val KEY_COMPLETED_DATES = "waterStreakCompletedDates"
         private const val KEY_UPDATED_AT = "streakUpdatedAt"
         private const val KEY_PENDING_SYNC = "streakPendingSync"
+        private const val KEY_GOAL_DAYS = "streakGoalDays"
+        private const val KEY_CLAIMED_MILESTONES = "claimedStreakGoalMilestones"
+        private const val KEY_LAST_REWARDED_GOAL = "lastRewardedStreakGoalDays"
         const val MIN_DAILY_STREAK_MINUTES = 20
         const val MIN_DAILY_STREAK_QUESTIONS = 20
+        const val MAX_STREAK_FREEZES = 15
 
         @Volatile
         private var sharedFlow: MutableStateFlow<StreakState>? = null

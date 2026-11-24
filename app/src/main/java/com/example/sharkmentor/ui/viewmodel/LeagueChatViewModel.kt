@@ -1674,7 +1674,7 @@ class LeagueChatViewModel(application: Application) : AndroidViewModel(applicati
         messagesListener?.remove()
         messagesListener = collection
             .orderBy("createdAtMillis", Query.Direction.ASCENDING)
-            .limitToLast(150)
+            .limitToLast(60)
             .addSnapshotListener { snap, error ->
                 if (error != null) {
                     Log.w("LeagueChatVM", "messages listener warning: ${error.message}")

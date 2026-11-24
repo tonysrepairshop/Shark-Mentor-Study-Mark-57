@@ -252,6 +252,19 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
     /** Union of all friend IDs + joined study group member IDs eligible for Study Nudges. */
     private var eligibleSocialMemberIds: Set<String> = emptySet()
 
+    // ── Firebase Quota Protection Caches ─────────────────────────────────────
+    private val quotaPrefs by lazy {
+        appContext.getSharedPreferences("shark_league_quota_prefs", Context.MODE_PRIVATE)
+    }
+    @Volatile
+    private var cachedCloudWeeklySeconds: Pair<String, Long>? = null
+    @Volatile
+    private var cachedCloudWeeklyAtMs: Long = 0L
+    @Volatile
+    private var lastPushedProfileSignature: String? = null
+    @Volatile
+    private var lastPushedProfileAtMs: Long = 0L
+
     private data class TierBreakdown(
         val entriesByTier: Map<SharkTier, List<LeagueEntry>>,
         val tierCounts: Map<SharkTier, Int>,
@@ -819,12 +832,12 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
 
                 ensureSocialListeners(uid)
 
-                // 2. Fetch students/{uid} and cloud weekly focus stats concurrently
+                // 2. Fetch students/{uid} and cached/bounded cloud weekly focus stats concurrently
                 val (studentDoc, cloudWeeklySeconds) = coroutineScope {
                     val studentDeferred = async {
                         runCatching { database.collection("students").document(uid).get().await() }.getOrNull()
                     }
-                    val cloudSecsDeferred = async { computeCloudWeeklyFocusSeconds(uid) }
+                    val cloudSecsDeferred = async { computeCloudWeeklyFocusSeconds(uid, localWeeklySeconds) }
                     studentDeferred.await() to cloudSecsDeferred.await()
                 }
 
@@ -1008,7 +1021,7 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
                     badgeProgress = finalProgress
                 )
 
-                // 3. Concurrently push profile/league stats, sync study_group names, and pull leaderboard + social circles
+                // 3. Concurrently push profile/league stats (skip-unchanged) and pull leaderboard, then reuse entries for social circles
                 val useInst = _uiState.value.useInstitutionFilter && branchCode.isNotBlank()
                 val targetBucket = if (useInst) branchCode else GLOBAL_LEAGUE_BUCKET
                 val activeSelectedGroup = _uiState.value.selectedGroupCode
@@ -1035,15 +1048,20 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
                             badgeProgress = finalProgress
                         )
                         if (isMeaningfulName(myName) && allGroupCodes.isNotEmpty()) {
-                            allGroupCodes.map { code ->
-                                async {
-                                    runCatching {
-                                        database.collection("study_groups").document(code)
-                                            .set(mapOf("memberNames" to mapOf(uid to myName)), SetOptions.merge())
-                                            .await()
+                            val groupSyncSig = "$uid|$myName|${allGroupCodes.sorted().joinToString(",")}"
+                            val prevGroupSig = quotaPrefs.getString("last_group_names_sig", null)
+                            if (prevGroupSig != groupSyncSig) {
+                                allGroupCodes.map { code ->
+                                    async {
+                                        runCatching {
+                                            database.collection("study_groups").document(code)
+                                                .set(mapOf("memberNames" to mapOf(uid to myName)), SetOptions.merge())
+                                                .await()
+                                        }
                                     }
-                                }
-                            }.awaitAll()
+                                }.awaitAll()
+                                quotaPrefs.edit().putString("last_group_names_sig", groupSyncSig).apply()
+                            }
                         }
                     }
 
@@ -1056,19 +1074,20 @@ class SharkLeagueViewModel(application: Application) : AndroidViewModel(applicat
                         ).filter { it.isCurrentUser || !blockedSet.contains(it.studentId) }
                     }
 
-                    val socialDeferred = async {
-                        fetchGroupsAndFriendsEntries(
-                            uid = uid,
-                            myEntry = myEntry,
-                            groupCodes = allGroupCodes,
-                            friendIds = allFriendIds,
-                            selectedGroupCode = activeSelectedGroup,
-                            weekKey = currentWeekKey
-                        )
-                    }
+                    val fetchedGlobal = leaderboardDeferred.await()
+                    val knownById = fetchedGlobal.associateBy { it.studentId }
+                    val socialResult = fetchGroupsAndFriendsEntries(
+                        uid = uid,
+                        myEntry = myEntry,
+                        groupCodes = allGroupCodes,
+                        friendIds = allFriendIds,
+                        selectedGroupCode = activeSelectedGroup,
+                        weekKey = currentWeekKey,
+                        knownEntriesById = knownById
+                    )
 
                     pushProfileJob.await()
-                    leaderboardDeferred.await() to socialDeferred.await()
+                    fetchedGlobal to socialResult
                 }
 
                 val (groupSummaries, rawSocialEntries) = socialPair
@@ -2000,10 +2019,17 @@ try {
         }
     }
 
-    private suspend fun computeCloudWeeklyFocusSeconds(uid: String): Long {
+    private suspend fun computeCloudWeeklyFocusSeconds(
+        uid: String,
+        localWeeklySeconds: Long = 0L
+    ): Long {
         return try {
-            val database = db ?: return 0L
             val now = System.currentTimeMillis()
+            val cached = cachedCloudWeeklySeconds
+            if (cached != null && cached.first == uid && (now - cachedCloudWeeklyAtMs) < 5L * 60L * 1000L) {
+                return cached.second
+            }
+            val database = db ?: return 0L
             val weekStart = now - 7L * 24 * 3600 * 1000
             val timerState = FocusTimerService.timerStateFlow.value
             val activeSessionId = if (timerState.timerPhase != TimerPhase.IDLE) {
@@ -2014,7 +2040,7 @@ try {
             val fromSessions = try {
                 studentDocRef.collection("sessions")
                     .whereGreaterThanOrEqualTo("timestamp", weekStart)
-                    .limit(120)
+                    .limit(100)
                     .get()
                     .await()
                     .documents
@@ -2024,13 +2050,14 @@ try {
                 0L
             }
 
-            if (fromSessions > 0L) {
+            val resolved = if (fromSessions > 0L || localWeeklySeconds > 0L) {
                 fromSessions
             } else {
+                // Only query legacy focus_sessions if both local Room and primary sessions are empty
                 try {
                     studentDocRef.collection("focus_sessions")
                         .whereGreaterThanOrEqualTo("timestamp", weekStart)
-                        .limit(120)
+                        .limit(80)
                         .get()
                         .await()
                         .documents
@@ -2040,6 +2067,9 @@ try {
                     0L
                 }
             }
+            cachedCloudWeeklySeconds = uid to resolved
+            cachedCloudWeeklyAtMs = now
+            resolved
         } catch (e: Exception) {
             0L
         }
@@ -2072,6 +2102,22 @@ try {
             val cappedBonus = minOf(safeBonus, MAX_WEEKLY_BONUS_SECONDS)
             val effectiveSeconds = weeklyFocusSeconds.coerceAtLeast(0L) + cappedBonus
             val resolvedTierName = (effectiveTier ?: effectiveSeconds.toTier()).name
+            val cleanSubj = com.example.sharkmentor.core.coaching.CoachingEngine
+                .formatCleanLeagueSubject(activeSubject.orEmpty())
+
+            // Quota guard: skip redundant Firestore writes if no meaningful league stat changed within 3 minutes
+            val profileSignature = buildString {
+                append(uid).append('|').append(name).append('|').append(friendCode).append('|')
+                append(weeklyFocusSeconds / 60L).append('|').append(safeBonus).append('|').append(weekKey).append('|')
+                append(streakDays).append('|').append(branchCode).append('|').append(resolvedTierName).append('|')
+                append(isStudyingNow).append('|').append(cleanSubj).append('|').append(avatarBase64.hashCode()).append('|')
+                append(effectivePresetId).append('|').append(mentorPoints).append('|').append(showcaseBadges)
+            }
+            val nowMs = System.currentTimeMillis()
+            if (lastPushedProfileSignature == profileSignature && (nowMs - lastPushedProfileAtMs) < 3L * 60L * 1000L) {
+                return
+            }
+
             val leaguePayload = hashMapOf<String, Any>(
                 "studentId" to uid,
                 "displayName" to name,
@@ -2085,8 +2131,7 @@ try {
                 "streakDays" to streakDays,
                 "tier" to resolvedTierName,
                 "isStudying" to isStudyingNow,
-                "activeSubject" to com.example.sharkmentor.core.coaching.CoachingEngine
-                    .formatCleanLeagueSubject(activeSubject.orEmpty()),
+                "activeSubject" to cleanSubj,
                 "avatarBase64" to avatarBase64,
                 "avatarPresetId" to effectivePresetId,
                 "mentorPoints" to mentorPoints,
@@ -2115,6 +2160,9 @@ try {
                 studentPayload["displayName"] = name
             }
 
+            val friendCodeSig = "$uid|$friendCode|$name"
+            val needsFriendCodeWrite = quotaPrefs.getString("last_friend_code_sig", null) != friendCodeSig
+
             coroutineScope {
                 // 1. Always upsert into Bireysel Genel Lig (GLOBAL_INDIVIDUAL)
                 val globalJob = async {
@@ -2134,22 +2182,25 @@ try {
                         }
                     }
                 } else null
-                // 3. Register friend_codes/{friendCode} for instant lookup
-                val friendCodeJob = async {
-                    try {
-                        database.collection("friend_codes").document(friendCode)
-                            .set(
-                                mapOf(
-                                    "friendCode" to friendCode,
-                                    "studentId" to uid,
-                                    "displayName" to name,
-                                    "updatedAt" to FieldValue.serverTimestamp()
-                                ),
-                                SetOptions.merge()
-                            )
-                            .await()
-                    } catch (_: Exception) {}
-                }
+                // 3. Register friend_codes/{friendCode} ONLY when code or display name changed
+                val friendCodeJob = if (needsFriendCodeWrite) {
+                    async {
+                        try {
+                            database.collection("friend_codes").document(friendCode)
+                                .set(
+                                    mapOf(
+                                        "friendCode" to friendCode,
+                                        "studentId" to uid,
+                                        "displayName" to name,
+                                        "updatedAt" to FieldValue.serverTimestamp()
+                                    ),
+                                    SetOptions.merge()
+                                )
+                                .await()
+                            quotaPrefs.edit().putString("last_friend_code_sig", friendCodeSig).apply()
+                        } catch (_: Exception) {}
+                    }
+                } else null
                 // 4. Mirror summary stats on students/{uid} so friends & groups can read them
                 val studentJob = async {
                     database.collection("students").document(uid)
@@ -2159,9 +2210,11 @@ try {
 
                 globalJob.await()
                 branchJob?.await()
-                friendCodeJob.await()
+                friendCodeJob?.await()
                 studentJob.await()
             }
+            lastPushedProfileSignature = profileSignature
+            lastPushedProfileAtMs = System.currentTimeMillis()
         } catch (e: Exception) {
             Log.w("SharkLeagueVM", "registerFriendCodeAndProfile warning: ${e.message}")
         }
@@ -2179,12 +2232,12 @@ try {
                 .document(bucketId)
                 .collection("weeklyLeague")
                 .orderBy("weeklyFocusSeconds", Query.Direction.DESCENDING)
-                .limit(100)
+                .limit(60)
                 .get()
                 .await()
 
             // Avoid N+1 Firestore read bombs: only fetch students/{id} for legacy weeklyLeague docs
-            // missing a meaningful displayName or mentorPoints, capped at 12 fallback reads per load.
+            // missing a meaningful displayName or mentorPoints, capped at 5 fallback reads per load.
             val legacyIdsToEnrich = leagueSnap.documents
                 .asSequence()
                 .filter { doc ->
@@ -2194,7 +2247,7 @@ try {
                         )
                 }
                 .map { it.id }
-                .take(12)
+                .take(5)
                 .toSet()
 
             val mapped = coroutineScope {
@@ -2377,7 +2430,8 @@ try {
         groupCodes: Set<String>,
         friendIds: Set<String>,
         selectedGroupCode: String?,
-        weekKey: String
+        weekKey: String,
+        knownEntriesById: Map<String, LeagueEntry> = emptyMap()
     ): Pair<List<StudyGroupSummary>, List<LeagueEntry>> {
         val database = db ?: return emptyList<StudyGroupSummary>() to listOf(myEntry)
 
@@ -2447,21 +2501,24 @@ try {
             coroutineScope {
                 peerIds.map { memberId ->
                     async {
+                        // 0 extra Firestore reads when this friend/group member was already fetched in weeklyLeague!
+                        knownEntriesById[memberId]?.let { cachedPeer ->
+                            return@async cachedPeer
+                        }
                         try {
-                            // Fetch students/{memberId} and GLOBAL_INDIVIDUAL weeklyLeague concurrently
-                            val studentDeferred = async {
-                                database.collection("students").document(memberId).get().await()
-                            }
-                            val leagueDeferred = async {
+                            // Primary 1-read lookup on students/{memberId}; only query weeklyLeague if weeklyFocusSeconds missing
+                            val studentSnap = database.collection("students").document(memberId).get().await()
+                            val hasStudentStats = studentSnap.exists() && studentSnap.contains("weeklyFocusSeconds")
+                            val globalLeagueSnap = if (!hasStudentStats) {
                                 try {
                                     database.collection("institutions").document(GLOBAL_LEAGUE_BUCKET)
                                         .collection("weeklyLeague").document(memberId).get().await()
                                 } catch (_: Exception) {
                                     null
                                 }
+                            } else {
+                                null
                             }
-                            val studentSnap = studentDeferred.await()
-                            val globalLeagueSnap = leagueDeferred.await()
 
                             val extracted = extractPreferredName(studentSnap, globalLeagueSnap, fallback = "")
                             val mapFallback = memberNamesLookup[memberId]

@@ -70,6 +70,17 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
                 val wasActiveSession = previous.timerPhase != TimerPhase.IDLE
                 val isActiveSession = state.timerPhase != TimerPhase.IDLE
 
+                // Keep pager locked to the active timer mode whenever a session starts or changes mode
+                val startedOrSwitchedMode = isActiveSession && (
+                    !wasActiveSession || previous.currentMode != state.currentMode
+                )
+                if (startedOrSwitchedMode) {
+                    val targetIdx = TimerMode.entries.indexOf(state.currentMode)
+                    if (targetIdx >= 0) {
+                        _currentPage.value = targetIdx
+                    }
+                }
+
                 val isBreakPhase = state.timerPhase == TimerPhase.MANDATORY_BREAK || (state.currentMode == TimerMode.BREAK && state.timerPhase != TimerPhase.IDLE)
                 if (isBreakPhase) {
                     SessionManager.setBreakActive(true)
@@ -77,7 +88,7 @@ class TimerViewModel(application: Application) : AndroidViewModel(application) {
                     SessionManager.setTimerRunning(true)
                 } else if (state.timerPhase == TimerPhase.IDLE) {
                     SessionManager.setTimerRunning(false)
-                        FocusSessionState.setRunning(false)
+                    FocusSessionState.setRunning(false)
                     SessionManager.setBreakActive(false)
                 }
 

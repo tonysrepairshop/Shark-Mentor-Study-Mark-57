@@ -116,6 +116,7 @@ import com.example.sharkmentor.ui.coaching.StudyModeHeaderSwitcher
 import com.example.sharkmentor.ui.theme.SharkMentorTheme
 import com.example.sharkmentor.ui.viewmodel.AnalyticsViewModel
 import com.example.sharkmentor.ui.viewmodel.TimerViewModel
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,9 +154,11 @@ fun HomeScreen(
     modifier           : Modifier           = Modifier,
     viewModel          : TimerViewModel     = viewModel(),
     analyticsViewModel : AnalyticsViewModel = viewModel(),
-    onNavigateToSharkAi: () -> Unit         = {}
+    onNavigateToSharkAi: () -> Unit         = {},
+    onNavigateToPlans  : () -> Unit         = {}
 ) {
     val context = LocalContext.current
+    val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(context) {
         CoachingEngine.ensureInitialized(context)
         CoachingEngine.refreshTargetAndLedgerAsync(context)
@@ -165,6 +168,10 @@ fun HomeScreen(
     val currentPage: Int by viewModel.currentPage.collectAsStateWithLifecycle()
     val analyticsState by analyticsViewModel.uiState.collectAsStateWithLifecycle()
     val dailyScore = analyticsState.dailyScore
+
+    val streakRepository = remember(context) { com.example.sharkmentor.data.repository.StreakRepository(context) }
+    val streakState by streakRepository.streakState.collectAsStateWithLifecycle()
+    var showStreakGoalDialog by remember { mutableStateOf(false) }
 
     val comprehensiveSupportEnabled by CoachingEngine.comprehensiveSupportEnabled.collectAsStateWithLifecycle()
     val studyMode by CoachingEngine.studyMode.collectAsStateWithLifecycle()
@@ -222,6 +229,42 @@ fun HomeScreen(
         )
     }
 
+    if (showStreakGoalDialog) {
+        StreakGoalChallengeDialog(
+            streakState = streakState,
+            onSelectGoalDays = { targetDays ->
+                val eval = streakRepository.setStreakGoalDays(targetDays)
+                uiScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(context) }
+                }
+                if (eval.newlyUnlockedTiers.isEmpty()) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "$targetDays günlük seri hedefin ayarlandı!",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            },
+            onDismiss = { showStreakGoalDialog = false }
+        )
+    }
+
+    if (streakState.lastRewardedGoalDays > 0) {
+        val unlockedTier = com.example.sharkmentor.data.repository.StreakGoalTier.fromTargetDays(
+            streakState.lastRewardedGoalDays
+        )
+        StreakGoalRewardCelebrationDialog(
+            unlockedTier = unlockedTier,
+            nextGoalDays = streakState.streakGoalDays,
+            onDismiss = {
+                streakRepository.acknowledgeGoalReward()
+                uiScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                    runCatching { com.example.sharkmentor.core.widget.WidgetUpdateManager.updateAllWidgets(context) }
+                }
+            }
+        )
+    }
+
     val pagerState = rememberPagerState(pageCount = { TimerMode.entries.size })
 
     LaunchedEffect(pagerState) {
@@ -233,10 +276,39 @@ fun HomeScreen(
 
     val isMandatoryBreak = timerState.timerPhase == TimerPhase.MANDATORY_BREAK
 
-    // ── Pre-launch Focus Topic Selection popup & Break confirmation state ─────
+    // ── Pre-launch Focus Topic Selection popup, Widget Launch Picker & Switch Guard ─────
     var showBreakConfirmDialog by remember { mutableStateOf(false) }
     var pendingMode by remember { mutableStateOf<TimerMode?>(null) }
     var pendingFocusLaunchMode by remember { mutableStateOf<TimerMode?>(null) }
+    var pendingLaunchAllowsModeChoice by remember { mutableStateOf(false) }
+    var pendingSwitchActiveTimerMode by remember { mutableStateOf<TimerMode?>(null) }
+
+    // Listen for Duolingo Streak Widget / Focus Widget launch requests
+    val widgetFocusLaunchRequested by com.example.sharkmentor.core.timer.FocusLaunchNavBus
+        .openFocusLaunchPickerRequested.collectAsStateWithLifecycle()
+    LaunchedEffect(widgetFocusLaunchRequested) {
+        if (widgetFocusLaunchRequested) {
+            com.example.sharkmentor.core.timer.FocusLaunchNavBus.consumeOpenFocusLaunchPicker()
+            if (comprehensiveSupportEnabled && studyMode == AppStudyMode.REAL_COACHING) {
+                CoachingEngine.setStudyMode(context, AppStudyMode.FREE_TRACKING)
+            }
+            if (timerState.timerPhase != TimerPhase.IDLE) {
+                // Already running/paused: scroll straight to the active timer with zero mode conflict
+                val activeIdx = TimerMode.entries.indexOf(timerState.currentMode)
+                if (activeIdx >= 0) {
+                    viewModel.onPageChanged(activeIdx)
+                    runCatching { pagerState.animateScrollToPage(activeIdx) }
+                }
+            } else {
+                // IDLE: open Mode + Focus Tag/Label picker so user names their session cleanly
+                val defaultMode = TimerMode.entries.getOrNull(pagerState.currentPage)
+                    ?.takeIf { it != TimerMode.BREAK }
+                    ?: TimerMode.STOPWATCH
+                pendingLaunchAllowsModeChoice = true
+                pendingFocusLaunchMode = defaultMode
+            }
+        }
+    }
 
     val formattedActiveSubject = remember(selectedFocusTitle, focusSubNote) {
         CoachingEngine.buildFormattedFocusSubject(selectedFocusTitle, focusSubNote)
@@ -249,17 +321,69 @@ fun HomeScreen(
             customTitles = customFocusTitles,
             selectedTitle = selectedFocusTitle,
             subNote = focusSubNote,
+            allowModeSelection = pendingLaunchAllowsModeChoice,
+            onSelectMode = { chosen ->
+                pendingFocusLaunchMode = chosen
+                val idx = TimerMode.entries.indexOf(chosen)
+                if (idx >= 0) viewModel.onPageChanged(idx)
+            },
             onSelectTitle = { CoachingEngine.selectFocusTitle(context, it) },
             onSubNoteChange = { CoachingEngine.setFocusSubNote(context, it) },
             onAddCustomTitle = { CoachingEngine.addCustomFocusTitle(context, it) },
             onRemoveCustomTitle = { CoachingEngine.removeCustomFocusTitle(context, it) },
             onConfirmStart = {
                 val activeSubj = CoachingEngine.buildFormattedFocusSubject(selectedFocusTitle, focusSubNote)
+                val targetIdx = TimerMode.entries.indexOf(modeToStart)
+                if (targetIdx >= 0) viewModel.onPageChanged(targetIdx)
                 viewModel.startTimer(modeToStart, activeSubj)
                 pendingFocusLaunchMode = null
+                pendingLaunchAllowsModeChoice = false
             },
             onDismiss = {
                 pendingFocusLaunchMode = null
+                pendingLaunchAllowsModeChoice = false
+            }
+        )
+    }
+
+    pendingSwitchActiveTimerMode?.let { nextMode ->
+        AlertDialog(
+            onDismissRequest = { pendingSwitchActiveTimerMode = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = {
+                Text(
+                    text = "Aktif Sayaç Değiştirilsin mi?",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
+            text = {
+                Text(
+                    text = "Şu anda ${timerState.currentMode.displayName} sayacı çalışıyor. ${nextMode.displayName} moduna geçersen mevcut seans kaydedilip yeni sayaç başlatılır.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingSwitchActiveTimerMode = null
+                        if (nextMode == TimerMode.BREAK) {
+                            viewModel.startTimer(nextMode, formattedActiveSubject)
+                        } else {
+                            pendingLaunchAllowsModeChoice = false
+                            pendingFocusLaunchMode = nextMode
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Geçiş Yap", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingSwitchActiveTimerMode = null }) {
+                    Text("Vazgeç")
+                }
             }
         )
     }
@@ -274,6 +398,7 @@ fun HomeScreen(
                     if (chosenMode == TimerMode.BREAK) {
                         viewModel.startTimer(chosenMode, formattedActiveSubject)
                     } else {
+                        pendingLaunchAllowsModeChoice = false
                         pendingFocusLaunchMode = chosenMode
                     }
                 }
@@ -307,7 +432,8 @@ fun HomeScreen(
                 onPauseFocus = viewModel::pauseTimer,
                 onResumeFocus = viewModel::resumeTimer,
                 onStopFocus = viewModel::resetTimer,
-                onNavigateToSharkAi = onNavigateToSharkAi
+                onNavigateToSharkAi = onNavigateToSharkAi,
+                onNavigateToPlans = onNavigateToPlans
             )
         } else {
             Column(
@@ -325,6 +451,12 @@ fun HomeScreen(
                         onModeChange = { CoachingEngine.setStudyMode(context, it) }
                     )
                 }
+
+                // Compact Duolingo-style Water Streak & Goal Challenge Strip (7 / 14 / 30 / 50 gün)
+                WaterStreakGoalStrip(
+                    streakState = streakState,
+                    onClick = { showStreakGoalDialog = true }
+                )
 
                 val isBreakActive by SessionManager.isBreakActive.collectAsStateWithLifecycle()
 
@@ -376,6 +508,55 @@ fun HomeScreen(
                     MolaActiveBanner(remainingMillis = timerState.displayMillis, modifier = Modifier.fillMaxWidth())
                 }
 
+                val selectedMode = TimerMode.entries[pagerState.currentPage]
+                val anotherModeIsRunning = timerState.timerPhase != TimerPhase.IDLE &&
+                    timerState.timerPhase != TimerPhase.MANDATORY_BREAK &&
+                    timerState.currentMode != selectedMode
+
+                // Active-timer notice when browsing another mode page so two timers never conflict
+                AnimatedVisibility(
+                    visible = anotherModeIsRunning,
+                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                ) {
+                    androidx.compose.material3.Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Aktif: ${timerState.currentMode.displayName}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = "${TimeUtils.formatAdaptiveTime(timerState.displayMillis)} • ${timerState.activeSubject.ifBlank { "Odak" }}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(
+                                onClick = {
+                                    val activeIdx = TimerMode.entries.indexOf(timerState.currentMode)
+                                    if (activeIdx >= 0) viewModel.onPageChanged(activeIdx)
+                                }
+                            ) {
+                                Text("Aktif Sayaca Git", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
                 // 1. Odak Sayıcıları (Top of HomeScreen)
                 ModeIndicatorDots(count = TimerMode.entries.size, currentPage = pagerState.currentPage)
 
@@ -404,15 +585,16 @@ fun HomeScreen(
                     }
                 }
 
-                val selectedMode = TimerMode.entries[pagerState.currentPage]
-
                 TimerControls(
                     mode = selectedMode,
                     timerState = timerState,
                     onStart = {
-                        if (selectedMode == TimerMode.BREAK) {
+                        if (anotherModeIsRunning) {
+                            pendingSwitchActiveTimerMode = selectedMode
+                        } else if (selectedMode == TimerMode.BREAK) {
                             viewModel.startTimer(selectedMode, formattedActiveSubject)
                         } else {
+                            pendingLaunchAllowsModeChoice = false
                             pendingFocusLaunchMode = selectedMode
                         }
                     },
@@ -445,6 +627,84 @@ fun HomeScreen(
                     onRefreshScore = { analyticsViewModel.refreshDailyScore() }
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun WaterStreakGoalStrip(
+    streakState: com.example.sharkmentor.data.repository.StreakState,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val activeTier = com.example.sharkmentor.data.repository.StreakGoalTier.fromTargetDays(streakState.streakGoalDays)
+    val clamped = streakState.streakCount.coerceAtMost(activeTier.targetDays)
+    val progress = (clamped.toFloat() / activeTier.targetDays.toFloat()).coerceIn(0f, 1f)
+
+    androidx.compose.material3.Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
+        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.25f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "💧 ${streakState.streakCount} Gün Seri",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = colorScheme.onSurface
+                    )
+                    if (streakState.streakFreezeAvailable > 0) {
+                        androidx.compose.material3.Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = "❄️ ${streakState.streakFreezeAvailable}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                androidx.compose.material3.Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = colorScheme.primary.copy(alpha = 0.14f)
+                ) {
+                    Text(
+                        text = "Hedef $clamped/${activeTier.targetDays}g • +${activeTier.leaguePointsReward}p",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                    )
+                }
+            }
+            androidx.compose.material3.LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(5.dp),
+                color = colorScheme.primary,
+                trackColor = colorScheme.surface
+            )
         }
     }
 }
