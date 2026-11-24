@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 70 APK
+name: Build SharkMentor Mark 71 APK
 
 on:
   push:
@@ -14,6 +14,7 @@ on:
       - mark-67
       - mark-69
       - mark-70
+      - mark-71
   workflow_dispatch:
 
 permissions:
@@ -267,7 +268,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark70-debug-apk
+          name: SharkMentor-Mark71-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -276,8 +277,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark70-debug.apk
-          gh release delete mark70-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark70-apk SharkMentor-Mark70-debug.apk \
-            --title "Shark Mentor Study Mark 70 (Debug APK)" \
-            --notes "Mark 70 deneysel sürüm: Öğrenci Dosyası deneme neti & analiz takibi + /hedef dosya güncelleme onayı, Kaynak seçmeli Akıllı Bilgi Kartları (Not/PDF/Hata Bankası + öncelikli tekrar + AI Koç özeti), Sesli Tekrar (Beta), Profil & Lig paylaşılabilir Shark Kartı, Paper & Obsidian temaları + Döngü modu ve Piano Black PACE/KEEP tasarımı."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark71-debug.apk
+          gh release delete mark71-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark71-apk SharkMentor-Mark71-debug.apk \
+            --title "Shark Mentor Study Mark 71 (Debug APK)" \
+            --notes "Mark 71 sürümü: İçe aktarılan playlist videolarını tekil silme, sıfırlanan çalışma başlığı & gerçek metin senkronizasyonu, arka planda/kilitli ekranda medya bildirimli video oynatma, gerçek Not/PDF özeti Podcast motoru, Ana Ekran solunda 5 temalı (Default, Modern Vinyl, Classic Vinyl, CD, Cassette) dönen plaklı Müzik & Zen çalar, konuma/saate duyarlı Tema Döngüsü + Mavi Işık Filtresi ve Kronometre ekran açık tutma seçeneği."

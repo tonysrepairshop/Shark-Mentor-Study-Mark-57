@@ -1425,6 +1425,86 @@ object BookCampManager {
     }
 
     /**
+     * Pure helper that removes a single imported playlist episode and re-indexes remaining episodes `1..N`.
+     */
+    fun removeEpisodeAndReindex(
+        episodes: List<CampDayEpisode>,
+        targetDayNumber: Int,
+        targetVideoId: String = ""
+    ): List<CampDayEpisode> {
+        if (episodes.isEmpty()) return emptyList()
+        var removed = false
+        val filtered = episodes.filter { ep ->
+            if (removed) {
+                true
+            } else {
+                val match = when {
+                    targetVideoId.isNotBlank() && ep.videoId == targetVideoId && ep.dayNumber == targetDayNumber -> true
+                    ep.dayNumber == targetDayNumber && (targetVideoId.isBlank() || ep.videoId.isBlank()) -> true
+                    else -> false
+                }
+                if (match) {
+                    removed = true
+                    false
+                } else {
+                    true
+                }
+            }
+        }.let { firstPass ->
+            if (removed || targetVideoId.isBlank()) {
+                firstPass
+            } else {
+                var fallbackRemoved = false
+                episodes.filter { ep ->
+                    if (!fallbackRemoved && ep.videoId == targetVideoId) {
+                        fallbackRemoved = true
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }
+        }
+        return filtered.mapIndexed { index, ep ->
+            ep.copy(dayNumber = index + 1)
+        }
+    }
+
+    /**
+     * Removes a single episode from a saved [ResourceCampBinding] and persists the updated sequence.
+     */
+    fun removeEpisodeFromBinding(
+        context: Context,
+        resourceId: Long,
+        episode: CampDayEpisode
+    ): ResourceCampBinding? {
+        ensureLoaded(context)
+        val existing = _bindingsByResourceId.value[resourceId] ?: return null
+        val reindexed = removeEpisodeAndReindex(
+            episodes = existing.episodes,
+            targetDayNumber = episode.dayNumber,
+            targetVideoId = episode.videoId
+        )
+        val newTotal = reindexed.size.coerceAtLeast(1)
+        val newCurrent = existing.currentDay.coerceIn(1, newTotal)
+        val normalizedEpisodes = reindexed.map { ep ->
+            ep.copy(isCompleted = ep.dayNumber < newCurrent)
+        }
+        val nextBinding = existing.copy(
+            totalDays = newTotal,
+            currentDay = newCurrent,
+            videoId = normalizedEpisodes.firstOrNull()?.videoId.orEmpty(),
+            episodes = normalizedEpisodes,
+            hasVerifiedVideoSupport = normalizedEpisodes.isNotEmpty()
+        )
+        val updated = _bindingsByResourceId.value.toMutableMap()
+        updated[resourceId] = nextBinding
+        _bindingsByResourceId.value = updated
+        persistBindingsToPrefs(context.applicationContext, updated)
+        return nextBinding
+    }
+
+    /**
      * Uses Gemini AI (with canonical curriculum ordering and topic mastery post-processing)
      * to slice a book/camp into [totalDays] structured daily topics.
      */

@@ -72,7 +72,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.example.sharkmentor.core.ai.MultiProviderAiClient
+import com.example.sharkmentor.core.flashcard.GeneratedNotePodcast
+import com.example.sharkmentor.core.flashcard.NotePodcastEngine
+import com.example.sharkmentor.core.flashcard.PodcastSegment
 import com.example.sharkmentor.core.flashcard.SelectedFlashcardSources
 import com.example.sharkmentor.core.flashcard.SmartFlashcard
 import com.example.sharkmentor.core.flashcard.SmartFlashcardManager
@@ -195,7 +197,13 @@ fun SmartFlashcardStudioView(
 
     if (showPodcastSheet) {
         PodcastBetaBottomSheet(
-            cards = activeDeck,
+            selection = savedSelection,
+            availableNotes = availableNotes,
+            availablePdfs = availablePdfs,
+            onOpenSourcePicker = {
+                showPodcastSheet = false
+                showSourceSheet = true
+            },
             onDismiss = { showPodcastSheet = false }
         )
     }
@@ -248,7 +256,7 @@ fun SmartFlashcardStudioView(
                     }
                 }
 
-                if (activeDeck.isNotEmpty()) {
+                if (availableNotes.isNotEmpty() || availablePdfs.isNotEmpty()) {
                     Surface(
                         onClick = { showPodcastSheet = true },
                         shape = RoundedCornerShape(10.dp),
@@ -263,27 +271,15 @@ fun SmartFlashcardStudioView(
                             Icon(
                                 imageVector = Icons.Default.Headphones,
                                 contentDescription = null,
-                                tint = colorScheme.onSurface,
+                                tint = colorScheme.primary,
                                 modifier = Modifier.size(15.dp)
                             )
                             Text(
-                                text = "Dinle",
+                                text = "Podcast Özeti",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = colorScheme.onSurface
                             )
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = colorScheme.primary.copy(alpha = 0.14f)
-                            ) {
-                                Text(
-                                    text = "BETA",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                                )
-                            }
                         }
                     }
                 }
@@ -928,13 +924,17 @@ private fun SelectableSourceRow(
 }
 
 /**
- * Minimalist Offline Audio / Podcast Review Sheet (`BETA`).
- * Uses Android's built-in TTS with two-turn pitch/pause modulation + optional AI dialogue polish.
+ * True AI Note & PDF Podcast Summary Sheet.
+ * Synthesizes a multi-chapter two-host conversational summary directly from the student's Notes & PDFs
+ * via [NotePodcastEngine] (never reading flashcard Q&A verbatim) and speaks it with dual-host pitch modulation.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PodcastBetaBottomSheet(
-    cards: List<SmartFlashcard>,
+    selection: SelectedFlashcardSources,
+    availableNotes: List<NoteEntity>,
+    availablePdfs: List<ImportedPdfDocument>,
+    onOpenSourcePicker: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -946,33 +946,54 @@ private fun PodcastBetaBottomSheet(
     var isPlaying by remember { mutableStateOf(false) }
     var activeTrackIdx by remember { mutableIntStateOf(0) }
     var speechRate by remember { mutableFloatStateOf(1.0f) }
-    var isPolishingScript by remember { mutableStateOf(false) }
-    var aiScriptSegments by remember { mutableStateOf<List<Pair<String, String>>?>(null) }
+    var isGeneratingPodcast by remember { mutableStateOf(true) }
+    var episode by remember { mutableStateOf<GeneratedNotePodcast?>(null) }
 
-    val tracks: List<Pair<String, String>> = remember(cards, aiScriptSegments) {
-        aiScriptSegments ?: cards.map { it.front to it.back }
+    val segments: List<PodcastSegment> = episode?.segments.orEmpty()
+    val ttsHolder = remember { arrayOfNulls<TextToSpeech>(1) }
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    fun loadPodcast(forceRefresh: Boolean) {
+        scope.launch {
+            ttsHolder[0]?.stop()
+            isPlaying = false
+            isGeneratingPodcast = true
+            val built = NotePodcastEngine.loadOrGeneratePodcast(
+                context = context,
+                selection = selection,
+                availableNotes = availableNotes,
+                availablePdfs = availablePdfs,
+                forceRefresh = forceRefresh
+            )
+            episode = built
+            activeTrackIdx = 0
+            isGeneratingPodcast = false
+        }
     }
 
-    val ttsHolder = remember { arrayOfNulls<TextToSpeech>(1) }
+    LaunchedEffect(selection.noteIds, selection.pdfIds) {
+        loadPodcast(forceRefresh = false)
+    }
 
-    fun speakTrack(index: Int, rate: Float) {
+    fun speakSegment(index: Int, rate: Float) {
         val engine = ttsHolder[0] ?: return
-        if (!ttsReady || tracks.isEmpty()) return
-        val safeIdx = index.coerceIn(0, tracks.lastIndex)
+        val currentSegments = episode?.segments.orEmpty()
+        if (!ttsReady || currentSegments.isEmpty()) return
+        val safeIdx = index.coerceIn(0, currentSegments.lastIndex)
         activeTrackIdx = safeIdx
-        val (promptPart, answerPart) = tracks[safeIdx]
+        val seg = currentSegments[safeIdx]
         engine.stop()
         engine.setSpeechRate(rate)
-        engine.setPitch(1.05f)
         val params = Bundle()
-        engine.speak(promptPart, TextToSpeech.QUEUE_FLUSH, params, "track_${safeIdx}_q")
-        engine.playSilentUtterance(380L, TextToSpeech.QUEUE_ADD, "track_${safeIdx}_pause")
-        engine.setPitch(0.96f)
-        engine.speak(answerPart, TextToSpeech.QUEUE_ADD, params, "track_${safeIdx}_a")
+        engine.setPitch(1.04f)
+        engine.speak(seg.hostA, TextToSpeech.QUEUE_FLUSH, params, "pod_${safeIdx}_a")
+        if (seg.hostB.isNotBlank()) {
+            engine.playSilentUtterance(320L, TextToSpeech.QUEUE_ADD, "pod_${safeIdx}_pause")
+            engine.setPitch(0.94f)
+            engine.speak(seg.hostB, TextToSpeech.QUEUE_ADD, params, "pod_${safeIdx}_b")
+        }
         isPlaying = true
     }
-
-    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     DisposableEffect(context) {
         var engine: TextToSpeech? = null
@@ -985,11 +1006,16 @@ private fun PodcastBetaBottomSheet(
                         mainHandler.post { isPlaying = false }
                     }
                     override fun onDone(utteranceId: String?) {
-                        if (utteranceId != null && utteranceId.endsWith("_a")) {
+                        if (utteranceId == null) return
+                        val currentSegments = episode?.segments.orEmpty()
+                        val safeIdx = activeTrackIdx.coerceIn(0, (currentSegments.size - 1).coerceAtLeast(0))
+                        val hasHostB = currentSegments.getOrNull(safeIdx)?.hostB?.isNotBlank() == true
+                        val finishedSegment = utteranceId.endsWith("_b") || (!hasHostB && utteranceId.endsWith("_a"))
+                        if (finishedSegment) {
                             mainHandler.post {
                                 val nextIdx = activeTrackIdx + 1
-                                if (nextIdx < tracks.size) {
-                                    speakTrack(nextIdx, speechRate)
+                                if (nextIdx < currentSegments.size) {
+                                    speakSegment(nextIdx, speechRate)
                                 } else {
                                     isPlaying = false
                                 }
@@ -1024,208 +1050,270 @@ private fun PodcastBetaBottomSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Sesli Tekrar",
+                        text = episode?.episodeTitle ?: "Not & PDF Podcast Özeti",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Surface(
-                        shape = RoundedCornerShape(5.dp),
-                        color = colorScheme.primary.copy(alpha = 0.14f)
-                    ) {
+                    if (!episode?.sourceSummaryLabel.isNullOrBlank()) {
                         Text(
-                            text = "BETA",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-                Text(
-                    text = "Cihaz içi ses motoru",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (tracks.isNotEmpty()) {
-                val safeIdx = activeTrackIdx.coerceIn(0, tracks.lastIndex)
-                val (qText, aText) = tracks[safeIdx]
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.42f),
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text(
-                            text = "Bölüm ${safeIdx + 1} / ${tracks.size}",
+                            text = episode?.sourceSummaryLabel.orEmpty(),
                             style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
-                        Text(
-                            text = qText,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurface,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = aText,
-                            style = MaterialTheme.typography.bodySmall,
                             color = colorScheme.onSurfaceVariant,
-                            maxLines = 3,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    IconButton(
+                        onClick = onOpenSourcePicker,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = "Kaynak Seç", modifier = Modifier.size(18.dp))
+                    }
+                    IconButton(
+                        onClick = { if (!isGeneratingPodcast) loadPodcast(forceRefresh = true) },
+                        enabled = !isGeneratingPodcast,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Özeti Yenile", modifier = Modifier.size(18.dp))
+                    }
+                }
             }
 
-            // Playback + Speed row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(1.0f to "1.0x", 1.25f to "1.25x", 1.5f to "1.5x").forEach { (rate, label) ->
-                        val selected = kotlin.math.abs(speechRate - rate) < 0.05f
-                        Surface(
-                            onClick = {
-                                speechRate = rate
-                                if (isPlaying) speakTrack(activeTrackIdx, rate)
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (selected) colorScheme.primary.copy(alpha = 0.16f) else colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.35f)
+            when {
+                isGeneratingPodcast -> {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.5.dp,
+                                color = colorScheme.primary
                             )
+                            Text(
+                                text = "Seçili not ve PDF'lerden podcast özeti hazırlanıyor...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                segments.isEmpty() -> {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Text(
-                                text = label,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (selected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                text = "Özetlenecek metin içeren bir ders notu veya PDF seçin.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant
                             )
+                            OutlinedButton(
+                                onClick = onOpenSourcePicker,
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Not / PDF Seç")
+                            }
                         }
                     }
                 }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    IconButton(
-                        onClick = {
-                            val prev = (activeTrackIdx - 1).coerceAtLeast(0)
-                            speakTrack(prev, speechRate)
-                        },
-                        enabled = ttsReady && activeTrackIdx > 0
-                    ) {
-                        Icon(Icons.Default.SkipPrevious, contentDescription = "Önceki")
-                    }
+                else -> {
+                    val safeIdx = activeTrackIdx.coerceIn(0, segments.lastIndex)
+                    val seg = segments[safeIdx]
+
                     Surface(
-                        onClick = {
-                            if (!ttsReady || tracks.isEmpty()) return@Surface
-                            if (isPlaying) {
-                                ttsHolder[0]?.stop()
-                                isPlaying = false
-                            } else {
-                                speakTrack(activeTrackIdx, speechRate)
-                            }
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        color = colorScheme.primary
+                        shape = RoundedCornerShape(14.dp),
+                        color = colorScheme.surfaceVariant.copy(alpha = 0.42f),
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Box(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            contentAlignment = Alignment.Center
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 210.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Duraklat" else "Oynat",
-                                tint = colorScheme.onPrimary,
-                                modifier = Modifier.size(20.dp)
+                            Text(
+                                text = "Bölüm ${safeIdx + 1}/${segments.size} • ${seg.title}",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
                             )
+                            Text(
+                                text = seg.hostA,
+                                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 19.sp),
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurface
+                            )
+                            if (seg.hostB.isNotBlank()) {
+                                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
+                                Text(
+                                    text = seg.hostB,
+                                    style = MaterialTheme.typography.bodySmall.copy(lineHeight = 19.sp),
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
-                    IconButton(
-                        onClick = {
-                            val next = (activeTrackIdx + 1).coerceAtMost((tracks.size - 1).coerceAtLeast(0))
-                            speakTrack(next, speechRate)
-                        },
-                        enabled = ttsReady && activeTrackIdx < tracks.lastIndex
-                    ) {
-                        Icon(Icons.Default.SkipNext, contentDescription = "Sonraki")
-                    }
-                }
-            }
 
-            if (aiScriptSegments == null && cards.isNotEmpty()) {
-                OutlinedButton(
-                    onClick = {
-                        if (isPolishingScript) return@OutlinedButton
-                        isPolishingScript = true
-                        ttsHolder[0]?.stop()
-                        isPlaying = false
-                        scope.launch {
-                            val rawJoined = cards.take(10).joinToString("\n") {
-                                "Soru: ${it.front} | Cevap: ${it.back}"
+                    if (segments.size > 1) {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 120.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(segments.size, key = { "pod_ch_$it" }) { idx ->
+                                val itemSeg = segments[idx]
+                                val isCur = idx == safeIdx
+                                Surface(
+                                    onClick = {
+                                        activeTrackIdx = idx
+                                        if (isPlaying) speakSegment(idx, speechRate)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isCur) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "${idx + 1}. ${itemSeg.title}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (isCur) FontWeight.Bold else FontWeight.Normal,
+                                            color = if (isCur) colorScheme.primary else colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (isCur && isPlaying) {
+                                            Text(
+                                                text = "Çalıyor",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
                             }
-                            val polished = withContext(Dispatchers.IO) {
-                                runCatching {
-                                    val resp = MultiProviderAiClient.executeUnifiedTextPrompt(
-                                        context = context,
-                                        systemPrompt = "Verilen kartları dinlemesi akıcı, doğal ve kısa soru-cevap anlatımına dönüştür. Yalnızca JSON dizisi döndür: [{\"front\":\"Kısa yönlendirici soru\",\"back\":\"Akıcı sözlü açıklama\"}]. Emoji kullanma.",
-                                        userPrompt = rawJoined,
-                                        temperature = 0.3f,
-                                        maxTokens = 1600,
-                                        responseJson = true,
-                                        timeoutMs = 30_000L
-                                    )
-                                    com.example.sharkmentor.core.flashcard.parseAiFlashcardsJson(
-                                        rawJson = resp,
-                                        sourceType = com.example.sharkmentor.core.flashcard.FlashcardSourceType.NOTE,
-                                        sourceId = "audio_script",
-                                        sourceTitle = "Sesli Özet"
-                                    ).map { it.front to it.back }
-                                }.getOrDefault(emptyList())
-                            }
-                            if (polished.isNotEmpty()) {
-                                aiScriptSegments = polished
-                                activeTrackIdx = 0
-                            }
-                            isPolishingScript = false
                         }
-                    },
-                    enabled = !isPolishingScript,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = if (isPolishingScript) "Akıcı anlatım hazırlanıyor..." else "Yapay Zeka ile Akıcı Ses Metnine Dönüştür",
-                        fontSize = 12.sp
-                    )
+                    }
+
+                    // Playback + Speed row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(1.0f to "1.0x", 1.25f to "1.25x", 1.5f to "1.5x").forEach { (rate, label) ->
+                                val selected = kotlin.math.abs(speechRate - rate) < 0.05f
+                                Surface(
+                                    onClick = {
+                                        speechRate = rate
+                                        if (isPlaying) speakSegment(activeTrackIdx, rate)
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) colorScheme.primary.copy(alpha = 0.16f) else colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.35f)
+                                    )
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = if (selected) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val prev = (activeTrackIdx - 1).coerceAtLeast(0)
+                                    speakSegment(prev, speechRate)
+                                },
+                                enabled = ttsReady && activeTrackIdx > 0
+                            ) {
+                                Icon(Icons.Default.SkipPrevious, contentDescription = "Önceki")
+                            }
+                            Surface(
+                                onClick = {
+                                    if (!ttsReady || segments.isEmpty()) return@Surface
+                                    if (isPlaying) {
+                                        ttsHolder[0]?.stop()
+                                        isPlaying = false
+                                    } else {
+                                        speakSegment(activeTrackIdx, speechRate)
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                color = colorScheme.primary
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (isPlaying) "Duraklat" else "Oynat",
+                                        tint = colorScheme.onPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = {
+                                    val next = (activeTrackIdx + 1).coerceAtMost((segments.size - 1).coerceAtLeast(0))
+                                    speakSegment(next, speechRate)
+                                },
+                                enabled = ttsReady && activeTrackIdx < segments.lastIndex
+                            ) {
+                                Icon(Icons.Default.SkipNext, contentDescription = "Sonraki")
+                            }
+                        }
+                    }
                 }
             }
         }

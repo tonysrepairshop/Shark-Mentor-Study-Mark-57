@@ -170,13 +170,23 @@ fun ChatWallpaperCanvas(
     val savedStyle by selectedStyleFlow.collectAsStateWithLifecycle()
     val activeStyle = styleOverride ?: savedStyle
 
+    val circadianModeFlow = remember(themePrefs) {
+        themePrefs?.circadianScheduleMode ?: MutableStateFlow(com.example.sharkmentor.core.data.CircadianScheduleMode.LOCATION_SUNSET)
+    }
+    val circadianStartFlow = remember(themePrefs) { themePrefs?.circadianStartMinute ?: MutableStateFlow(20 * 60) }
+    val circadianEndFlow = remember(themePrefs) { themePrefs?.circadianEndMinute ?: MutableStateFlow(7 * 60) }
+    val circadianScheduleMode by circadianModeFlow.collectAsStateWithLifecycle()
+    val circadianStartMin by circadianStartFlow.collectAsStateWithLifecycle()
+    val circadianEndMin by circadianEndFlow.collectAsStateWithLifecycle()
+
     val isDark = when (themeMode) {
         AppThemeMode.SYSTEM -> isSystemInDarkTheme()
         AppThemeMode.DARK -> true
         AppThemeMode.LIGHT -> false
-        AppThemeMode.CIRCADIAN -> com.example.sharkmentor.core.data.isCircadianNightHour(
-            java.time.LocalTime.now().hour
-        )
+        AppThemeMode.CIRCADIAN -> remember(themePrefs, circadianScheduleMode, circadianStartMin, circadianEndMin) {
+            themePrefs?.isCircadianNightNow()
+                ?: com.example.sharkmentor.core.data.isCircadianNightHour(java.time.LocalTime.now().hour)
+        }
     }
 
     val colorScheme = MaterialTheme.colorScheme

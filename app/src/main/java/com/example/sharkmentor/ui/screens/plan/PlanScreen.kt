@@ -689,6 +689,7 @@ fun SpaciousPlanTaskCard(
             subject = task.subject,
             initialEpisode = episode,
             allEpisodes = matchedBinding?.episodes?.ifEmpty { listOf(episode) } ?: listOf(episode),
+            resourceId = matchedBinding?.resourceId,
             onMarkCompleted = {
                 if (!task.isCompleted) onToggleCompletion()
                 showCampStudio = false

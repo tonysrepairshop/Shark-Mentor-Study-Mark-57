@@ -13,21 +13,20 @@ import org.junit.Test
 class Mark62VideoAndLeagueTest {
 
     @Test
-    fun cleanLeagueSubjectStripsSubTopicsAndCampDetails() {
-        assertEquals("AYT Kimya", CoachingEngine.formatCleanLeagueSubject("AYT Kimya • Organik Kimya 4. Gün"))
-        assertEquals("AYT Kimya", CoachingEngine.formatCleanLeagueSubject("AYT Kimya - Alkanlar Konu Anlatımı"))
-        assertEquals("AYT Matematik", CoachingEngine.formatCleanLeagueSubject("AYT Matematik: Türev Test 4"))
-        assertEquals("TYT Matematik", CoachingEngine.formatCleanLeagueSubject("3D TYT Matematik VDD 12. Gün"))
+    fun cleanLeagueSubjectStripsCampNoiseWhilePreservingUserTopics() {
+        assertEquals("Analitik Geometri", CoachingEngine.formatCleanLeagueSubject("Analitik Geometri"))
+        assertEquals("AYT • Türev", CoachingEngine.formatCleanLeagueSubject("AYT • Türev (Pekiştirme)"))
+        assertEquals("AYT Kimya • Organik Kimya", CoachingEngine.formatCleanLeagueSubject("AYT Kimya • Organik Kimya 4. Gün"))
+        assertEquals("AYT Kimya - Alkanlar", CoachingEngine.formatCleanLeagueSubject("AYT Kimya - Alkanlar Konu Anlatımı"))
         assertEquals("Kitap Okuma", CoachingEngine.formatCleanLeagueSubject("Kitap Okuma"))
-        assertEquals("AYT", CoachingEngine.formatCleanLeagueSubject("AYT • Türev (Pekiştirme)"))
 
         val now = 2_000_000_000L
         val presence = LiveFocusPresence(
             isStudying = true,
-            activeSubject = "AYT Kimya • Organik Kimya 4. Gün: Alkanlar",
+            activeSubject = "Analitik Geometri (Esnek • 90 dk)",
             startedAtMillis = now - 25L * 60_000L
         )
-        assertEquals("Masada • AYT Kimya (25 dk)", presence.formattedLeagueStatus(now))
+        assertEquals("Masada • Analitik Geometri (25 dk)", presence.formattedLeagueStatus(now))
     }
 
     @Test

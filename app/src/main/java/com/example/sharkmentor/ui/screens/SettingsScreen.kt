@@ -54,12 +54,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.app.TimePickerDialog
+import androidx.compose.material.icons.filled.Album
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.NightlightRound
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.sharkmentor.core.audio.MusicPlayerHub
+import com.example.sharkmentor.core.audio.MusicPlayerSkin
 import com.example.sharkmentor.core.badges.SharkBadgeCatalog
 import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.data.AppThemeMode
+import com.example.sharkmentor.core.data.BlueLightFilterMode
+import com.example.sharkmentor.core.data.CircadianScheduleMode
 import com.example.sharkmentor.core.data.ThemePalette
 import com.example.sharkmentor.core.data.ThemePreferences
+import com.example.sharkmentor.core.theme.formatMinuteOfDay
 import com.example.sharkmentor.core.util.AppIconManager
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.core.util.SharkAppIcon
@@ -164,9 +177,53 @@ fun SettingsScreen(
         isLoadingBlockedUsers = false
     }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
     val themePrefs = remember { ThemePreferences.instance }
     val themeMode by themePrefs.themeMode.collectAsStateWithLifecycle()
     val currentPalette by themePrefs.palette.collectAsStateWithLifecycle()
+    val circadianMode by themePrefs.circadianScheduleMode.collectAsStateWithLifecycle()
+    val circadianStartMin by themePrefs.circadianStartMinute.collectAsStateWithLifecycle()
+    val circadianEndMin by themePrefs.circadianEndMinute.collectAsStateWithLifecycle()
+    val blueLightMode by themePrefs.blueLightMode.collectAsStateWithLifecycle()
+    val blueLightIntensity by themePrefs.blueLightIntensity.collectAsStateWithLifecycle()
+    val blueLightStartMin by themePrefs.blueLightStartMinute.collectAsStateWithLifecycle()
+    val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
+    val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
+
+    LaunchedEffect(context) {
+        MusicPlayerHub.ensureInitialized(context)
+    }
+    DisposableEffect(lifecycleOwner, context) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                MusicPlayerHub.refreshPermissionsAndSessions(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    val musicPlayerEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
+    val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
+    val mediaAccessGranted by MusicPlayerHub.mediaAccessGranted.collectAsStateWithLifecycle()
+
+    val solarTimes = remember(themeMode, circadianMode, blueLightMode) {
+        themePrefs.resolveTodaySolarTimes()
+    }
+
+    fun pickMinuteOfDay(initialMinute: Int, onPicked: (Int) -> Unit) {
+        val h = ((initialMinute / 60) % 24 + 24) % 24
+        val m = ((initialMinute % 60) + 60) % 60
+        TimePickerDialog(
+            context,
+            { _, pickedHour, pickedMinute ->
+                onPicked(pickedHour * 60 + pickedMinute)
+            },
+            h,
+            m,
+            true
+        ).show()
+    }
 
     if (showTimeDialog) {
         ReflectionTimeDialog(
@@ -196,7 +253,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                            Text("Engellenen kullanıcılar yükleniyor...", style = MaterialTheme.typography.bodyMedium)
+                            Text("Yükleniyor...", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                     blockedUsersMap.isEmpty() -> {
@@ -261,7 +318,7 @@ fun SettingsScreen(
                                             shape = RoundedCornerShape(8.dp)
                                         ) {
                                             Text(
-                                                text = "Engeli Kaldır",
+                                                text = "Kaldır",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 fontWeight = FontWeight.Bold
                                             )
@@ -292,7 +349,7 @@ fun SettingsScreen(
                 title = {
                     Text(
                         when (activeSubPage) {
-                            "coaching_support" -> "Gerçek Koçluk & Çalışma"
+                            "coaching_support" -> "Koçluk & Çalışma"
                             "focus_wellness" -> "Hatırlatmalar"
                             "topbar_hub" -> "Üst Bar & Hava Durumu"
                             "topbar_weather" -> "Hava Durumu"
@@ -332,27 +389,66 @@ fun SettingsScreen(
                     SettingsGroupCard(title = "Çalışma & Yapay Zeka") {
                         SettingRow(
                             icon = Icons.Default.Route,
-                            label = "Gerçek Koçluk & Çalışma Saatleri",
-                            subtitle = "Kapsamlı destek, günlük hedef ve çalışma başlıkları",
+                            label = "Koçluk & Çalışma Saatleri",
+                            subtitle = "Günlük hedef ve çalışma başlıkları",
                             onClick = { activeSubPage = "coaching_support" }
                         )
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.AutoAwesome,
                             label = "Yapay Zeka & Video Stüdyosu",
-                            subtitle = "Shark AI, özel API anahtarları ve reklam engelleyici",
+                            subtitle = "Model seçimi ve reklam engelleyici",
                             onClick = onOpenAiSettings
                         )
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.EditNote,
                             label = "Not & Çizim",
-                            subtitle = "Kalem, cetvel ve not içi yapay zeka",
+                            subtitle = "Kalem davranışı ve not içi AI",
                             onClick = onOpenNoteSettings
                         )
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { themePrefs.setKeepScreenOnInStopwatch(!keepScreenOnStopwatch) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timer,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Kronometrede Ekran Açık Kalsın",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Yalnızca kronometre çalışırken aktif olur",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = keepScreenOnStopwatch,
+                                onCheckedChange = { themePrefs.setKeepScreenOnInStopwatch(it) }
+                            )
+                        }
                     }
 
-                    // 2. Görünüm & Kişiselleştirme
+                    // 2. Görünüm & Göz Koruma
                     SettingsGroupCard(title = "Görünüm") {
                         Column(
                             modifier = Modifier
@@ -376,7 +472,188 @@ fun SettingsScreen(
                                     themePrefs.setPalette(palette)
                                 }
                             )
+
+                            // Configurable Circadian ("Döngü") Schedule Controls
+                            if (themeMode == AppThemeMode.CIRCADIAN) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            listOf(
+                                                CircadianScheduleMode.LOCATION_SUNSET to "Konuma Göre",
+                                                CircadianScheduleMode.CUSTOM_TIME to "Özel Saat"
+                                            ).forEach { (modeOpt, label) ->
+                                                val chosen = circadianMode == modeOpt
+                                                Surface(
+                                                    onClick = { themePrefs.setCircadianScheduleMode(modeOpt) },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface
+                                                ) {
+                                                    Text(
+                                                        text = label,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
+                                                        color = if (chosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                        modifier = Modifier.padding(vertical = 7.dp, horizontal = 10.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        if (circadianMode == CircadianScheduleMode.LOCATION_SUNSET) {
+                                            Text(
+                                                text = "Gün batımı ${solarTimes.sunsetFormatted} • Gün doğumu ${solarTimes.sunriseFormatted}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        } else {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        pickMinuteOfDay(circadianStartMin) { newStart ->
+                                                            themePrefs.setCircadianCustomWindow(newStart, circadianEndMin)
+                                                        }
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    contentPadding = PaddingValues(vertical = 6.dp, horizontal = 8.dp)
+                                                ) {
+                                                    Text("Gece: ${formatMinuteOfDay(circadianStartMin)}", fontSize = 11.sp)
+                                                }
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        pickMinuteOfDay(circadianEndMin) { newEnd ->
+                                                            themePrefs.setCircadianCustomWindow(circadianStartMin, newEnd)
+                                                        }
+                                                    },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    contentPadding = PaddingValues(vertical = 6.dp, horizontal = 8.dp)
+                                                ) {
+                                                    Text("Gündüz: ${formatMinuteOfDay(circadianEndMin)}", fontSize = 11.sp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
+
+                        SettingsCardDivider()
+
+                        // Blue Light Filter / Eye Comfort Section
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.NightlightRound,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "Göz Koruma (Mavi Işık Filtresi)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                listOf(
+                                    BlueLightFilterMode.OFF to "Kapalı",
+                                    BlueLightFilterMode.MANUAL_ON to "Açık",
+                                    BlueLightFilterMode.LOCATION_SUNSET to "Konum",
+                                    BlueLightFilterMode.CUSTOM_TIME to "Saat"
+                                ).forEachIndexed { idx, (modeItem, title) ->
+                                    SegmentedButton(
+                                        selected = blueLightMode == modeItem,
+                                        onClick = { themePrefs.setBlueLightMode(modeItem) },
+                                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = 4)
+                                    ) {
+                                        Text(title, fontSize = 11.sp, maxLines = 1)
+                                    }
+                                }
+                            }
+
+                            if (blueLightMode != BlueLightFilterMode.OFF) {
+                                if (blueLightMode == BlueLightFilterMode.LOCATION_SUNSET) {
+                                    Text(
+                                        text = "Aktif aralık: ${solarTimes.sunsetFormatted} – ${solarTimes.sunriseFormatted}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else if (blueLightMode == BlueLightFilterMode.CUSTOM_TIME) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                pickMinuteOfDay(blueLightStartMin) { newStart ->
+                                                    themePrefs.setBlueLightCustomWindow(newStart, blueLightEndMin)
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(vertical = 6.dp, horizontal = 8.dp)
+                                        ) {
+                                            Text("Başlangıç: ${formatMinuteOfDay(blueLightStartMin)}", fontSize = 11.sp)
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                pickMinuteOfDay(blueLightEndMin) { newEnd ->
+                                                    themePrefs.setBlueLightCustomWindow(blueLightStartMin, newEnd)
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(vertical = 6.dp, horizontal = 8.dp)
+                                        ) {
+                                            Text("Bitiş: ${formatMinuteOfDay(blueLightEndMin)}", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = "Sıcaklık",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Slider(
+                                        value = blueLightIntensity,
+                                        onValueChange = { themePrefs.setBlueLightIntensity(it) },
+                                        valueRange = 0.08f..0.48f,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+
                         SettingsCardDivider()
                         Row(
                             modifier = Modifier
@@ -386,19 +663,12 @@ fun SettingsScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Uygulama Simgesi",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (showAppIconPicker) "Simge seçmek için kaydır" else "Ana ekran ve açılış simgesini değiştir",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                text = "Uygulama Simgesi",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                             Icon(
                                 imageVector = if (showAppIconPicker) {
                                     Icons.Default.KeyboardArrowUp
@@ -422,19 +692,163 @@ fun SettingsScreen(
                         SettingRow(
                             icon = Icons.Default.Tune,
                             label = "Üst Bar & Hava Durumu",
-                            subtitle = "Üst bar görünümü, yazılar, konum ve sınav sayacı",
+                            subtitle = "Konum, yazılar ve sınav sayacı",
                             onClick = { activeSubPage = "topbar_hub" }
                         )
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.WaterDrop,
                             label = "Hatırlatmalar",
-                            subtitle = "Su, duruş ve gün değerlendirmesi saati",
+                            subtitle = "Su, duruş ve gün değerlendirmesi",
                             onClick = { activeSubPage = "focus_wellness" }
                         )
                     }
 
-                    // 3. Odak Araçları & Kayıtlar (Compact 2x2 Grid)
+                    // 3. Müzik & Plak Çalar (Left of HomeScreen)
+                    SettingsGroupCard(title = "Müzik Çalar") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Album,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(21.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "Ana Ekran Müzik Çalar",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Müzik açıkken ana ekranın solunda açılır",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Switch(
+                                    checked = musicPlayerEnabled,
+                                    onCheckedChange = { MusicPlayerHub.setEnabled(context, it) }
+                                )
+                            }
+
+                            if (musicPlayerEnabled) {
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Medya Kontrol Bağlantısı",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = if (mediaAccessGranted) "Aktif • Çalan şarkı otomatik algılanır" else "Spotify ve YouTube Music için gerekli",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (mediaAccessGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (!mediaAccessGranted) {
+                                        OutlinedButton(
+                                            onClick = { MusicPlayerHub.openMediaAccessSettings(context) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(32.dp)
+                                        ) {
+                                            Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Bağlı",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text("Spotify Bağla", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp)
+                                    ) {
+                                        Text("YouTube Music Bağla", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+
+                                Text(
+                                    text = "Çalar Teması",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    contentPadding = PaddingValues(vertical = 2.dp)
+                                ) {
+                                    items(MusicPlayerSkin.entries, key = { it.id }) { skin ->
+                                        val isChosen = musicSelectedSkin == skin
+                                        Surface(
+                                            onClick = { MusicPlayerHub.setSkin(context, skin) },
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                            )
+                                        ) {
+                                            Text(
+                                                text = skin.displayTitle,
+                                                fontSize = 12.sp,
+                                                fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Odak Araçları & Kayıtlar (Compact 2x2 Grid)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Odak Araçları & Kayıtlar",
@@ -479,7 +893,7 @@ fun SettingsScreen(
                         }
                     }
 
-                    // 4. Bulut & Hesap
+                    // 5. Bulut & Hesap
                     SettingsGroupCard(title = "Bulut & Hesap") {
                         Row(
                             modifier = Modifier
@@ -506,9 +920,9 @@ fun SettingsScreen(
                                         isSyncingNow = false
                                         snackbarHostState.currentSnackbarData?.dismiss()
                                         val msg = if (restoredTopics >= 0) {
-                                            "Bulut senkronizasyonu tamamlandı ($restoredTopics konu güncel)."
+                                            "Senkronizasyon tamamlandı ($restoredTopics konu güncel)."
                                         } else {
-                                            "Bulut senkronizasyonu başlatıldı."
+                                            "Senkronizasyon başlatıldı."
                                         }
                                         snackbarHostState.showSnackbar(msg)
                                     }
@@ -539,7 +953,7 @@ fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "Konu hakimiyeti, kütüphane ve hedefleri bulutla eşitle",
+                                    text = "Konu hakimiyeti ve hedefleri bulutla eşitle",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -549,7 +963,6 @@ fun SettingsScreen(
                         SettingRow(
                             icon = Icons.Default.PersonOff,
                             label = "Engellenen Kullanıcılar",
-                            subtitle = "Sosyal ve mesaj engellerini yönet",
                             onClick = { showBlockedUsersDialog = true }
                         )
                         SettingsCardDivider()

@@ -97,11 +97,23 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.view.WindowManager
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.sharkmentor.R
+import com.example.sharkmentor.core.audio.MusicPlayerHub
+import com.example.sharkmentor.core.audio.shouldShowLeftMusicScreen
 import com.example.sharkmentor.core.coaching.AppStudyMode
 import com.example.sharkmentor.core.coaching.CoachingEngine
+import com.example.sharkmentor.core.data.ThemePreferences
 import com.example.sharkmentor.core.timer.TimerMode
 import com.example.sharkmentor.core.timer.TimerPhase
 import com.example.sharkmentor.core.timer.TimerState
@@ -113,11 +125,18 @@ import com.example.sharkmentor.ui.coaching.DailyGoalConfigDialog
 import com.example.sharkmentor.ui.coaching.DuolingoCoachingPathView
 import com.example.sharkmentor.ui.coaching.FocusTopicLaunchDialog
 import com.example.sharkmentor.ui.coaching.StudyModeHeaderSwitcher
+import com.example.sharkmentor.ui.components.ThemedMusicPlayerPage
 import com.example.sharkmentor.ui.theme.SharkMentorTheme
 import com.example.sharkmentor.ui.viewmodel.AnalyticsViewModel
 import com.example.sharkmentor.ui.viewmodel.TimerViewModel
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+
+private tailrec fun Context.findHomeActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findHomeActivity()
+    else -> null
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Top App Bar Branding
@@ -158,16 +177,53 @@ fun HomeScreen(
     onNavigateToPlans  : () -> Unit         = {}
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val uiScope = androidx.compose.runtime.rememberCoroutineScope()
     LaunchedEffect(context) {
         CoachingEngine.ensureInitialized(context)
         CoachingEngine.refreshTargetAndLedgerAsync(context)
+        MusicPlayerHub.ensureInitialized(context)
+    }
+
+    DisposableEffect(lifecycleOwner, context) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                MusicPlayerHub.refreshPermissionsAndSessions(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     val timerState: TimerState by viewModel.timerState.collectAsStateWithLifecycle()
     val currentPage: Int by viewModel.currentPage.collectAsStateWithLifecycle()
     val analyticsState by analyticsViewModel.uiState.collectAsStateWithLifecycle()
     val dailyScore = analyticsState.dailyScore
+
+    val themePrefs = remember(context) { ThemePreferences.initialize(context.applicationContext) }
+    val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
+    val shouldKeepStopwatchScreenAwake = keepScreenOnStopwatch &&
+        timerState.currentMode == TimerMode.STOPWATCH &&
+        timerState.timerPhase == TimerPhase.FOCUSING
+
+    DisposableEffect(shouldKeepStopwatchScreenAwake, context) {
+        val window = context.findHomeActivity()?.window
+        if (shouldKeepStopwatchScreenAwake) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    val musicPlayerEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
+    val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
+    val musicPlaybackState by MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+    val showLeftMusicScreen = shouldShowLeftMusicScreen(musicPlayerEnabled, musicPlaybackState)
 
     val streakRepository = remember(context) { com.example.sharkmentor.data.repository.StreakRepository(context) }
     val streakState by streakRepository.streakState.collectAsStateWithLifecycle()
@@ -283,6 +339,12 @@ fun HomeScreen(
     var pendingLaunchAllowsModeChoice by remember { mutableStateOf(false) }
     var pendingSwitchActiveTimerMode by remember { mutableStateOf<TimerMode?>(null) }
 
+    fun openFreshFocusLaunchDialog(targetMode: TimerMode, allowModeChoice: Boolean) {
+        CoachingEngine.resetFocusLaunchDraft(context)
+        pendingLaunchAllowsModeChoice = allowModeChoice
+        pendingFocusLaunchMode = targetMode
+    }
+
     // Listen for Duolingo Streak Widget / Focus Widget launch requests
     val widgetFocusLaunchRequested by com.example.sharkmentor.core.timer.FocusLaunchNavBus
         .openFocusLaunchPickerRequested.collectAsStateWithLifecycle()
@@ -293,19 +355,16 @@ fun HomeScreen(
                 CoachingEngine.setStudyMode(context, AppStudyMode.FREE_TRACKING)
             }
             if (timerState.timerPhase != TimerPhase.IDLE) {
-                // Already running/paused: scroll straight to the active timer with zero mode conflict
                 val activeIdx = TimerMode.entries.indexOf(timerState.currentMode)
                 if (activeIdx >= 0) {
                     viewModel.onPageChanged(activeIdx)
                     runCatching { pagerState.animateScrollToPage(activeIdx) }
                 }
             } else {
-                // IDLE: open Mode + Focus Tag/Label picker so user names their session cleanly
                 val defaultMode = TimerMode.entries.getOrNull(pagerState.currentPage)
                     ?.takeIf { it != TimerMode.BREAK }
                     ?: TimerMode.STOPWATCH
-                pendingLaunchAllowsModeChoice = true
-                pendingFocusLaunchMode = defaultMode
+                openFreshFocusLaunchDialog(defaultMode, allowModeChoice = true)
             }
         }
     }
@@ -371,8 +430,7 @@ fun HomeScreen(
                         if (nextMode == TimerMode.BREAK) {
                             viewModel.startTimer(nextMode, formattedActiveSubject)
                         } else {
-                            pendingLaunchAllowsModeChoice = false
-                            pendingFocusLaunchMode = nextMode
+                            openFreshFocusLaunchDialog(nextMode, allowModeChoice = false)
                         }
                     },
                     shape = RoundedCornerShape(10.dp)
@@ -398,8 +456,7 @@ fun HomeScreen(
                     if (chosenMode == TimerMode.BREAK) {
                         viewModel.startTimer(chosenMode, formattedActiveSubject)
                     } else {
-                        pendingLaunchAllowsModeChoice = false
-                        pendingFocusLaunchMode = chosenMode
+                        openFreshFocusLaunchDialog(chosenMode, allowModeChoice = false)
                     }
                 }
             },
@@ -410,223 +467,325 @@ fun HomeScreen(
         )
     }
 
+    @Composable
+    fun RenderDeskContent() {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            if (comprehensiveSupportEnabled && studyMode == AppStudyMode.REAL_COACHING) {
+                DuolingoCoachingPathView(
+                    timerState = timerState,
+                    goalStatus = dailyGoalStatus,
+                    useAiGoal = useAiGoal,
+                    targetContext = targetContext,
+                    weeklyAdvice = weeklyAdvice,
+                    recentLedger = recentLedger,
+                    onSwitchMode = { CoachingEngine.setStudyMode(context, it) },
+                    onEditDailyGoal = { showDailyGoalDialog = true },
+                    onStartFocusWithSubject = { mode, subject ->
+                        viewModel.startTimer(mode, subject)
+                    },
+                    onPauseFocus = viewModel::pauseTimer,
+                    onResumeFocus = viewModel::resumeTimer,
+                    onStopFocus = viewModel::resetTimer,
+                    onNavigateToSharkAi = onNavigateToSharkAi,
+                    onNavigateToPlans = onNavigateToPlans
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 680.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (comprehensiveSupportEnabled) {
+                        StudyModeHeaderSwitcher(
+                            currentMode = AppStudyMode.FREE_TRACKING,
+                            onModeChange = { CoachingEngine.setStudyMode(context, it) }
+                        )
+                    }
+
+                    // Compact Duolingo-style Water Streak & Goal Challenge Strip (7 / 14 / 30 / 50 gün)
+                    WaterStreakGoalStrip(
+                        streakState = streakState,
+                        onClick = { showStreakGoalDialog = true }
+                    )
+
+                    val isBreakActive by SessionManager.isBreakActive.collectAsStateWithLifecycle()
+
+                    // Mola Modu Banner
+                    AnimatedVisibility(
+                        visible = isBreakActive,
+                        enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                    ) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Timer,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Mola Modu",
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        text = "Dinlenme süresi devam ediyor",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Break banner while mandatory break is running
+                    AnimatedVisibility(
+                        visible = isMandatoryBreak,
+                        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                    ) {
+                        MolaActiveBanner(remainingMillis = timerState.displayMillis, modifier = Modifier.fillMaxWidth())
+                    }
+
+                    val selectedMode = TimerMode.entries[pagerState.currentPage]
+                    val anotherModeIsRunning = timerState.timerPhase != TimerPhase.IDLE &&
+                        timerState.timerPhase != TimerPhase.MANDATORY_BREAK &&
+                        timerState.currentMode != selectedMode
+
+                    // Active-timer notice when browsing another mode page so two timers never conflict
+                    AnimatedVisibility(
+                        visible = anotherModeIsRunning,
+                        enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+                        exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                    ) {
+                        androidx.compose.material3.Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Aktif: ${timerState.currentMode.displayName}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text(
+                                        text = "${TimeUtils.formatAdaptiveTime(timerState.displayMillis)} • ${timerState.activeSubject.ifBlank { "Odak" }}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        val activeIdx = TimerMode.entries.indexOf(timerState.currentMode)
+                                        if (activeIdx >= 0) viewModel.onPageChanged(activeIdx)
+                                    }
+                                ) {
+                                    Text("Aktif Sayaca Git", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    // 1. Odak Sayıcıları (Top of HomeScreen)
+                    ModeIndicatorDots(count = TimerMode.entries.size, currentPage = pagerState.currentPage)
+
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(320.dp),
+                        key = { page -> TimerMode.entries[page].name },
+                    ) { page ->
+                        val mode = TimerMode.entries[page]
+                        if (mode == TimerMode.BREAK) {
+                            BreakTimerPage(
+                                timerState = timerState,
+                                onSetBreakDuration = viewModel::setBreakDuration,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            TimerPage(
+                                mode = mode,
+                                timerState = timerState,
+                                onConfirmPresence = viewModel::confirmPresence,
+                                onSetPomodoroDuration = viewModel::setCustomPomodoroDuration,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    // Live Active Study Topic Pill (displays the exact subject written by the user)
+                    val activeTopicLabel = timerState.activeSubject
+                        .takeIf { it.isNotBlank() && !it.equals("Genel", ignoreCase = true) }
+                    AnimatedVisibility(
+                        visible = !anotherModeIsRunning &&
+                            timerState.timerPhase != TimerPhase.IDLE &&
+                            timerState.currentMode != TimerMode.BREAK &&
+                            activeTopicLabel != null,
+                        enter = fadeIn(),
+                        exit = fadeOut()
+                    ) {
+                        androidx.compose.material3.Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                        ) {
+                            Text(
+                                text = activeTopicLabel.orEmpty(),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
+
+                    TimerControls(
+                        mode = selectedMode,
+                        timerState = timerState,
+                        onStart = {
+                            if (anotherModeIsRunning) {
+                                pendingSwitchActiveTimerMode = selectedMode
+                            } else if (selectedMode == TimerMode.BREAK) {
+                                viewModel.startTimer(selectedMode, formattedActiveSubject)
+                            } else {
+                                openFreshFocusLaunchDialog(selectedMode, allowModeChoice = false)
+                            }
+                        },
+                        onPause = viewModel::pauseTimer,
+                        onResume = viewModel::resumeTimer,
+                        onReset = viewModel::resetTimer,
+                        onStartDuringBreak = {
+                            pendingMode = selectedMode
+                            showBreakConfirmDialog = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp),
+                    )
+
+                    if (selectedMode == TimerMode.BLOCK_90 || selectedMode == TimerMode.POMODORO) {
+                        ConsecutiveSessionsBadge(count = timerState.completedConsecutiveSessions)
+                    } else if (selectedMode == TimerMode.BREAK && timerState.isMandatoryBreakRequired) {
+                        TextButton(
+                            onClick = viewModel::resetConsecutiveSessions,
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                        ) {
+                            Text(stringResource(R.string.btn_skip_session), fontSize = 12.sp)
+                        }
+                    }
+
+                    // 2. Günlük Odak Skoru (Below Focus Counters)
+                    DailyFocusScoreCard(
+                        dailyScore = dailyScore,
+                        onRefreshScore = { analyticsViewModel.refreshDailyScore() }
+                    )
+                }
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.TopCenter
     ) {
-        if (comprehensiveSupportEnabled && studyMode == AppStudyMode.REAL_COACHING) {
-            DuolingoCoachingPathView(
-                timerState = timerState,
-                goalStatus = dailyGoalStatus,
-                useAiGoal = useAiGoal,
-                targetContext = targetContext,
-                weeklyAdvice = weeklyAdvice,
-                recentLedger = recentLedger,
-                onSwitchMode = { CoachingEngine.setStudyMode(context, it) },
-                onEditDailyGoal = { showDailyGoalDialog = true },
-                onStartFocusWithSubject = { mode, subject ->
-                    viewModel.startTimer(mode, subject)
-                },
-                onPauseFocus = viewModel::pauseTimer,
-                onResumeFocus = viewModel::resumeTimer,
-                onStopFocus = viewModel::resetTimer,
-                onNavigateToSharkAi = onNavigateToSharkAi,
-                onNavigateToPlans = onNavigateToPlans
-            )
-        } else {
+        if (showLeftMusicScreen) {
+            // Left = Music Player (0), Right = Timers / Coaching Path / Focus Score slid cleanly right (1)
+            val deckPagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
             Column(
-                modifier = Modifier
-                    .widthIn(max = 680.dp)
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (comprehensiveSupportEnabled) {
-                    StudyModeHeaderSwitcher(
-                        currentMode = AppStudyMode.FREE_TRACKING,
-                        onModeChange = { CoachingEngine.setStudyMode(context, it) }
-                    )
-                }
-
-                // Compact Duolingo-style Water Streak & Goal Challenge Strip (7 / 14 / 30 / 50 gün)
-                WaterStreakGoalStrip(
-                    streakState = streakState,
-                    onClick = { showStreakGoalDialog = true }
-                )
-
-                val isBreakActive by SessionManager.isBreakActive.collectAsStateWithLifecycle()
-
-                // Mola Modu Banner
-                AnimatedVisibility(
-                    visible = isBreakActive,
-                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
+                Row(
+                    modifier = Modifier
+                        .padding(top = 6.dp, bottom = 2.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            RoundedCornerShape(50)
+                        )
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    listOf(0 to "Müzik", 1 to "Çalışma Masası").forEach { (idx, label) ->
+                        val active = deckPagerState.currentPage == idx
+                        androidx.compose.material3.Surface(
+                            onClick = {
+                                uiScope.launch { deckPagerState.animateScrollToPage(idx) }
+                            },
+                            shape = RoundedCornerShape(50),
+                            color = if (active) MaterialTheme.colorScheme.primary else Color.Transparent
                         ) {
-                            Icon(
-                                imageVector = Icons.Outlined.Timer,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.size(22.dp)
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
                             )
-                            Column {
-                                Text(
-                                    text = "Mola Modu",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                Text(
-                                    text = "Dinlenme süresi devam ediyor",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
                         }
                     }
                 }
-
-                // Break banner while mandatory break is running
-                AnimatedVisibility(
-                    visible = isMandatoryBreak,
-                    enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-                ) {
-                    MolaActiveBanner(remainingMillis = timerState.displayMillis, modifier = Modifier.fillMaxWidth())
-                }
-
-                val selectedMode = TimerMode.entries[pagerState.currentPage]
-                val anotherModeIsRunning = timerState.timerPhase != TimerPhase.IDLE &&
-                    timerState.timerPhase != TimerPhase.MANDATORY_BREAK &&
-                    timerState.currentMode != selectedMode
-
-                // Active-timer notice when browsing another mode page so two timers never conflict
-                AnimatedVisibility(
-                    visible = anotherModeIsRunning,
-                    enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
-                    exit = fadeOut() + slideOutVertically(targetOffsetY = { -it })
-                ) {
-                    androidx.compose.material3.Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Aktif: ${timerState.currentMode.displayName}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    text = "${TimeUtils.formatAdaptiveTime(timerState.displayMillis)} • ${timerState.activeSubject.ifBlank { "Odak" }}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(
-                                onClick = {
-                                    val activeIdx = TimerMode.entries.indexOf(timerState.currentMode)
-                                    if (activeIdx >= 0) viewModel.onPageChanged(activeIdx)
-                                }
-                            ) {
-                                Text("Aktif Sayaca Git", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-
-                // 1. Odak Sayıcıları (Top of HomeScreen)
-                ModeIndicatorDots(count = TimerMode.entries.size, currentPage = pagerState.currentPage)
 
                 HorizontalPager(
-                    state = pagerState,
+                    state = deckPagerState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(320.dp),
-                    key = { page -> TimerMode.entries[page].name },
-                ) { page ->
-                    val mode = TimerMode.entries[page]
-                    if (mode == TimerMode.BREAK) {
-                        BreakTimerPage(
-                            timerState = timerState,
-                            onSetBreakDuration = viewModel::setBreakDuration,
+                        .weight(1f),
+                    beyondViewportPageCount = 1,
+                    key = { page -> if (page == 0) "left_music_deck" else "right_study_desk" }
+                ) { outerPage ->
+                    if (outerPage == 0) {
+                        ThemedMusicPlayerPage(
+                            playbackState = musicPlaybackState,
+                            selectedSkin = musicSelectedSkin,
+                            onSelectSkin = { chosenSkin ->
+                                MusicPlayerHub.setSkin(context, chosenSkin)
+                            },
+                            onSlideToDesk = {
+                                uiScope.launch { deckPagerState.animateScrollToPage(1) }
+                            },
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
-                        TimerPage(
-                            mode = mode,
-                            timerState = timerState,
-                            onConfirmPresence = viewModel::confirmPresence,
-                            onSetPomodoroDuration = viewModel::setCustomPomodoroDuration,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                        RenderDeskContent()
                     }
                 }
-
-                TimerControls(
-                    mode = selectedMode,
-                    timerState = timerState,
-                    onStart = {
-                        if (anotherModeIsRunning) {
-                            pendingSwitchActiveTimerMode = selectedMode
-                        } else if (selectedMode == TimerMode.BREAK) {
-                            viewModel.startTimer(selectedMode, formattedActiveSubject)
-                        } else {
-                            pendingLaunchAllowsModeChoice = false
-                            pendingFocusLaunchMode = selectedMode
-                        }
-                    },
-                    onPause = viewModel::pauseTimer,
-                    onResume = viewModel::resumeTimer,
-                    onReset = viewModel::resetTimer,
-                    onStartDuringBreak = {
-                        pendingMode = selectedMode
-                        showBreakConfirmDialog = true
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp),
-                )
-
-                if (selectedMode == TimerMode.BLOCK_90 || selectedMode == TimerMode.POMODORO) {
-                    ConsecutiveSessionsBadge(count = timerState.completedConsecutiveSessions)
-                } else if (selectedMode == TimerMode.BREAK && timerState.isMandatoryBreakRequired) {
-                    TextButton(
-                        onClick = viewModel::resetConsecutiveSessions,
-                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant),
-                    ) {
-                        Text(stringResource(R.string.btn_skip_session), fontSize = 12.sp)
-                    }
-                }
-
-                // 2. Günlük Odak Skoru (Below Focus Counters)
-                DailyFocusScoreCard(
-                    dailyScore = dailyScore,
-                    onRefreshScore = { analyticsViewModel.refreshDailyScore() }
-                )
             }
+        } else {
+            RenderDeskContent()
         }
     }
 }

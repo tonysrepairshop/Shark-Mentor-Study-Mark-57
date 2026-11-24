@@ -27,6 +27,9 @@
         <package android:name="com.google.android.gms" />
         <package android:name="com.google.android.gsf" />
         <package android:name="com.android.vending" />
+        <package android:name="com.spotify.music" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.miui.player" />
         <intent>
             <action android:name="com.google.android.gms.common.service.START" />
         </intent>
@@ -312,6 +315,23 @@
             android:name=".core.service.ZenAudioService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- ── Camp Video Background & Lock-Screen Media Service ────────── -->
+        <service
+            android:name=".core.service.CampVideoPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!-- ── External Music Session Bridge (Spotify / YT Music / System) ─ -->
+        <service
+            android:name=".core.audio.SharkMediaSessionListenerService"
+            android:label="SharkMentor Müzik Bağlantısı"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <service
             android:name=".service.blocker.StrictAppBlockerService"

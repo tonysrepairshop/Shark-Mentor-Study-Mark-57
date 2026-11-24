@@ -69,6 +69,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -79,6 +80,7 @@ import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -131,6 +133,8 @@ import com.example.sharkmentor.core.coaching.CoachingEngine
 import com.example.sharkmentor.core.coaching.DossierAiChannel
 import com.example.sharkmentor.core.coaching.ResourceCampBinding
 import com.example.sharkmentor.core.coaching.StudentDossierManager
+import com.example.sharkmentor.core.service.BackgroundPlayableWebView
+import com.example.sharkmentor.core.service.CampVideoPlaybackController
 import com.example.sharkmentor.core.service.FocusTimerService
 import com.example.sharkmentor.core.timer.TimerMode
 import com.example.sharkmentor.core.timer.TimerPhase
@@ -174,7 +178,9 @@ fun CampVideoStudyStudioDialog(
     subject: String,
     initialEpisode: CampDayEpisode,
     allEpisodes: List<CampDayEpisode> = listOf(initialEpisode),
+    resourceId: Long? = null,
     onEpisodeChanged: ((CampDayEpisode) -> Unit)? = null,
+    onDeleteEpisode: ((CampDayEpisode) -> Unit)? = null,
     onMarkCompleted: ((CampDayEpisode) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
@@ -190,12 +196,44 @@ fun CampVideoStudyStudioDialog(
     val studioAiEnabled by UserAiPreferences.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val adBlockerEnabled by UserAiPreferences.videoAdBlockerEnabled.collectAsStateWithLifecycle()
     val wellnessEvent by WellnessReminderBus.activeEvent.collectAsStateWithLifecycle()
+    val bgPlaybackState by CampVideoPlaybackController.state.collectAsStateWithLifecycle()
 
-    val safeEpisodes = remember(allEpisodes, initialEpisode) {
-        allEpisodes.ifEmpty { listOf(initialEpisode) }
+    var episodeListState by remember(allEpisodes, initialEpisode) {
+        mutableStateOf(allEpisodes.ifEmpty { listOf(initialEpisode) })
     }
+    val safeEpisodes = episodeListState
     var activeEpisode by remember(initialEpisode.dayNumber, initialEpisode.videoId, initialEpisode.topicTitle) {
         mutableStateOf(initialEpisode)
+    }
+    var pendingDeleteStudioEpisode by remember { mutableStateOf<CampDayEpisode?>(null) }
+    var isMinimizingToBackground by remember { mutableStateOf(false) }
+    var hasEnteredMediaSession by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.topicTitle, campTitle) {
+        CampVideoPlaybackController.markRestoredToForeground(context)
+        CampVideoPlaybackController.startOrUpdateSession(
+            context = context,
+            title = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
+            subtitle = campTitle.ifBlank { subject.ifBlank { "Kamp Video Stüdyosu" } },
+            url = activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true),
+            isPlaying = true
+        )
+        hasEnteredMediaSession = true
+    }
+
+    // If user clicks "Kapat" on the top media notification while studio is open, close cleanly
+    LaunchedEffect(bgPlaybackState.isActive, hasEnteredMediaSession) {
+        if (hasEnteredMediaSession && !bgPlaybackState.isActive && !isMinimizingToBackground) {
+            onDismiss()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!isMinimizingToBackground) {
+                CampVideoPlaybackController.stopAndRelease(context)
+            }
+        }
     }
 
     // Floating AI Orb & Popup state (0 = AI Asistan, 1 = Hızlı Not, 2 = Bölümler)
@@ -232,7 +270,8 @@ fun CampVideoStudyStudioDialog(
                           playing = !v.paused && !v.ended;
                           v.pause();
                           if (window.SharkStudioBridge && !isNaN(v.currentTime)) {
-                            window.SharkStudioBridge.onTelemetry(Math.floor(v.currentTime), document.title || '', window.location.href || '');
+                            var dur = (isFinite(v.duration) && v.duration > 0) ? Math.floor(v.duration) : 0;
+                            window.SharkStudioBridge.onTelemetry(Math.floor(v.currentTime), dur, false, document.title || '', window.location.href || '');
                           }
                         }
                         return playing ? '1' : '0';
@@ -483,6 +522,76 @@ fun CampVideoStudyStudioDialog(
         )
     }
 
+    pendingDeleteStudioEpisode?.let { epToDelete ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteStudioEpisode = null },
+            containerColor = colorScheme.surface,
+            title = {
+                Text(
+                    text = "Videoyu Sil",
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "\"${epToDelete.topicTitle}\" oynatma listesinden kaldırılsın mı?",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Listeyi tekrardan içe aktararak videoyu yeniden ekleyebilirsiniz.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val updatedList = BookCampManager.removeEpisodeAndReindex(
+                            episodes = episodeListState,
+                            targetDayNumber = epToDelete.dayNumber,
+                            targetVideoId = epToDelete.videoId
+                        )
+                        resourceId?.let { rId ->
+                            BookCampManager.removeEpisodeFromBinding(context, rId, epToDelete)
+                        }
+                        onDeleteEpisode?.invoke(epToDelete)
+                        pendingDeleteStudioEpisode = null
+                        if (updatedList.isEmpty()) {
+                            onDismiss()
+                        } else {
+                            episodeListState = updatedList
+                            if (activeEpisode.dayNumber == epToDelete.dayNumber) {
+                                val nextIdx = (epToDelete.dayNumber - 1).coerceIn(0, updatedList.lastIndex)
+                                selectEpisode(updatedList[nextIdx])
+                            } else {
+                                val remapped = updatedList.firstOrNull {
+                                    (activeEpisode.videoId.isNotBlank() && it.videoId == activeEpisode.videoId) ||
+                                        it.topicTitle == activeEpisode.topicTitle
+                                } ?: updatedList.first()
+                                activeEpisode = remapped
+                            }
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.error,
+                        contentColor = colorScheme.onError
+                    )
+                ) {
+                    Text("Sil", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteStudioEpisode = null }) {
+                    Text("Vazgeç")
+                }
+            }
+        )
+    }
+
     Dialog(
         onDismissRequest = {
             if (isInFullscreen) {
@@ -693,6 +802,32 @@ fun CampVideoStudyStudioDialog(
                                     }
                                 }
 
+                                // Minimize & Continue Playing in Background with Media Notification
+                                Surface(
+                                    onClick = {
+                                        isMinimizingToBackground = true
+                                        CampVideoPlaybackController.minimizeToBackground(context)
+                                        Toast.makeText(
+                                            context,
+                                            "Arka planda oynatılıyor • Bildirimden yönetebilirsiniz",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        onDismiss()
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = colorScheme.primary.copy(alpha = 0.14f),
+                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(Icons.Default.Headphones, contentDescription = "Arka Planda Çal", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
+                                        Text("Arka Plan", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.primary)
+                                    }
+                                }
+
                                 // Ad Blocker toggle
                                 Surface(
                                     onClick = {
@@ -847,7 +982,7 @@ fun CampVideoStudyStudioDialog(
                                 url = playerUrl,
                                 adBlockerEnabled = adBlockerEnabled,
                                 onWebViewCreated = { activeWebViewRef = it },
-                                onPlaybackTelemetry = { seconds, title, currentUrl ->
+                                onPlaybackTelemetry = { seconds, durationSeconds, isPlayingNow, title, currentUrl ->
                                     if (seconds >= 0) livePlaybackSecondsFlow.value = seconds
                                     if (title.isNotBlank() && !title.equals("YouTube", ignoreCase = true)) {
                                         liveVideoTitleRef.set(title.removeSuffix(" - YouTube").trim())
@@ -856,6 +991,13 @@ fun CampVideoStudyStudioDialog(
                                     if (parsedVid.length == 11) {
                                         liveActiveVideoIdRef.set(parsedVid)
                                     }
+                                    CampVideoPlaybackController.onPlaybackTelemetry(
+                                        context = context,
+                                        isPlaying = isPlayingNow,
+                                        positionSeconds = seconds.coerceAtLeast(0),
+                                        durationSeconds = durationSeconds.coerceAtLeast(0),
+                                        resolvedTitle = title
+                                    )
                                 },
                                 onEmbedRestricted = {
                                     if (!useMobileWatchFallback && activeEpisode.videoId.length == 11) {
@@ -1237,7 +1379,7 @@ fun CampVideoStudyStudioDialog(
                                 }
 
                                 else -> {
-                                    // Episodes Tab
+                                    // Episodes Tab with individual video deletion
                                     LazyColumn(
                                         modifier = Modifier
                                             .weight(1f)
@@ -1259,7 +1401,7 @@ fun CampVideoStudyStudioDialog(
                                                 Row(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
-                                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                                        .padding(start = 10.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                                 ) {
@@ -1285,6 +1427,19 @@ fun CampVideoStudyStudioDialog(
                                                                 color = colorScheme.primary,
                                                                 maxLines = 1,
                                                                 overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+                                                    if (safeEpisodes.size > 1) {
+                                                        IconButton(
+                                                            onClick = { pendingDeleteStudioEpisode = ep },
+                                                            modifier = Modifier.size(28.dp)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.DeleteOutline,
+                                                                contentDescription = "Videoyu Sil",
+                                                                tint = colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                                                modifier = Modifier.size(16.dp)
                                                             )
                                                         }
                                                     }
@@ -1360,9 +1515,7 @@ private fun StudioFocusTimerPill(
             )
             when (timerState.timerPhase) {
                 TimerPhase.IDLE -> {
-                    CoachingEngine.selectFocusTitle(context, cleanSubject)
-                    CoachingEngine.setFocusSubNote(context, "${activeEpisode.dayNumber}. Ders ${activeEpisode.topicTitle}".take(42))
-                    CoachingEngine.updateLivePresenceOfflineFirst(context, true, cleanSubject)
+                    CoachingEngine.updateLivePresenceOfflineFirst(context, true, focusLabel)
                     val intent = Intent(context, FocusTimerService::class.java).apply {
                         action = FocusTimerService.ACTION_START
                         putExtra(FocusTimerService.EXTRA_MODE, TimerMode.STOPWATCH.name)
@@ -1467,18 +1620,45 @@ private fun StudioExplainNowChip(
     }
 }
 
+private const val STUDIO_BACKGROUND_PLAY_JS = """
+(function() {
+  if (window.__sharkBgKeepAliveInstalled) return;
+  window.__sharkBgKeepAliveInstalled = true;
+  try {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
+    Object.defineProperty(document, 'webkitHidden', { configurable: true, get: function() { return false; } });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: function() { return 'visible'; } });
+    Object.defineProperty(document, 'webkitVisibilityState', { configurable: true, get: function() { return 'visible'; } });
+    var blockVis = function(e) { e.stopImmediatePropagation(); };
+    document.addEventListener('visibilitychange', blockVis, true);
+    document.addEventListener('webkitvisibilitychange', blockVis, true);
+    window.addEventListener('blur', blockVis, true);
+  } catch (e) {}
+})();
+"""
+
 private const val STUDIO_TELEMETRY_JS = """
 (function() {
   if (window.__sharkTelemetryInstalled) return;
   window.__sharkTelemetryInstalled = true;
+  var boundVideo = null;
   function sendSnap() {
     try {
       var v = document.querySelector('video');
+      if (v && v !== boundVideo) {
+        boundVideo = v;
+        v.addEventListener('play', sendSnap);
+        v.addEventListener('pause', sendSnap);
+        v.addEventListener('seeked', sendSnap);
+        v.addEventListener('loadedmetadata', sendSnap);
+      }
       var sec = (v && !isNaN(v.currentTime)) ? Math.floor(v.currentTime) : -1;
+      var dur = (v && isFinite(v.duration) && v.duration > 0) ? Math.floor(v.duration) : 0;
+      var playing = v ? (!v.paused && !v.ended) : false;
       var titleEl = document.querySelector('.ytp-title-link, h2.slim-video-information-title, .slim-video-metadata-header');
       var title = (titleEl && titleEl.innerText) ? titleEl.innerText : (document.title || '');
       if (window.SharkStudioBridge) {
-        window.SharkStudioBridge.onTelemetry(sec, title, window.location.href || '');
+        window.SharkStudioBridge.onTelemetry(sec, dur, playing, title, window.location.href || '');
       }
       var errEl = document.querySelector('.ytp-error-content-wrap-reason, .ytp-error');
       if (errEl && errEl.innerText && errEl.innerText.length > 4 && window.SharkStudioBridge) {
@@ -1487,8 +1667,8 @@ private const val STUDIO_TELEMETRY_JS = """
     } catch (e) {}
   }
   window.__sharkSendTelemetryNow = sendSnap;
-  setTimeout(sendSnap, 1800);
-  setInterval(sendSnap, 5000);
+  setTimeout(sendSnap, 1200);
+  setInterval(sendSnap, 3500);
 })();
 """
 
@@ -1540,7 +1720,7 @@ private fun DistractionFreeYouTubeWebView(
     url: String,
     adBlockerEnabled: Boolean,
     onWebViewCreated: (WebView) -> Unit,
-    onPlaybackTelemetry: (seconds: Int, title: String, currentUrl: String) -> Unit,
+    onPlaybackTelemetry: (seconds: Int, durationSeconds: Int, isPlaying: Boolean, title: String, currentUrl: String) -> Unit,
     onEmbedRestricted: () -> Unit,
     onEnterCustomFullscreen: (View, WebChromeClient.CustomViewCallback?) -> Unit,
     onExitCustomFullscreen: () -> Unit,
@@ -1554,13 +1734,13 @@ private fun DistractionFreeYouTubeWebView(
     val currentOnExitFs by rememberUpdatedState(onExitCustomFullscreen)
 
     val webView = remember(context) {
-        WebView(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
+        CampVideoPlaybackController.acquireOrCreateWebView(context) { wv ->
+            wv.layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(android.graphics.Color.BLACK)
-            settings.apply {
+            wv.setBackgroundColor(android.graphics.Color.BLACK)
+            wv.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 mediaPlaybackRequiresUserGesture = false
@@ -1573,11 +1753,13 @@ private fun DistractionFreeYouTubeWebView(
                 displayZoomControls = false
                 setGeolocationEnabled(false)
             }
+        }.apply {
+            removeJavascriptInterface("SharkStudioBridge")
             addJavascriptInterface(
                 object {
                     @JavascriptInterface
-                    fun onTelemetry(seconds: Int, title: String, currentUrl: String) {
-                        post { currentOnTelemetry(seconds, title, currentUrl) }
+                    fun onTelemetry(seconds: Int, durationSeconds: Int, isPlaying: Boolean, title: String, currentUrl: String) {
+                        post { currentOnTelemetry(seconds, durationSeconds, isPlaying, title, currentUrl) }
                     }
 
                     @JavascriptInterface
@@ -1615,8 +1797,14 @@ private fun DistractionFreeYouTubeWebView(
                     return super.shouldInterceptRequest(view, request)
                 }
 
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    view?.evaluateJavascript(STUDIO_BACKGROUND_PLAY_JS, null)
+                }
+
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
+                    view?.evaluateJavascript(STUDIO_BACKGROUND_PLAY_JS, null)
                     view?.evaluateJavascript(STUDIO_TELEMETRY_JS, null)
                     if (currentAdBlock) {
                         view?.evaluateJavascript(STUDIO_AD_BLOCKER_JS, null)
@@ -1639,20 +1827,11 @@ private fun DistractionFreeYouTubeWebView(
         }.also { onWebViewCreated(it) }
     }
 
-    DisposableEffect(webView) {
-        onDispose {
-            runCatching {
-                webView.removeJavascriptInterface("SharkStudioBridge")
-                webView.stopLoading()
-                webView.loadUrl("about:blank")
-                webView.clearHistory()
-                webView.destroy()
-            }
-        }
-    }
-
     AndroidView(
-        factory = { webView },
+        factory = {
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView
+        },
         update = { view ->
             if (view.tag != url) {
                 view.tag = url
@@ -2152,19 +2331,104 @@ fun ResourceCampConfigDialog(
                         }
                     }
 
-                    // Real imported episode preview with mapped curriculum topics
+                    // Real imported episode preview with mapped curriculum topics + individual video deletion
                     if (loadedEpisodes.isNotEmpty()) {
+                        var showAllImportedEpisodes by remember { mutableStateOf(false) }
+                        var pendingDeleteImportedEpisode by remember { mutableStateOf<CampDayEpisode?>(null) }
+
+                        pendingDeleteImportedEpisode?.let { epToDelete ->
+                            AlertDialog(
+                                onDismissRequest = { pendingDeleteImportedEpisode = null },
+                                containerColor = colorScheme.surface,
+                                title = {
+                                    Text(
+                                        text = "Videoyu Sil",
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface
+                                    )
+                                },
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "\"${epToDelete.topicTitle}\" oynatma listesinden kaldırılsın mı?",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Listeyi tekrardan içe aktararak videoyu yeniden ekleyebilirsiniz.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            val nextEpisodes = BookCampManager.removeEpisodeAndReindex(
+                                                episodes = loadedEpisodes,
+                                                targetDayNumber = epToDelete.dayNumber,
+                                            targetVideoId = epToDelete.videoId
+                                            )
+                                            loadedEpisodes = nextEpisodes
+                                            val clampedDay = (currentDayText.toIntOrNull() ?: 1)
+                                                .coerceIn(1, nextEpisodes.size.coerceAtLeast(1))
+                                            currentDayText = clampedDay.toString()
+                                            if (initialBinding.hasVerifiedVideoSupport) {
+                                                BookCampManager.removeEpisodeFromBinding(context, resource.id, epToDelete)
+                                                    ?.let { onSaved(it) }
+                                            }
+                                            pendingDeleteImportedEpisode = null
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = colorScheme.error,
+                                            contentColor = colorScheme.onError
+                                        )
+                                    ) {
+                                        Text("Sil", fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { pendingDeleteImportedEpisode = null }) {
+                                        Text("Vazgeç")
+                                    }
+                                }
+                            )
+                        }
+
                         val selectedDay = (currentDayText.toIntOrNull() ?: 1).coerceIn(1, loadedEpisodes.size)
                         val startIdx = (selectedDay - 1).coerceAtLeast(0)
-                        val window = loadedEpisodes.drop(startIdx).take(6)
+                        val window = if (showAllImportedEpisodes || loadedEpisodes.size <= 10) {
+                            loadedEpisodes
+                        } else {
+                            loadedEpisodes.drop(startIdx).take(10)
+                        }
                         HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                         val skipTag = if (skippedIntroCount > 0) " • $skippedIntroCount tanıtım elendi" else ""
-                        Text(
-                            text = "İçe Aktarılan Ders Sırası (${loadedEpisodes.size} Ders$skipTag • Kaldığın yere dokun)",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "İçe Aktarılan Ders Sırası (${loadedEpisodes.size} Ders$skipTag)",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (loadedEpisodes.size > 10) {
+                                TextButton(
+                                    onClick = { showAllImportedEpisodes = !showAllImportedEpisodes },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                                ) {
+                                    Text(
+                                        text = if (showAllImportedEpisodes) "Daralt" else "Tümünü Gör",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             window.forEach { ep ->
                                 val isSelected = ep.dayNumber == selectedDay
@@ -2177,7 +2441,7 @@ fun ResourceCampConfigDialog(
                                             else colorScheme.surfaceVariant.copy(alpha = 0.4f)
                                         )
                                         .clickable { currentDayText = ep.dayNumber.toString() }
-                                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                                        .padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
@@ -2200,13 +2464,31 @@ fun ResourceCampConfigDialog(
                                             )
                                         }
                                     }
-                                    if (isSelected) {
-                                        Text(
-                                            text = "Aktif",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        if (isSelected) {
+                                            Text(
+                                                text = "Aktif",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = colorScheme.primary,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                        if (loadedEpisodes.size > 1) {
+                                            IconButton(
+                                                onClick = { pendingDeleteImportedEpisode = ep },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.DeleteOutline,
+                                                    contentDescription = "Videoyu Sil",
+                                                    tint = colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }

@@ -98,8 +98,10 @@ fun FocusChatLockOverlay(
         "Aktif Seans"
     }
 
-    val activeSubject = remember(isFocusLocked, timerState.currentMode) {
-        focusSessionManager.getActiveSubject().ifBlank { timerState.currentMode.displayName }
+    val activeSubject = remember(isFocusLocked, timerState.currentMode, timerState.activeSubject) {
+        timerState.activeSubject.takeIf { it.isNotBlank() && !it.equals("Genel", ignoreCase = true) }
+            ?: focusSessionManager.getActiveSubject().takeIf { it.isNotBlank() && !it.equals("Genel", ignoreCase = true) }
+            ?: timerState.currentMode.displayName
     }
 
     Box(

@@ -660,6 +660,7 @@ fun ResourceCard(
             subject = resource.subject,
             initialEpisode = currentEp,
             allEpisodes = campBinding.episodes.ifEmpty { listOf(currentEp) },
+            resourceId = resource.id,
             onEpisodeChanged = { chosenEp ->
                 BookCampManager.advanceCampDay(context, resource, targetDay = chosenEp.dayNumber)
             },

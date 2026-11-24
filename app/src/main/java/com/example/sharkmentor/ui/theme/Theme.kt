@@ -4,19 +4,36 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.example.sharkmentor.core.data.AppThemeMode
+import com.example.sharkmentor.core.data.BlueLightFilterMode
+import com.example.sharkmentor.core.data.CircadianScheduleMode
 import com.example.sharkmentor.core.data.ThemePalette
+import com.example.sharkmentor.core.data.ThemePreferences
 import com.example.sharkmentor.ui.components.SpecialMemberConfig
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import java.time.LocalTime
 
 // ── Natural Dark Palettes (full M3 token coverage — zero default purple fallback) ──
 
@@ -838,6 +855,9 @@ private fun paletteSchemeFor(palette: ThemePalette, isDark: Boolean): ColorSchem
     }
 }
 
+private val LocalBlueLightApplied = compositionLocalOf { false }
+private val EyeComfortAmberTint = Color(0xFFFF8C1A)
+
 @Composable
 fun SharkMentorTheme(
     themeMode: AppThemeMode = AppThemeMode.SYSTEM,
@@ -845,21 +865,74 @@ fun SharkMentorTheme(
     isZenMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val circadianNight = androidx.compose.runtime.produceState(
-        initialValue = com.example.sharkmentor.core.data.isCircadianNightHour(
-            java.time.LocalTime.now().hour
-        ),
-        key1 = themeMode
+    val view = LocalView.current
+    val context = LocalContext.current
+    val themePrefs = remember(context, view.isInEditMode) {
+        if (view.isInEditMode) null
+        else runCatching { ThemePreferences.initialize(context.applicationContext) }.getOrNull()
+    }
+
+    val circadianScheduleMode by remember(themePrefs) {
+        themePrefs?.circadianScheduleMode ?: MutableStateFlow(CircadianScheduleMode.LOCATION_SUNSET)
+    }.collectAsState()
+    val circadianStartMin by remember(themePrefs) {
+        themePrefs?.circadianStartMinute ?: MutableStateFlow(20 * 60)
+    }.collectAsState()
+    val circadianEndMin by remember(themePrefs) {
+        themePrefs?.circadianEndMinute ?: MutableStateFlow(7 * 60)
+    }.collectAsState()
+
+    val blueLightMode by remember(themePrefs) {
+        themePrefs?.blueLightMode ?: MutableStateFlow(BlueLightFilterMode.OFF)
+    }.collectAsState()
+    val blueLightIntensity by remember(themePrefs) {
+        themePrefs?.blueLightIntensity ?: MutableStateFlow(0.22f)
+    }.collectAsState()
+    val blueLightStartMin by remember(themePrefs) {
+        themePrefs?.blueLightStartMinute ?: MutableStateFlow(21 * 60)
+    }.collectAsState()
+    val blueLightEndMin by remember(themePrefs) {
+        themePrefs?.blueLightEndMinute ?: MutableStateFlow(7 * 60)
+    }.collectAsState()
+
+    val needsClockTick = themeMode == AppThemeMode.CIRCADIAN ||
+        blueLightMode == BlueLightFilterMode.LOCATION_SUNSET ||
+        blueLightMode == BlueLightFilterMode.CUSTOM_TIME
+
+    val nowMinuteOfDay by produceState(
+        initialValue = LocalTime.now().let { it.hour * 60 + it.minute },
+        key1 = needsClockTick
     ) {
-        if (themeMode == AppThemeMode.CIRCADIAN) {
+        if (needsClockTick) {
             while (true) {
-                value = com.example.sharkmentor.core.data.isCircadianNightHour(
-                    java.time.LocalTime.now().hour
-                )
-                kotlinx.coroutines.delay(60_000L)
+                value = LocalTime.now().let { it.hour * 60 + it.minute }
+                delay(30_000L)
             }
         }
-    }.value
+    }
+
+    val circadianNight = remember(
+        themePrefs,
+        themeMode,
+        circadianScheduleMode,
+        circadianStartMin,
+        circadianEndMin,
+        nowMinuteOfDay
+    ) {
+        themePrefs?.isCircadianNightNow(nowMinuteOfDay)
+            ?: com.example.sharkmentor.core.data.isCircadianNightHour(nowMinuteOfDay / 60)
+    }
+
+    val isBlueLightActive = remember(
+        themePrefs,
+        blueLightMode,
+        blueLightStartMin,
+        blueLightEndMin,
+        nowMinuteOfDay
+    ) {
+        themePrefs?.isBlueLightFilterActiveNow(nowMinuteOfDay) ?: (blueLightMode == BlueLightFilterMode.MANUAL_ON)
+    }
+
     val isDark = when (themeMode) {
         AppThemeMode.SYSTEM -> isSystemInDarkTheme()
         AppThemeMode.DARK -> true
@@ -883,7 +956,6 @@ fun SharkMentorTheme(
     val statusBarBg = finalColors.background
     val navBarBg    = finalColors.surface
 
-    val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = view.context.findActivity()?.window ?: return@SideEffect
@@ -898,9 +970,34 @@ fun SharkMentorTheme(
         }
     }
 
+    val alreadyFiltered = LocalBlueLightApplied.current
+    val effectiveFilterAlpha = if (!alreadyFiltered && isBlueLightActive) {
+        blueLightIntensity.coerceIn(0.08f, 0.48f)
+    } else {
+        0f
+    }
+
     MaterialTheme(
         colorScheme = finalColors,
-        typography = Typography,
-        content = content
-    )
+        typography = Typography
+    ) {
+        if (alreadyFiltered) {
+            content()
+        } else {
+            CompositionLocalProvider(LocalBlueLightApplied provides true) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .drawWithContent {
+                            drawContent()
+                            if (effectiveFilterAlpha > 0f) {
+                                drawRect(color = EyeComfortAmberTint.copy(alpha = effectiveFilterAlpha))
+                            }
+                        }
+                ) {
+                    content()
+                }
+            }
+        }
+    }
 }

@@ -600,11 +600,16 @@ fun FocusTopicSelectorCard(
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface
                 )
+                val hasSelection = selectedTitle.isNotBlank() || subNote.isNotBlank()
                 Text(
-                    text = CoachingEngine.buildFormattedFocusSubject(selectedTitle, subNote),
+                    text = if (hasSelection) {
+                        CoachingEngine.buildFormattedFocusSubject(selectedTitle, subNote)
+                    } else {
+                        "Boş bırakılabilir"
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorScheme.primary,
+                    fontWeight = if (hasSelection) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (hasSelection) colorScheme.primary else colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -690,15 +695,29 @@ fun FocusTopicSelectorCard(
                 }
             }
 
-            // Optional Sub-Note / Specific Task input
+            // Optional Sub-Note / Specific Task input (starts empty every time)
             OutlinedTextField(
                 value = subNote,
                 onValueChange = onSubNoteChange,
                 placeholder = {
                     Text(
-                        text = "Alt detay (Opsiyonel: Türev Test 4, 3. Gün Kampı...)",
+                        text = "Çalışma konusu (Örn: Analitik Geometri)",
                         style = MaterialTheme.typography.bodySmall
                     )
+                },
+                trailingIcon = {
+                    if (subNote.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onSubNoteChange("") },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Temizle",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(10.dp),
@@ -1112,12 +1131,6 @@ fun ComprehensiveSupportSettingsScreen(
                         )
                     }
                 }
-
-                Text(
-                    text = "Günde 2 kez otomatik senkronize edilir. Yalnızca koçluk, plan ekleme ve Zen Koç işlemlerinde adın/kimliğin olmadan paylaşılır.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colorScheme.onSurfaceVariant
-                )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1730,6 +1743,7 @@ fun DuolingoCoachingPathView(
             subject = node.subject,
             initialEpisode = node.campEpisode,
             allEpisodes = resourceBinding?.episodes?.ifEmpty { listOf(node.campEpisode) } ?: listOf(node.campEpisode),
+            resourceId = node.linkedResource?.id,
             onEpisodeChanged = { chosenEp ->
                 node.linkedResource?.let { res ->
                     BookCampManager.advanceCampDay(context, res, targetDay = chosenEp.dayNumber)
@@ -1770,8 +1784,6 @@ fun DuolingoCoachingPathView(
                     title = node.subject,
                     subNote = node.topic.take(40)
                 )
-                CoachingEngine.selectFocusTitle(context, node.subject)
-                CoachingEngine.setFocusSubNote(context, node.topic.take(40))
                 onStartFocusWithSubject(chosenMode, formattedSubject)
                 activePracticeNode = null
             },

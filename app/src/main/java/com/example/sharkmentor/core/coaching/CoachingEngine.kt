@@ -228,7 +228,7 @@ object CoachingEngine {
     private val _customFocusTitles = MutableStateFlow<List<String>>(emptyList())
     val customFocusTitles: StateFlow<List<String>> = _customFocusTitles.asStateFlow()
 
-    private val _selectedFocusTitle = MutableStateFlow("TYT")
+    private val _selectedFocusTitle = MutableStateFlow("")
     val selectedFocusTitle: StateFlow<String> = _selectedFocusTitle.asStateFlow()
 
     private val _focusSubNote = MutableStateFlow("")
@@ -270,12 +270,8 @@ object CoachingEngine {
             _useAiRecommendedGoal.value = sp.getBoolean(KEY_USE_AI_GOAL, false)
 
             _customFocusTitles.value = parseStringListJson(sp.getString(KEY_CUSTOM_FOCUS_TITLES, null))
-            val defaultExamTitle = defaultFocusTitlesForExam(
-                UserPreferences.getInstance(appCtx).studentTargetExam
-            ).firstOrNull() ?: "TYT"
-            _selectedFocusTitle.value = sp.getString(KEY_SELECTED_FOCUS_TITLE, defaultExamTitle)
-                ?.takeIf { it.isNotBlank() } ?: defaultExamTitle
-            _focusSubNote.value = sp.getString(KEY_FOCUS_SUB_NOTE, "") ?: ""
+            _selectedFocusTitle.value = ""
+            _focusSubNote.value = ""
 
             _livePresence.value = LiveFocusPresence(
                 isStudying = sp.getBoolean(KEY_PRESENCE_STUDYING, false),
@@ -421,18 +417,33 @@ object CoachingEngine {
         return merged.toList()
     }
 
+    fun resetFocusLaunchDraft(context: Context) {
+        ensureInitialized(context)
+        _selectedFocusTitle.value = ""
+        _focusSubNote.value = ""
+        prefs(context).edit()
+            .remove(KEY_SELECTED_FOCUS_TITLE)
+            .remove(KEY_FOCUS_SUB_NOTE)
+            .apply()
+    }
+
     fun selectFocusTitle(context: Context, title: String) {
         ensureInitialized(context)
-        val clean = title.trim().ifBlank { "Genel" }
-        _selectedFocusTitle.value = clean
-        prefs(context).edit().putString(KEY_SELECTED_FOCUS_TITLE, clean).apply()
+        val trimmed = title.trim()
+        val next = if (trimmed.isBlank() || _selectedFocusTitle.value.equals(trimmed, ignoreCase = true)) {
+            ""
+        } else {
+            trimmed
+        }
+        _selectedFocusTitle.value = next
+        prefs(context).edit().putString(KEY_SELECTED_FOCUS_TITLE, next).apply()
     }
 
     fun setFocusSubNote(context: Context, subNote: String) {
         ensureInitialized(context)
-        val clean = subNote.trim().take(48)
+        val clean = subNote.replace("\n", " ").replace("\r", "").take(60)
         _focusSubNote.value = clean
-        prefs(context).edit().putString(KEY_FOCUS_SUB_NOTE, clean).apply()
+        prefs(context).edit().putString(KEY_FOCUS_SUB_NOTE, clean.trim()).apply()
     }
 
     fun addCustomFocusTitle(context: Context, newTitle: String) {
@@ -445,7 +456,8 @@ object CoachingEngine {
             _customFocusTitles.value = current
             prefs(context).edit().putString(KEY_CUSTOM_FOCUS_TITLES, toStringListJson(current)).apply()
         }
-        selectFocusTitle(context, clean)
+        _selectedFocusTitle.value = clean
+        prefs(context).edit().putString(KEY_SELECTED_FOCUS_TITLE, clean).apply()
     }
 
     fun removeCustomFocusTitle(context: Context, titleToRemove: String) {
@@ -454,8 +466,8 @@ object CoachingEngine {
         _customFocusTitles.value = updated
         prefs(context).edit().putString(KEY_CUSTOM_FOCUS_TITLES, toStringListJson(updated)).apply()
         if (_selectedFocusTitle.value.equals(titleToRemove.trim(), ignoreCase = true)) {
-            val fallback = availableFocusTitles().firstOrNull() ?: "TYT"
-            selectFocusTitle(context, fallback)
+            _selectedFocusTitle.value = ""
+            prefs(context).edit().remove(KEY_SELECTED_FOCUS_TITLE).apply()
         }
     }
 
@@ -463,84 +475,75 @@ object CoachingEngine {
         title: String = _selectedFocusTitle.value,
         subNote: String = _focusSubNote.value
     ): String {
-        val cleanTitle = title.trim().ifBlank { "Odak" }
+        val cleanTitle = title.trim().takeUnless {
+            it.equals("Genel", ignoreCase = true) || it.equals("Odak", ignoreCase = true)
+        }.orEmpty()
         val cleanNote = subNote.trim()
-        return if (cleanNote.isNotBlank()) {
-            "$cleanTitle • $cleanNote"
-        } else {
-            cleanTitle
+        return when {
+            cleanTitle.isNotBlank() && cleanNote.isNotBlank() -> {
+                if (cleanNote.contains(cleanTitle, ignoreCase = true)) cleanNote
+                else "$cleanTitle • $cleanNote"
+            }
+            cleanNote.isNotBlank() -> cleanNote
+            cleanTitle.isNotBlank() -> cleanTitle
+            else -> "Odak"
         }
     }
 
     /**
-     * Normalizes a raw focus subject (which may contain book titles, sub-notes, camp days, or topics like
-     * "AYT Kimya • Organik Kimya 4. Gün" or "AYT Matematik - Türev Test 4") into a clean, concise league label
-     * (e.g. "AYT Kimya", "AYT Matematik", "TYT", "Kitap Okuma").
+     * Preserves the student's actual chosen/written study topic (e.g. "Analitik Geometri" or
+     * "AYT • Analitik Geometri") across all app boxes and Shark League while stripping noisy
+     * auto-generated camp metadata like "(Esnek • 90 dk)" or "Video Ders Kampı".
      */
     fun formatCleanLeagueSubject(rawSubject: String): String {
         val trimmed = rawSubject.trim()
         if (trimmed.isBlank()) return ""
-        var primary = trimmed
-            .substringBefore("•")
-            .substringBefore("·")
-            .substringBefore(" - ")
-            .substringBefore(" – ")
-            .substringBefore(" — ")
-            .substringBefore(":")
-            .substringBefore("|")
-            .substringBefore("(")
-            .replace(Regex("""\b\d{1,3}\.\s*[Gg]ün\b.*"""), "")
+        if (trimmed.equals("Genel", ignoreCase = true)) return "Odak"
+
+        var cleaned = trimmed
+            .replace(Regex("""\([^)]*\)"""), "")
+            .replace(Regex("""\b\d{1,3}\.\s*[Gg]ün\b"""), "")
             .replace(
                 Regex(
-                    """\b(Konu Anlatımı|Soru Çözümü|Video Ders Kampı|Video Kampı|Kampı|Tekrar|Test\s*\d*)\b""",
+                    """\b(Video Ders Kampı|Video Kampı|Konu Anlatımı)\b""",
                     RegexOption.IGNORE_CASE
                 ),
                 ""
             )
             .replace(Regex("""\s+"""), " ")
             .trim()
-            .trimEnd('-', '•', ':', '|', ',')
-            .trim()
+            .trim('-', '•', '·', ':', '|', ',', ' ')
 
-        if (primary.isBlank()) primary = trimmed.take(24)
+        if (cleaned.isBlank()) return trimmed.take(36)
 
-        val words = primary.split(" ").filter { it.isNotBlank() }
-        if (words.size > 3 || primary.length > 22) {
-            val lower = primary.lowercase(Locale("tr"))
-            val examPrefix = when {
-                lower.contains("tyt-ayt") || lower.contains("tyt ayt") -> "TYT-AYT"
-                lower.contains("ayt") -> "AYT"
-                lower.contains("tyt") -> "TYT"
-                lower.contains("lgs") -> "LGS"
-                lower.contains("kpss") -> "KPSS"
-                lower.contains("tus") -> "TUS"
-                lower.contains("dgs") -> "DGS"
-                lower.contains("ales") -> "ALES"
-                else -> ""
+        val bulletParts = cleaned
+            .split(Regex("""\s*[•·|]\s*"""))
+            .map { it.trim().trim('-', ':', ',') }
+            .filter {
+                it.isNotBlank() &&
+                    !it.equals("Genel", ignoreCase = true) &&
+                    !it.equals("Odak", ignoreCase = true)
             }
-            val subjectName = when {
-                lower.contains("matematik") || Regex("""\bmat\b""").containsMatchIn(lower) -> "Matematik"
-                lower.contains("geometri") || Regex("""\bgeo\b""").containsMatchIn(lower) -> "Geometri"
-                lower.contains("fizik") -> "Fizik"
-                lower.contains("kimya") -> "Kimya"
-                lower.contains("biyoloji") -> "Biyoloji"
-                lower.contains("türkçe") || lower.contains("turkce") -> "Türkçe"
-                lower.contains("edebiyat") -> "Edebiyat"
-                lower.contains("paragraf") -> "Paragraf"
-                lower.contains("tarih") -> "Tarih"
-                lower.contains("coğrafya") || lower.contains("cografya") -> "Coğrafya"
-                lower.contains("felsefe") -> "Felsefe"
-                lower.contains("din") -> "Din Kültürü"
-                lower.contains("fen") -> "Fen Bilimleri"
-                lower.contains("ingilizce") -> "İngilizce"
-                else -> ""
+
+        val combined = when {
+            bulletParts.isEmpty() -> cleaned
+            bulletParts.size == 1 -> bulletParts.first()
+            else -> {
+                val head = bulletParts.first()
+                val tail = bulletParts.drop(1).joinToString(" • ")
+                when {
+                    tail.contains(head, ignoreCase = true) -> tail
+                    "$head • $tail".length <= 38 -> "$head • $tail"
+                    else -> tail.take(38).trim()
+                }
             }
-            if (subjectName.isNotBlank()) {
-                return if (examPrefix.isNotBlank()) "$examPrefix $subjectName" else subjectName
-            }
-            return words.take(2).joinToString(" ").take(22).trim()
         }
-        return primary
+
+        return if (combined.length <= 38) {
+            combined
+        } else {
+            combined.take(38).trimEnd(' ', '-', '•', ':', ',')
+        }
     }
 
     // ── Offline-First Live Presence Broadcast (Shark League & Friends) ───────

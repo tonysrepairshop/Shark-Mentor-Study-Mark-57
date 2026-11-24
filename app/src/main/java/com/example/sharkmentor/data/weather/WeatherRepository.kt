@@ -274,6 +274,11 @@ class WeatherRepository private constructor(context: Context) {
                     }
                 }
 
+                prefs.edit()
+                    .putString(KEY_CACHE_LAT, targetLat.toString())
+                    .putString(KEY_CACHE_LON, targetLon.toString())
+                    .apply()
+
                 val updated = WeatherUiState(
                     city = targetCity,
                     country = targetCountry,
@@ -429,6 +434,19 @@ class WeatherRepository private constructor(context: Context) {
         }
     }
 
+    fun getEffectiveCoordinates(): Pair<Double, Double> {
+        val s = _settings.value
+        if (!s.autoLocation) {
+            return s.manualLat to s.manualLon
+        }
+        val cachedLat = prefs.getString(KEY_CACHE_LAT, null)?.toDoubleOrNull()
+        val cachedLon = prefs.getString(KEY_CACHE_LON, null)?.toDoubleOrNull()
+        if (cachedLat != null && cachedLon != null) {
+            return cachedLat to cachedLon
+        }
+        return s.manualLat to s.manualLon
+    }
+
     companion object {
         private const val PREFS_NAME = "shark_weather_prefs"
         private const val CACHE_DURATION_MS = 30L * 60L * 1000L
@@ -446,6 +464,8 @@ class WeatherRepository private constructor(context: Context) {
         private const val KEY_CACHE_CODE = "cache_code"
         private const val KEY_CACHE_UPDATED_AT = "cache_updated_at"
         private const val KEY_CACHE_HOURLY = "cache_hourly"
+        private const val KEY_CACHE_LAT = "cache_lat"
+        private const val KEY_CACHE_LON = "cache_lon"
 
         @Volatile
         private var instance: WeatherRepository? = null
