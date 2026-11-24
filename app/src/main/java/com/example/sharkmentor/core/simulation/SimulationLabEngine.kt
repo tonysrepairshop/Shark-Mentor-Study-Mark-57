@@ -354,9 +354,9 @@ function loop(now){
   // Ampul (üst kenar)
   const mx=(x1+x2)/2,glow=Math.min(1,P/55);
   const grad=ctx.createRadialGradient(mx,y1,4,mx,y1,26+glow*24);
-  grad.addColorStop(0,`rgba(250,204,21,${0.3+glow*0.7})`);grad.addColorStop(1,'rgba(250,204,21,0)');
+  grad.addColorStop(0,'rgba(250,204,21,'+(0.3+glow*0.7)+')');grad.addColorStop(1,'rgba(250,204,21,0)');
   ctx.fillStyle=grad;ctx.beginPath();ctx.arc(mx,y1,48,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle=`rgba(253,224,71,${0.25+glow*0.75})`;ctx.strokeStyle='#fde047';ctx.lineWidth=2;
+  ctx.fillStyle='rgba(253,224,71,'+(0.25+glow*0.75)+')';ctx.strokeStyle='#fde047';ctx.lineWidth=2;
   ctx.beginPath();ctx.arc(mx,y1,14,0,Math.PI*2);ctx.fill();ctx.stroke();
   // Direnç (alt kenar)
   ctx.fillStyle='#1e293b';ctx.strokeStyle='#f59e0b';ctx.lineWidth=2;ctx.fillRect(mx-28,y2-10,56,20);ctx.strokeRect(mx-28,y2-10,56,20);
@@ -415,7 +415,7 @@ function draw(){
   const bx=18,by=45,bw=84,bh=145;
   const fillH=55+(vb/50)*75;
   const pinkAlpha=ph<8.0?0.08:Math.min(0.85,(ph-8.0)/3.0);
-  ctx.fillStyle=ph<8.0?'rgba(148,163,184,0.22)':`rgba(236,72,153,${pinkAlpha})`;
+  ctx.fillStyle=ph<8.0?'rgba(148,163,184,0.22)':'rgba(236,72,153,'+pinkAlpha+')';
   ctx.fillRect(bx+3,by+bh-fillH,bw-6,fillH-3);
   ctx.strokeStyle='#94a3b8';ctx.lineWidth=2.5;ctx.strokeRect(bx,by,bw,bh);
   ctx.fillStyle='#cbd5e1';ctx.font='11px system-ui';ctx.fillText('Beher',bx+25,by+bh+16);

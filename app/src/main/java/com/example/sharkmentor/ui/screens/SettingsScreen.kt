@@ -197,8 +197,6 @@ fun SettingsScreen(
     val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
     val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
     val autoHideBottomBar by themePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
-    val topBarPrefs = remember(context) { TopBarPreferences.getInstance(context.applicationContext) }
-    val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
 
     LaunchedEffect(context) {
         MusicPlayerHub.ensureInitialized(context)
