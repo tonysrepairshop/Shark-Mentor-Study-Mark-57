@@ -245,7 +245,7 @@ object SharkCardManager {
         card: SharkCardSnapshot,
         forcePrivacyToggle: Boolean
     ) {
-        val db = GoogleServicesHelper.getFirestore(context) ?: return
+        val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val sig = buildString {
             append(card.isPublic).append('|')
@@ -320,7 +320,7 @@ object SharkCardManager {
             return@withContext cached.isPublic to (if (cached.isPublic) cached.card else null)
         }
 
-        val db = GoogleServicesHelper.getFirestore(context) ?: return@withContext false to null
+        val db = GoogleServicesHelper.getFirebaseFirestore(context) ?: return@withContext false to null
         val doc = runCatching {
             db.collection("students").document(studentId).get().await()
         }.getOrNull() ?: return@withContext false to null
