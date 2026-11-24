@@ -142,8 +142,25 @@ fun SmartFlashcardStudioView(
         }
     }
 
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!sessionFinished && sessionOutcomes.isNotEmpty()) {
+                SmartFlashcardManager.flushSessionOutcomesInBackground(
+                    context = context,
+                    sessionResults = sessionOutcomes.values.toMap()
+                )
+            }
+        }
+    }
+
     fun launchDeckBuild(selection: SelectedFlashcardSources, forceRegenerate: Boolean) {
         if (isGenerating) return
+        if (!sessionFinished && sessionOutcomes.isNotEmpty()) {
+            SmartFlashcardManager.flushSessionOutcomesInBackground(
+                context = context,
+                sessionResults = sessionOutcomes.values.toMap()
+            )
+        }
         scope.launch {
             isGenerating = true
             sessionOutcomes.clear()
@@ -955,6 +972,8 @@ private fun PodcastBetaBottomSheet(
         isPlaying = true
     }
 
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
     DisposableEffect(context) {
         var engine: TextToSpeech? = null
         engine = TextToSpeech(context.applicationContext) { status ->
@@ -963,20 +982,22 @@ private fun PodcastBetaBottomSheet(
                 engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onError(utteranceId: String?) {
-                        isPlaying = false
+                        mainHandler.post { isPlaying = false }
                     }
                     override fun onDone(utteranceId: String?) {
                         if (utteranceId != null && utteranceId.endsWith("_a")) {
-                            val nextIdx = activeTrackIdx + 1
-                            if (nextIdx < tracks.size) {
-                                speakTrack(nextIdx, speechRate)
-                            } else {
-                                isPlaying = false
+                            mainHandler.post {
+                                val nextIdx = activeTrackIdx + 1
+                                if (nextIdx < tracks.size) {
+                                    speakTrack(nextIdx, speechRate)
+                                } else {
+                                    isPlaying = false
+                                }
                             }
                         }
                     }
                 })
-                ttsReady = true
+                mainHandler.post { ttsReady = true }
             }
         }
         ttsHolder[0] = engine

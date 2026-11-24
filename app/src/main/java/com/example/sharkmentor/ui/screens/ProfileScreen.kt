@@ -271,7 +271,7 @@ fun ProfileScreen(
     val sharkCard by SharkCardManager.myCard.collectAsStateWithLifecycle()
     var isRefreshingSharkCard by remember { mutableStateOf(false) }
 
-    LaunchedEffect(studentName, studentGrade, studentTargetExam) {
+    LaunchedEffect(studentName, studentGrade, studentTargetExam, mentorPoints, unlockedBadgeIds.size) {
         SharkCardManager.ensureLoaded(context)
         SharkCardManager.refreshCard(
             context = context,
@@ -313,6 +313,7 @@ fun ProfileScreen(
             val db = GoogleServicesHelper.getFirebaseFirestore(context)
             db?.collection("students")?.document(uid)?.get()
                 ?.addOnSuccessListener { snapshot ->
+                    SharkCardManager.syncFromRemoteStudentDoc(context, snapshot)
                     val nameInDb = listOf("name", "displayName", "fullName", "username")
                         .firstNotNullOfOrNull { field ->
                             snapshot.getString(field)?.takeIf { isMeaningfulProfileName(it) }

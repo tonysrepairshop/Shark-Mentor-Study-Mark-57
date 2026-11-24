@@ -11,6 +11,7 @@ import com.example.sharkmentor.data.repository.StreakRepository
 import com.example.sharkmentor.ui.viewmodel.SharkTier
 import com.example.sharkmentor.ui.viewmodel.toTier
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.SetOptions
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,7 @@ object SharkCardManager {
     private const val PREFS_NAME = "shark_card_prefs_v1"
     private const val KEY_CARD_JSON = "card_snapshot_json"
     private const val KEY_IS_PUBLIC = "card_is_public"
+    private const val KEY_IS_PUBLIC_EXPLICIT = "card_is_public_explicit"
     private const val KEY_LAST_CLOUD_SIG = "last_cloud_sig"
     private const val KEY_LAST_CLOUD_AT = "last_cloud_at_ms"
 
@@ -100,6 +102,34 @@ object SharkCardManager {
             } else null
             _myCard.value = (parsed ?: SharkCardSnapshot()).copy(isPublic = savedPublic)
             loaded = true
+        }
+    }
+
+    /**
+     * Zero-read reinstall sync: adopts `sharkCardPublic` (and initial card snapshot if local is empty)
+     * from an already-fetched `students/{uid}` DocumentSnapshot in ProfileScreen or SyncWorker.
+     */
+    fun syncFromRemoteStudentDoc(context: Context, doc: DocumentSnapshot?) {
+        if (doc == null || !doc.exists()) return
+        ensureLoaded(context)
+        val appCtx = context.applicationContext
+        val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val hasLocalExplicit = prefs.getBoolean(KEY_IS_PUBLIC_EXPLICIT, false)
+        if (!hasLocalExplicit && doc.contains("sharkCardPublic")) {
+            val remotePub = doc.getBoolean("sharkCardPublic") ?: true
+            prefs.edit()
+                .putBoolean(KEY_IS_PUBLIC, remotePub)
+                .putBoolean(KEY_IS_PUBLIC_EXPLICIT, true)
+                .apply()
+            val (_, remoteCard) = extractCardFromStudentDoc(doc.id, doc)
+            val base = if (_myCard.value.updatedAtMillis == 0L && remoteCard != null) {
+                remoteCard
+            } else {
+                _myCard.value
+            }
+            val merged = base.copy(isPublic = remotePub)
+            prefs.edit().putString(KEY_CARD_JSON, gson.toJson(merged)).apply()
+            _myCard.value = merged
         }
     }
 
@@ -205,7 +235,7 @@ object SharkCardManager {
         _myCard.value = fresh
 
         if (uid.isNotBlank()) {
-            peerCardCache[uid] = CachedPeerCard(isPublic = isPublic, card = fresh, fetchedAtMs = now)
+            peerCardCache[uid] = CachedPeerCard(isPublic = isPublic, card = if (isPublic) fresh else null, fetchedAtMs = now)
             if (syncToCloud) {
                 pushCardToFirestoreGuarded(appCtx, uid, fresh, forcePrivacyToggle = false)
             }
@@ -220,20 +250,24 @@ object SharkCardManager {
         ensureLoaded(context)
         val appCtx = context.applicationContext
         val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        prefs.edit().putBoolean(KEY_IS_PUBLIC, isPublic).apply()
+        prefs.edit()
+            .putBoolean(KEY_IS_PUBLIC, isPublic)
+            .putBoolean(KEY_IS_PUBLIC_EXPLICIT, true)
+            .apply()
 
         val base = if (_myCard.value.updatedAtMillis == 0L) {
             refreshCard(appCtx, syncToCloud = false)
         } else {
             _myCard.value
         }
-        val updated = base.copy(isPublic = isPublic, updatedAtMillis = System.currentTimeMillis())
+        val now = System.currentTimeMillis()
+        val updated = base.copy(isPublic = isPublic, updatedAtMillis = now)
         prefs.edit().putString(KEY_CARD_JSON, gson.toJson(updated)).apply()
         _myCard.value = updated
 
         val uid = GoogleServicesHelper.getFirebaseAuth(appCtx)?.currentUser?.uid.orEmpty()
         if (uid.isNotBlank()) {
-            peerCardCache[uid] = CachedPeerCard(isPublic = isPublic, card = updated, fetchedAtMs = System.currentTimeMillis())
+            peerCardCache[uid] = CachedPeerCard(isPublic = isPublic, card = if (isPublic) updated else null, fetchedAtMs = now)
             pushCardToFirestoreGuarded(appCtx, uid, updated, forcePrivacyToggle = true)
         }
         updated
@@ -289,6 +323,8 @@ object SharkCardManager {
                 "strongestSubject" to card.strongestSubject,
                 "updatedAtMillis" to card.updatedAtMillis
             )
+        } else {
+            payload["sharkCard"] = FieldValue.delete()
         }
 
         runCatching {

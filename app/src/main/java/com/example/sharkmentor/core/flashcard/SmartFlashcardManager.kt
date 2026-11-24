@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -590,6 +591,9 @@ object SmartFlashcardManager {
         sessionResults: Map<SmartFlashcard, Boolean>
     ) = withContext(Dispatchers.IO) {
         if (sessionResults.isEmpty()) return@withContext
+        if (sessionResults.keys.any { it.errorQuestionId != null }) {
+            com.example.sharkmentor.service.sync.SyncWorker.enqueueImmediateSync(context.applicationContext)
+        }
         CoachingEngine.ensureInitialized(context)
         if (!CoachingEngine.comprehensiveSupportEnabled.value) return@withContext
         StudentDossierManager.ensureLoaded(context)
@@ -612,6 +616,24 @@ object SmartFlashcardManager {
             masteredTopics = mastered,
             struggledTopics = struggled
         )
+    }
+
+    private val flushScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO
+    )
+
+    fun flushSessionOutcomesInBackground(
+        context: Context,
+        sessionResults: Map<SmartFlashcard, Boolean>
+    ) {
+        if (sessionResults.isEmpty()) return
+        val appCtx = context.applicationContext
+        val snapshot = sessionResults.toMap()
+        flushScope.launch {
+            runCatching {
+                syncSessionOutcomesToDossierIfActive(appCtx, snapshot)
+            }
+        }
     }
 
     private fun formatTopicLabel(card: SmartFlashcard): String {

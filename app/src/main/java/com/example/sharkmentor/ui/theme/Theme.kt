@@ -845,9 +845,21 @@ fun SharkMentorTheme(
     isZenMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val circadianNight = com.example.sharkmentor.core.data.isCircadianNightHour(
-        java.time.LocalTime.now().hour
-    )
+    val circadianNight = androidx.compose.runtime.produceState(
+        initialValue = com.example.sharkmentor.core.data.isCircadianNightHour(
+            java.time.LocalTime.now().hour
+        ),
+        key1 = themeMode
+    ) {
+        if (themeMode == AppThemeMode.CIRCADIAN) {
+            while (true) {
+                value = com.example.sharkmentor.core.data.isCircadianNightHour(
+                    java.time.LocalTime.now().hour
+                )
+                kotlinx.coroutines.delay(60_000L)
+            }
+        }
+    }.value
     val isDark = when (themeMode) {
         AppThemeMode.SYSTEM -> isSystemInDarkTheme()
         AppThemeMode.DARK -> true

@@ -230,9 +230,12 @@ class SyncWorker(
             val defaultInstitution = userPrefs.institutionId.takeIf { !it.isNullOrBlank() } ?: "INDIVIDUAL"
             val studentName = sanitizeTurkishText(userPrefs.studentName ?: "Öğrenci")
 
-            // Flush any queued offline live presence snapshot when network is available
+            // Flush any queued offline live presence & debounced note cloud writes when network is available
             runCatching {
                 com.example.sharkmentor.core.coaching.CoachingEngine.flushPendingPresenceIfConnected(context)
+            }
+            runCatching {
+                com.example.sharkmentor.data.repository.NoteRepositoryImpl.flushPendingCloudWrites(context)
             }
 
             // 1a. Outbound Deletions FIRST (prevents deleted items from being restored by pulls)
@@ -292,6 +295,10 @@ class SyncWorker(
                         Log.w(syncTag, "Err reading students/$uid: ${e.message}")
                     }
                     null
+                }
+
+                runCatching {
+                    com.example.sharkmentor.core.league.SharkCardManager.syncFromRemoteStudentDoc(context, studentDoc)
                 }
 
                 coroutineScope {

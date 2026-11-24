@@ -1432,8 +1432,9 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     }
                     if (coachingActive && dossierReady &&
                         com.example.sharkmentor.core.coaching.StudentDossierManager.isMockExamAnalysisExchange(
-                            effectivePrompt,
-                            routerResult.text
+                            userMessage = effectivePrompt,
+                            aiResponse = routerResult.text,
+                            hasAttachment = attachmentUri != null
                         )
                     ) {
                         val (mockNets, mockAnalysis) = com.example.sharkmentor.core.coaching.StudentDossierManager

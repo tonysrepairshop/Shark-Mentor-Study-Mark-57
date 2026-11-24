@@ -1085,10 +1085,11 @@ fun ComprehensiveSupportSettingsScreen(
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
+                        val totalQ = StudentDossierManager.INTERVIEW_QUESTIONS.size
                         val statusDesc = if (studentDossier.isCompleted) {
-                            "Aktif • ${studentDossier.topics.size} konu, ${studentDossier.books.size} kitap, ${studentDossier.answeredQuestionCount}/10 yanıt"
+                            "Aktif • ${studentDossier.topics.size} konu, ${studentDossier.books.size} kitap, ${studentDossier.answeredQuestionCount}/$totalQ yanıt"
                         } else if (studentDossier.consentAccepted) {
-                            "Onay verildi • Koçluk Yolu üzerinden 10 soruyu yanıtla"
+                            "Onay verildi • Koçluk Yolu üzerinden $totalQ soruyu yanıtla"
                         } else {
                             "Henüz oluşturulmadı"
                         }
@@ -1513,7 +1514,7 @@ fun DuolingoCoachingPathView(
                     )
 
                     Text(
-                        text = "Sana ezbere veya anlamsız bir program atamak istemiyoruz. Programının dengeli, kararlı ve gerçekten verimli olması için önce Shark AI üzerinden 10 kısa soruyu yanıtlayarak anonim Öğrenci Dosyanı oluşturalım.",
+                        text = "Sana ezbere veya anlamsız bir program atamak istemiyoruz. Programının dengeli, kararlı ve gerçekten verimli olması için önce Shark AI üzerinden ${StudentDossierManager.INTERVIEW_QUESTIONS.size} kısa soruyu yanıtlayarak anonim Öğrenci Dosyanı oluşturalım.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center

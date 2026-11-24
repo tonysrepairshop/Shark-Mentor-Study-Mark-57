@@ -57,6 +57,15 @@ class Mark70ExperimentalFeaturesTest {
             )
         )
 
+        assertTrue(
+            "Image/PDF mock exam attachment without numbers in user text must still be detected",
+            StudentDossierManager.isMockExamAnalysisExchange(
+                userMessage = "Bu denememi analiz eder misin?",
+                aiResponse = "Görseldeki TYT karne sonucuna göre toplam 79.25 net görünüyor. Matematik eksik.",
+                hasAttachment = true
+            )
+        )
+
         val (nets, summary) = StudentDossierManager.extractCompactMockExamSummary(
             userMessage = "TYT 84 net AYT 55 net yaptım, test@mail.com",
             aiResponse = "# Analiz\nMatematik hız kazanımı öncelikli olmalı.\nFizik dalgalar tekrar edilmeli."
@@ -64,6 +73,12 @@ class Mark70ExperimentalFeaturesTest {
         assertFalse("PII email must be stripped", nets.contains("test@mail.com"))
         assertTrue(nets.contains("TYT 84"))
         assertTrue(summary.contains("Matematik hız kazanımı"))
+
+        val (attachNets, _) = StudentDossierManager.extractCompactMockExamSummary(
+            userMessage = "Denememi incele",
+            aiResponse = "TYT toplam 83.75 net • Türkçe 33.5 net\nFen bilimleri optik ünitesi öncelikli tekrar edilmeli."
+        )
+        assertTrue(attachNets.contains("83.75"))
     }
 
     // ── 2. Smart Flashcards Priority Engine & AI JSON Parser ─────────────────

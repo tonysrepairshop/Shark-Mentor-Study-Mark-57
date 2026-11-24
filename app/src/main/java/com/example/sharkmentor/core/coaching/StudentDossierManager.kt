@@ -433,7 +433,11 @@ object StudentDossierManager {
         persistDossier(context, cur.copy(coachingInsights = nextInsights, updatedAtMillis = System.currentTimeMillis()))
     }
 
-    fun isMockExamAnalysisExchange(userMessage: String, aiResponse: String): Boolean {
+    fun isMockExamAnalysisExchange(
+        userMessage: String,
+        aiResponse: String,
+        hasAttachment: Boolean = false
+    ): Boolean {
         val normUser = userMessage.lowercase(java.util.Locale("tr", "TR"))
         val normAi = aiResponse.lowercase(java.util.Locale("tr", "TR"))
         val hasMockKeyword = normUser.contains("deneme") ||
@@ -443,22 +447,39 @@ object StudentDossierManager {
             normUser.contains("netim") ||
             normUser.contains("net ") ||
             normUser.contains("doğru") ||
-            normUser.contains("yanlış")
-        val hasNumberInUser = Regex("""\d{1,3}(?:[.,]\d{1,2})?""").containsMatchIn(normUser)
+            normUser.contains("yanlış") ||
+            (hasAttachment && (normAi.contains("deneme") || normAi.contains("tyt") || normAi.contains("ayt")))
+        val numRegex = Regex("""\d{1,3}(?:[.,]\d{1,2})?""")
+        val hasNumberInUser = numRegex.containsMatchIn(normUser)
+        val hasNumberInAi = numRegex.containsMatchIn(normAi)
         val hasAnalysisInAi = normAi.contains("net") || normAi.contains("deneme") || normAi.contains("analiz") || normAi.contains("eksik")
-        return hasMockKeyword && hasNumberInUser && hasAnalysisInAi
+        return hasMockKeyword && (hasNumberInUser || (hasAttachment && hasNumberInAi) || (normUser.contains("deneme") && hasNumberInAi)) && hasAnalysisInAi
     }
 
     fun extractCompactMockExamSummary(userMessage: String, aiResponse: String): Pair<String, String> {
         val cleanUser = sanitizeNoPii(userMessage).replace(Regex("""\s+"""), " ").trim().take(160)
-        val cleanAiFirstLines = sanitizeNoPii(aiResponse)
+        val aiCleanLines = sanitizeNoPii(aiResponse)
             .lineSequence()
             .map { it.replace(Regex("""^[#>*•\-\s]+"""), "").trim() }
-            .filter { it.length >= 16 && !it.startsWith("#ACTION:") }
+            .filter { it.length >= 12 && !it.startsWith("#ACTION:") }
+            .toList()
+
+        val userHasDigits = Regex("""\d""").containsMatchIn(cleanUser)
+        val extractedNetLine = if (userHasDigits && cleanUser.isNotBlank()) {
+            cleanUser
+        } else {
+            aiCleanLines.firstOrNull { line ->
+                val lower = line.lowercase(java.util.Locale("tr", "TR"))
+                Regex("""\d""").containsMatchIn(lower) && (lower.contains("net") || lower.contains("tyt") || lower.contains("ayt") || lower.contains("doğru"))
+            }?.take(160) ?: cleanUser.ifBlank { "Deneme Analizi" }
+        }
+
+        val cleanAiSummary = aiCleanLines
+            .filter { it != extractedNetLine && it.length >= 16 }
             .take(2)
             .joinToString(" • ")
             .take(220)
-        return cleanUser to cleanAiFirstLines
+        return extractedNetLine to cleanAiSummary
     }
 
     fun updateSingleAnswerOrInsight(
