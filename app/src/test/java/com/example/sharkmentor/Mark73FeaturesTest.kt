@@ -159,7 +159,7 @@ class Mark73FeaturesTest {
         val state = CampVideoPlaybackState()
         assertFalse(state.isActive)
         assertFalse(state.isPlaying)
-        assertEquals(0, state.positionSec)
-        assertEquals(0, state.durationSec)
+        assertEquals(0, state.positionSeconds)
+        assertEquals(0, state.durationSeconds)
     }
 }
