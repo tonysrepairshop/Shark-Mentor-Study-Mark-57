@@ -174,6 +174,9 @@ fun ChatWallpaperCanvas(
         AppThemeMode.SYSTEM -> isSystemInDarkTheme()
         AppThemeMode.DARK -> true
         AppThemeMode.LIGHT -> false
+        AppThemeMode.CIRCADIAN -> com.example.sharkmentor.core.data.isCircadianNightHour(
+            java.time.LocalTime.now().hour
+        )
     }
 
     val colorScheme = MaterialTheme.colorScheme

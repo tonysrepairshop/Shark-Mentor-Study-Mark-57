@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -108,13 +109,24 @@ fun PlanReadinessCheckInDialog(
     val resources by remember(db) { db.goalsDao().getAllResourcesFlow() }
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
+    val currentDossier by StudentDossierManager.dossier.collectAsStateWithLifecycle()
     var auditSnapshot by remember { mutableStateOf(PlanAuditSnapshot()) }
-    var activeTab by remember { mutableIntStateOf(0) } // 0 = Konu Hakimiyeti, 1 = Kitap İlerlemesi
+    var activeTab by remember { mutableIntStateOf(0) } // 0 = Konular, 1 = Kitaplar, 2 = Deneme
     var topicFilter by remember { mutableStateOf("") }
     var editingBook by remember { mutableStateOf<ResourceEntity?>(null) }
     var isFinalizing by remember { mutableStateOf(false) }
 
+    var enteredMockThisWeek by remember { mutableStateOf(false) }
+    var mockNetsInput by remember { mutableStateOf("") }
+    var mockAnalysisInput by remember { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
+        StudentDossierManager.ensureLoaded(context)
+        val loaded = StudentDossierManager.dossier.value
+        if (loaded.latestMockNetSummary.isNotBlank()) {
+            mockNetsInput = loaded.latestMockNetSummary
+            mockAnalysisInput = loaded.latestMockAnalysis
+        }
         auditSnapshot = PlanProgressAuditor.captureFromDatabase(context)
     }
 
@@ -298,7 +310,7 @@ fun PlanReadinessCheckInDialog(
                     }
                 }
 
-                // 2-Tab Selector: Konu Hakimiyeti | Kitap İlerlemesi
+                // 3-Tab Selector: Konular | Kitaplar | Deneme
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
@@ -311,7 +323,7 @@ fun PlanReadinessCheckInDialog(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         CheckInTabChip(
-                            label = "Konu Hakimiyeti (${topics.size})",
+                            label = "Konular (${topics.size})",
                             icon = Icons.Default.Psychology,
                             selected = activeTab == 0,
                             onClick = { activeTab = 0 },
@@ -324,76 +336,173 @@ fun PlanReadinessCheckInDialog(
                             onClick = { activeTab = 1 },
                             modifier = Modifier.weight(1f)
                         )
+                        CheckInTabChip(
+                            label = "Deneme",
+                            icon = Icons.Default.Assessment,
+                            selected = activeTab == 2,
+                            onClick = { activeTab = 2 },
+                            modifier = Modifier.weight(1f)
+                        )
                     }
                 }
 
                 // Inline Quick-Update List
-                if (activeTab == 0) {
-                    if (topics.size > 6) {
-                        OutlinedTextField(
-                            value = topicFilter,
-                            onValueChange = { topicFilter = it },
-                            placeholder = { Text("Ders veya konu ara...", style = MaterialTheme.typography.bodySmall) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(10.dp),
-                            textStyle = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (filteredTopics.isEmpty()) {
-                        EmptyCheckInSection(
-                            text = if (topics.isEmpty()) {
-                                "Henüz kayıtlı konu hakimiyeti bulunmuyor. İstersen doğrudan devam edebilir veya Hedefler bölümünden konu ekleyebilirsin."
-                            } else {
-                                "Aramanla eşleşen konu bulunamadı."
-                            },
-                            actionLabel = if (topics.isEmpty() && onOpenGoalsOrLibrary != null) "Konulara Git" else null,
-                            onAction = onOpenGoalsOrLibrary
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 120.dp, max = 250.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(filteredTopics, key = { it.id }) { topic ->
-                                QuickTopicMasteryRow(
-                                    topic = topic,
-                                    onSelectLevel = { newLevel ->
-                                        scope.launch(Dispatchers.IO) {
-                                            persistTopicMasteryUpdate(context, db, topic, newLevel)
+                when (activeTab) {
+                    0 -> {
+                        if (topics.size > 6) {
+                            OutlinedTextField(
+                                value = topicFilter,
+                                onValueChange = { topicFilter = it },
+                                placeholder = { Text("Ders veya konu ara...", style = MaterialTheme.typography.bodySmall) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(10.dp),
+                                textStyle = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (filteredTopics.isEmpty()) {
+                            EmptyCheckInSection(
+                                text = if (topics.isEmpty()) {
+                                    "Henüz kayıtlı konu hakimiyeti yok."
+                                } else {
+                                    "Eşleşen konu bulunamadı."
+                                },
+                                actionLabel = if (topics.isEmpty() && onOpenGoalsOrLibrary != null) "Konulara Git" else null,
+                                onAction = onOpenGoalsOrLibrary
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 120.dp, max = 250.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(filteredTopics, key = { it.id }) { topic ->
+                                    QuickTopicMasteryRow(
+                                        topic = topic,
+                                        onSelectLevel = { newLevel ->
+                                            scope.launch(Dispatchers.IO) {
+                                                persistTopicMasteryUpdate(context, db, topic, newLevel)
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
                     }
-                } else {
-                    if (resources.isEmpty()) {
-                        EmptyCheckInSection(
-                            text = "Kütüphanende henüz kitap kaydı yok. İstersen doğrudan devam edebilir veya Kütüphane sekmesinden kaynak ekleyebilirsin.",
-                            actionLabel = if (onOpenGoalsOrLibrary != null) "Kütüphaneye Git" else null,
-                            onAction = onOpenGoalsOrLibrary
-                        )
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 120.dp, max = 250.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+
+                    1 -> {
+                        if (resources.isEmpty()) {
+                            EmptyCheckInSection(
+                                text = "Kütüphanende henüz kitap kaydı yok.",
+                                actionLabel = if (onOpenGoalsOrLibrary != null) "Kütüphaneye Git" else null,
+                                onAction = onOpenGoalsOrLibrary
+                            )
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 120.dp, max = 250.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(resources, key = { it.id }) { book ->
+                                    QuickBookProgressRow(
+                                        book = book,
+                                        onDelta = { delta ->
+                                            val raw = (book.completedUnits + delta).coerceAtLeast(0)
+                                            val clamped = if (book.totalUnits > 0) raw.coerceIn(0, book.totalUnits) else raw
+                                            scope.launch(Dispatchers.IO) {
+                                                persistBookProgressUpdate(context, db, book, clamped)
+                                            }
+                                        },
+                                        onEditExact = { editingBook = book }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    else -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            items(resources, key = { it.id }) { book ->
-                                QuickBookProgressRow(
-                                    book = book,
-                                    onDelta = { delta ->
-                                        val raw = (book.completedUnits + delta).coerceAtLeast(0)
-                                        val clamped = if (book.totalUnits > 0) raw.coerceIn(0, book.totalUnits) else raw
-                                        scope.launch(Dispatchers.IO) {
-                                            persistBookProgressUpdate(context, db, book, clamped)
-                                        }
-                                    },
-                                    onEditExact = { editingBook = book }
+                            Text(
+                                text = "Bu hafta denemeye girdin mi?",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurface
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    onClick = { enteredMockThisWeek = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (enteredMockThisWeek) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (enteredMockThisWeek) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(modifier = Modifier.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "Denemeye Girdim",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (enteredMockThisWeek) colorScheme.primary else colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    onClick = { enteredMockThisWeek = false },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (!enteredMockThisWeek) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (!enteredMockThisWeek) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(modifier = Modifier.padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "Girmedim",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (!enteredMockThisWeek) colorScheme.primary else colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+
+                            if (enteredMockThisWeek) {
+                                OutlinedTextField(
+                                    value = mockNetsInput,
+                                    onValueChange = { mockNetsInput = it },
+                                    label = { Text("Deneme Netleri", fontSize = 12.sp) },
+                                    placeholder = { Text("Örn: TYT 84.5 / AYT 56.25", fontSize = 12.sp) },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(10.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                OutlinedTextField(
+                                    value = mockAnalysisInput,
+                                    onValueChange = { mockAnalysisInput = it },
+                                    label = { Text("Kısa Analiz (Opsiyonel)", fontSize = 12.sp) },
+                                    placeholder = { Text("Örn: Matematik süre sıkıştı, Fizik optik eksik", fontSize = 12.sp) },
+                                    maxLines = 2,
+                                    shape = RoundedCornerShape(10.dp),
+                                    textStyle = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            } else if (currentDossier.latestMockNetSummary.isNotBlank()) {
+                                Text(
+                                    text = "Son kayıt: ${currentDossier.latestMockNetSummary}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -408,8 +517,14 @@ fun PlanReadinessCheckInDialog(
                         onClick = {
                             if (isFinalizing) return@Button
                             isFinalizing = true
+                            val netsToSave = mockNetsInput.trim()
+                            val analysisToSave = mockAnalysisInput.trim()
+                            val saveMock = enteredMockThisWeek && (netsToSave.isNotBlank() || analysisToSave.isNotBlank())
                             scope.launch {
                                 withContext(Dispatchers.IO) {
+                                    if (saveMock) {
+                                        StudentDossierManager.updateMockExamRecord(context, netsToSave, analysisToSave)
+                                    }
                                     PlanReadinessNavBus.markCheckInCompletedToday(context)
                                     CoachingEngine.refreshTargetAndLedgerAsync(context)
                                     runCatching { StudentDossierManager.syncFromDatabase(context, force = true) }
@@ -449,8 +564,14 @@ fun PlanReadinessCheckInDialog(
                             if (secondarySaveOnlyLabel != null && onSaveOnly != null) {
                                 OutlinedButton(
                                     onClick = {
+                                        val netsToSave = mockNetsInput.trim()
+                                        val analysisToSave = mockAnalysisInput.trim()
+                                        val saveMock = enteredMockThisWeek && (netsToSave.isNotBlank() || analysisToSave.isNotBlank())
                                         scope.launch {
                                             withContext(Dispatchers.IO) {
+                                                if (saveMock) {
+                                                    StudentDossierManager.updateMockExamRecord(context, netsToSave, analysisToSave)
+                                                }
                                                 PlanReadinessNavBus.markCheckInCompletedToday(context)
                                                 runCatching { StudentDossierManager.syncFromDatabase(context, force = true) }
                                                 SyncWorker.enqueueImmediateSync(context)

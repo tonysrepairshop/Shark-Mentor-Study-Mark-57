@@ -716,6 +716,86 @@ private val ChristmasLightScheme = lightColorScheme(
     outlineVariant = Color(0xFFC5D6CD)
 )
 
+private val PaperLightScheme = lightColorScheme(
+    background = Color(0xFFFAF7F0),
+    surface = Color(0xFFF3EFE4),
+    surfaceVariant = Color(0xFFE8E2D4),
+    primary = Color(0xFF2B2822),
+    onPrimary = Color(0xFFFAF7F0),
+    primaryContainer = Color(0xFFE2DAC8),
+    onPrimaryContainer = Color(0xFF1A1814),
+    secondary = Color(0xFF575045),
+    onSecondary = Color(0xFFFAF7F0),
+    secondaryContainer = Color(0xFFEAE3D5),
+    onSecondaryContainer = Color(0xFF221F1A),
+    tertiary = Color(0xFF78684E),
+    onBackground = Color(0xFF181714),
+    onSurface = Color(0xFF181714),
+    onSurfaceVariant = Color(0xFF524D43),
+    outline = Color(0xFFA89F8F),
+    outlineVariant = Color(0xFFD5CCBC)
+)
+
+private val PaperDarkScheme = darkColorScheme(
+    background = Color(0xFF161411),
+    surface = Color(0xFF1E1B17),
+    surfaceVariant = Color(0xFF29251F),
+    primary = Color(0xFFD6C7AE),
+    onPrimary = Color(0xFF1A1713),
+    primaryContainer = Color(0xFF3A342A),
+    onPrimaryContainer = Color(0xFFF2EAD9),
+    secondary = Color(0xFFB5A790),
+    onSecondary = Color(0xFF1E1B16),
+    secondaryContainer = Color(0xFF302B23),
+    onSecondaryContainer = Color(0xFFE8DFD1),
+    tertiary = Color(0xFFC49E6C),
+    onBackground = Color(0xFFEDE6D8),
+    onSurface = Color(0xFFEDE6D8),
+    onSurfaceVariant = Color(0xFFB3AA9B),
+    outline = Color(0xFF6B6357),
+    outlineVariant = Color(0xFF3B362E)
+)
+
+private val ObsidianDarkScheme = darkColorScheme(
+    background = Color(0xFF000000),
+    surface = Color(0xFF08080A),
+    surfaceVariant = Color(0xFF121216),
+    primary = Color(0xFFE5E7EB),
+    onPrimary = Color(0xFF050506),
+    primaryContainer = Color(0xFF1F2026),
+    onPrimaryContainer = Color(0xFFF3F4F6),
+    secondary = Color(0xFF9CA3AF),
+    onSecondary = Color(0xFF090A0D),
+    secondaryContainer = Color(0xFF18191E),
+    onSecondaryContainer = Color(0xFFE5E7EB),
+    tertiary = Color(0xFFCBD5E1),
+    onBackground = Color(0xFFF4F4F6),
+    onSurface = Color(0xFFF4F4F6),
+    onSurfaceVariant = Color(0xFFA1A1AA),
+    outline = Color(0xFF3F3F46),
+    outlineVariant = Color(0xFF242429)
+)
+
+private val ObsidianLightScheme = lightColorScheme(
+    background = Color(0xFFFAFAFA),
+    surface = Color(0xFFFFFFFF),
+    surfaceVariant = Color(0xFFF1F1F3),
+    primary = Color(0xFF111113),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFE4E4E7),
+    onPrimaryContainer = Color(0xFF09090B),
+    secondary = Color(0xFF52525B),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFECECEF),
+    onSecondaryContainer = Color(0xFF18181B),
+    tertiary = Color(0xFF3F3F46),
+    onBackground = Color(0xFF09090B),
+    onSurface = Color(0xFF09090B),
+    onSurfaceVariant = Color(0xFF52525B),
+    outline = Color(0xFFA1A1AA),
+    outlineVariant = Color(0xFFE4E4E7)
+)
+
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()
@@ -733,9 +813,11 @@ private fun paletteSchemeFor(palette: ThemePalette, isDark: Boolean): ColorSchem
             ThemePalette.DREAMS -> DreamsDarkScheme
             ThemePalette.SAKURA -> SakuraDarkScheme
             ThemePalette.AUTUMN -> AutumnDarkScheme
-ThemePalette.GALATASARAY -> GalatasarayDarkScheme 
+            ThemePalette.GALATASARAY -> GalatasarayDarkScheme
             ThemePalette.CHRISTMAS -> ChristmasDarkScheme
             ThemePalette.BLUEBERRY -> BlueberryDarkScheme
+            ThemePalette.PAPER -> PaperDarkScheme
+            ThemePalette.OBSIDIAN -> ObsidianDarkScheme
         }
     } else {
         when (palette) {
@@ -747,9 +829,11 @@ ThemePalette.GALATASARAY -> GalatasarayDarkScheme
             ThemePalette.DREAMS -> DreamsLightScheme
             ThemePalette.SAKURA -> SakuraLightScheme
             ThemePalette.AUTUMN -> AutumnLightScheme
-ThemePalette.GALATASARAY -> GalatasarayLightScheme 
+            ThemePalette.GALATASARAY -> GalatasarayLightScheme
             ThemePalette.BLUEBERRY -> BlueberryLightScheme
             ThemePalette.CHRISTMAS -> ChristmasLightScheme
+            ThemePalette.PAPER -> PaperLightScheme
+            ThemePalette.OBSIDIAN -> ObsidianLightScheme
         }
     }
 }
@@ -761,13 +845,22 @@ fun SharkMentorTheme(
     isZenMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
+    val circadianNight = com.example.sharkmentor.core.data.isCircadianNightHour(
+        java.time.LocalTime.now().hour
+    )
     val isDark = when (themeMode) {
         AppThemeMode.SYSTEM -> isSystemInDarkTheme()
         AppThemeMode.DARK -> true
         AppThemeMode.LIGHT -> false
+        AppThemeMode.CIRCADIAN -> circadianNight
     }
 
-val effectivePalette = if (palette == ThemePalette.GALATASARAY && !SpecialMemberConfig.isEmreBey()) ThemePalette.OCEAN else palette
+    val basePalette = if (palette == ThemePalette.GALATASARAY && !SpecialMemberConfig.isEmreBey()) ThemePalette.OCEAN else palette
+    val effectivePalette = if (themeMode == AppThemeMode.CIRCADIAN && circadianNight) {
+        ThemePalette.OBSIDIAN
+    } else {
+        basePalette
+    }
     val effectiveIsDark = isDark || isZenMode
     val finalColors = if (isZenMode) {
         ZenMonochromeScheme

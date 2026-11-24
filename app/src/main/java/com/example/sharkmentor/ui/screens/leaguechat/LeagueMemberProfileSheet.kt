@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,7 +63,10 @@ import com.example.sharkmentor.core.badges.BadgeTier
 import com.example.sharkmentor.core.badges.SharkBadgeCatalog
 import com.example.sharkmentor.core.badges.SharkBadgeChip
 import com.example.sharkmentor.core.badges.SharkBadgeDef
+import com.example.sharkmentor.core.league.SharkCardManager
+import com.example.sharkmentor.core.league.SharkCardSnapshot
 import com.example.sharkmentor.core.util.SharkAvatar
+import com.example.sharkmentor.ui.components.SharkCardPreviewDialog
 import com.example.sharkmentor.ui.viewmodel.LeagueEntry
 
 /**
@@ -95,10 +100,28 @@ fun LeagueMemberProfileSheet(
     val effHours = entry.effectiveLeagueSeconds / 3600L
     val effMins = (entry.effectiveLeagueSeconds % 3600L) / 60L
 
+    val context = LocalContext.current
     var noteInput by rememberSaveable(entry.studentId) { mutableStateOf("") }
     var showBlockConfirmDialog by rememberSaveable(entry.studentId) { mutableStateOf(false) }
     var showReportDialog by rememberSaveable(entry.studentId) { mutableStateOf(false) }
     var inspectedBadge by remember(entry.studentId) { mutableStateOf<SharkBadgeDef?>(null) }
+    var memberSharkCard by remember(entry.studentId) { mutableStateOf<SharkCardSnapshot?>(null) }
+    var isMemberCardPublic by remember(entry.studentId) { mutableStateOf(false) }
+    var showSharkCardModal by remember(entry.studentId) { mutableStateOf(false) }
+
+    LaunchedEffect(entry.studentId, entry.isCurrentUser) {
+        if (entry.isCurrentUser) {
+            SharkCardManager.ensureLoaded(context)
+            val mine = SharkCardManager.myCard.value
+            val resolved = if (mine.updatedAtMillis > 0L) mine else SharkCardManager.refreshCard(context, syncToCloud = false)
+            memberSharkCard = resolved
+            isMemberCardPublic = true
+        } else if (entry.studentId.isNotBlank()) {
+            val (pub, fetched) = SharkCardManager.fetchMemberPublicCardCached(context, entry.studentId)
+            isMemberCardPublic = pub
+            memberSharkCard = fetched
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -218,6 +241,21 @@ fun LeagueMemberProfileSheet(
                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
+            if (isMemberCardPublic && memberSharkCard != null) {
+                OutlinedButton(
+                    onClick = { showSharkCardModal = true },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Shark Kartını Gör",
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -564,6 +602,15 @@ fun LeagueMemberProfileSheet(
             isLegacyUnlocked = true,
             ownerLabel = realName,
             onDismiss = { inspectedBadge = null }
+        )
+    }
+
+    if (showSharkCardModal && memberSharkCard != null) {
+        SharkCardPreviewDialog(
+            card = memberSharkCard!!,
+            avatarBase64 = entry.avatarBase64,
+            avatarPresetId = entry.avatarPresetId,
+            onDismiss = { showSharkCardModal = false }
         )
     }
 }

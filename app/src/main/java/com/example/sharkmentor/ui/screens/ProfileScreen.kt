@@ -56,11 +56,14 @@ import com.example.sharkmentor.service.sync.SyncWorker
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.sharkmentor.core.league.SharkCardManager
+import com.example.sharkmentor.ui.components.SharkStatsCardView
 import com.example.sharkmentor.ui.screens.leaguechat.BadgeShowcaseSelectorSheet
 import com.example.sharkmentor.ui.screens.profile.ProfileBadgesTab
 import com.example.sharkmentor.ui.screens.profile.ProfileViewModel
 import com.google.firebase.auth.userProfileChangeRequest
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.launch
 import java.util.Locale
 
 private val DEFAULT_GRADE_OPTIONS = listOf(
@@ -264,6 +267,20 @@ fun ProfileScreen(
     val activeMeetings by viewModel.studentMeetings.collectAsStateWithLifecycle()
     val avatarState by viewModel.avatarState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val sharkCardScope = rememberCoroutineScope()
+    val sharkCard by SharkCardManager.myCard.collectAsStateWithLifecycle()
+    var isRefreshingSharkCard by remember { mutableStateOf(false) }
+
+    LaunchedEffect(studentName, studentGrade, studentTargetExam) {
+        SharkCardManager.ensureLoaded(context)
+        SharkCardManager.refreshCard(
+            context = context,
+            displayNameOverride = studentName,
+            gradeOverride = studentGrade,
+            targetExamOverride = studentTargetExam,
+            syncToCloud = true
+        )
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -671,6 +688,37 @@ fun ProfileScreen(
                 }
             }
             } // end User Info Card item
+
+            // ── Shark Kartı (Refreshable + Public/Private League Visibility) ──
+            item {
+                SharkStatsCardView(
+                    card = sharkCard,
+                    avatarBase64 = avatarState.avatarBase64,
+                    avatarPresetId = avatarState.avatarPresetId,
+                    showOwnerControls = true,
+                    isRefreshing = isRefreshingSharkCard,
+                    onRefreshClick = {
+                        if (!isRefreshingSharkCard) {
+                            isRefreshingSharkCard = true
+                            sharkCardScope.launch {
+                                SharkCardManager.refreshCard(
+                                    context = context,
+                                    displayNameOverride = studentName,
+                                    gradeOverride = studentGrade,
+                                    targetExamOverride = studentTargetExam,
+                                    syncToCloud = true
+                                )
+                                isRefreshingSharkCard = false
+                            }
+                        }
+                    },
+                    onTogglePublic = { makePublic ->
+                        sharkCardScope.launch {
+                            SharkCardManager.setPublicVisibility(context, makePublic)
+                        }
+                    }
+                )
+            }
 
             // ── Mentor Puanı & 5 Rozet Vitrini Card ──────────────────────────
             item {

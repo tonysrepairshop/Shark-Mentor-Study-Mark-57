@@ -6,20 +6,21 @@
   <title>PACE/KEEP</title>
   <style>
     :root {
-      --bg-main: #071426;
-      --bg-card: #0C1F3D;
-      --bg-card-hover: #122B54;
-      --border: #1C3D6E;
-      --text-primary: #F4F6F8;
-      --text-secondary: #9FB3CE;
-      --accent: #60A5FA;
-      --accent-soft: rgba(96, 165, 250, 0.16);
-      --success: #34D399;
-      --success-soft: rgba(52, 211, 153, 0.15);
-      --warn: #FBBF24;
-      --warn-soft: rgba(251, 191, 36, 0.15);
-      --danger: #F87171;
-      --danger-soft: rgba(248, 113, 113, 0.14);
+      --bg-main: #000000;
+      --bg-card: #050505;
+      --bg-card-hover: #101010;
+      --border: rgba(242, 239, 233, 0.34);
+      --border-strong: #F2EFE9;
+      --text-primary: #F2EFE9;
+      --text-secondary: rgba(242, 239, 233, 0.62);
+      --accent: #F2EFE9;
+      --accent-soft: rgba(242, 239, 233, 0.08);
+      --success: #F2EFE9;
+      --success-soft: rgba(242, 239, 233, 0.08);
+      --warn: #D6D1C7;
+      --warn-soft: rgba(242, 239, 233, 0.06);
+      --danger: #C9C3B8;
+      --danger-soft: rgba(242, 239, 233, 0.04);
     }
 
     * {
@@ -62,42 +63,42 @@
 
     .brand {
       font-weight: 800;
-      font-size: 18px;
-      letter-spacing: 1.4px;
+      font-size: 17px;
+      letter-spacing: 1.6px;
       color: var(--text-primary);
     }
 
     .brand span {
-      color: var(--accent);
+      color: var(--text-secondary);
     }
 
     .brand-sub {
       font-size: 11px;
       color: var(--text-secondary);
-      letter-spacing: 0.4px;
+      letter-spacing: 0.3px;
     }
 
     .badge {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0.8px;
-      padding: 5px 12px;
+      letter-spacing: 1px;
+      padding: 5px 11px;
       border: 1px solid var(--border);
       background: var(--bg-card);
-      border-radius: 999px;
+      border-radius: 8px;
       color: var(--text-secondary);
-      transition: all 0.2s ease;
+      transition: all 0.16s ease;
     }
 
     .badge.active {
-      color: var(--accent);
-      border-color: var(--accent);
+      color: var(--text-primary);
+      border-color: var(--border-strong);
       background: var(--accent-soft);
     }
 
     .badge.paused {
       color: var(--warn);
-      border-color: rgba(251, 191, 36, 0.5);
+      border-color: var(--border);
       background: var(--warn-soft);
     }
 
@@ -112,28 +113,28 @@
       border: 1px solid var(--border);
       color: var(--text-secondary);
       padding: 12px 14px;
-      border-radius: 16px;
+      border-radius: 12px;
       text-align: left;
       cursor: pointer;
-      transition: all 0.18s ease;
+      transition: all 0.16s ease;
     }
 
     .tab.active {
-      border-color: var(--accent);
+      border-color: var(--border-strong);
       background: var(--bg-card-hover);
       color: var(--text-primary);
-      box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.25);
     }
 
     .tab strong {
       display: block;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
-      color: var(--text-primary);
+      letter-spacing: 0.4px;
+      color: var(--text-secondary);
     }
 
     .tab.active strong {
-      color: var(--accent);
+      color: var(--text-primary);
     }
 
     .tab small {
@@ -160,12 +161,12 @@
       align-items: center;
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 14px;
+      border-radius: 12px;
       padding: 10px 14px;
     }
 
     .header-row label {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--text-secondary);
     }
@@ -174,22 +175,22 @@
       background: var(--bg-main);
       color: var(--text-primary);
       border: 1px solid var(--border);
-      padding: 8px 12px;
-      border-radius: 10px;
-      font-size: 13px;
+      padding: 7px 11px;
+      border-radius: 8px;
+      font-size: 12px;
       font-weight: 600;
       outline: none;
     }
 
     select:focus {
-      border-color: var(--accent);
+      border-color: var(--border-strong);
     }
 
     .tap-area {
       flex: 1;
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 24px;
+      border-radius: 16px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -197,40 +198,39 @@
       min-height: 220px;
       padding: 24px 18px;
       cursor: pointer;
-      transition: transform 0.1s ease, border-color 0.2s ease, background 0.2s ease;
+      transition: transform 0.1s ease, border-color 0.16s ease, background 0.16s ease;
     }
 
     .tap-area.interactive:active {
-      transform: scale(0.985);
+      transform: scale(0.99);
       background: var(--bg-card-hover);
-      border-color: var(--accent);
+      border-color: var(--border-strong);
     }
 
     .tap-area.pulse {
-      border-color: var(--accent);
-      box-shadow: 0 0 24px rgba(96, 165, 250, 0.22);
+      border-color: var(--border-strong);
     }
 
     .sub-txt {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      color: var(--accent);
-      letter-spacing: 1.4px;
+      color: var(--text-secondary);
+      letter-spacing: 1.6px;
       text-transform: uppercase;
       margin-bottom: 10px;
     }
 
     .big-num {
       font-size: 72px;
-      font-weight: 800;
+      font-weight: 700;
       color: var(--text-primary);
       line-height: 1;
       font-variant-numeric: tabular-nums;
-      letter-spacing: -1px;
+      letter-spacing: -1.5px;
     }
 
     .hint-txt {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-secondary);
       margin-top: 14px;
       text-align: center;
@@ -246,14 +246,14 @@
       background: var(--bg-card);
       border: 1px solid var(--border);
       padding: 12px 8px;
-      border-radius: 16px;
+      border-radius: 12px;
       text-align: center;
     }
 
     .stat-box span {
       display: block;
       font-size: 10px;
-      font-weight: 700;
+      font-weight: 600;
       letter-spacing: 0.6px;
       color: var(--text-secondary);
     }
@@ -261,14 +261,14 @@
     .stat-box strong {
       display: block;
       font-size: 18px;
-      font-weight: 800;
+      font-weight: 700;
       color: var(--text-primary);
       margin-top: 5px;
       font-variant-numeric: tabular-nums;
     }
 
-    .stat-box strong.positive { color: var(--success); }
-    .stat-box strong.negative { color: var(--danger); }
+    .stat-box strong.positive { color: var(--text-primary); }
+    .stat-box strong.negative { color: var(--text-secondary); }
 
     .pavlov-meter {
       width: 100%;
@@ -276,7 +276,7 @@
       margin-top: 24px;
       background: var(--bg-main);
       border: 1px solid var(--border);
-      border-radius: 16px;
+      border-radius: 12px;
       padding: 14px;
     }
 
@@ -284,20 +284,20 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      font-size: 12px;
+      font-size: 11px;
       color: var(--text-secondary);
       margin-bottom: 10px;
     }
 
     .pavlov-meter-top strong {
-      color: var(--accent);
-      font-size: 14px;
+      color: var(--text-primary);
+      font-size: 13px;
       font-variant-numeric: tabular-nums;
     }
 
     .rail {
       width: 100%;
-      height: 10px;
+      height: 8px;
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 999px;
@@ -307,7 +307,7 @@
     .rail-fill {
       height: 100%;
       width: 0%;
-      background: linear-gradient(90deg, #3B82F6, #60A5FA);
+      background: var(--text-primary);
       border-radius: 999px;
       transition: width 0.18s linear;
     }
@@ -328,38 +328,39 @@
 
     button.btn {
       background: var(--bg-card);
-      color: var(--text-secondary);
+      color: var(--text-primary);
       border: 1px solid var(--border);
       padding: 15px 14px;
-      border-radius: 16px;
-      font-size: 14px;
+      border-radius: 12px;
+      font-size: 13px;
       font-weight: 700;
-      letter-spacing: 0.4px;
+      letter-spacing: 0.8px;
       cursor: pointer;
-      transition: transform 0.1s ease, background 0.15s ease;
+      transition: transform 0.1s ease, background 0.15s ease, border-color 0.15s ease;
     }
 
     button.btn:active {
-      transform: scale(0.98);
+      transform: scale(0.985);
       background: var(--bg-card-hover);
+      border-color: var(--border-strong);
     }
 
     button.btn.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #04101E;
+      background: var(--text-primary);
+      border-color: var(--border-strong);
+      color: #000000;
     }
 
     button.btn.primary.running {
-      background: var(--warn-soft);
-      border-color: var(--warn);
-      color: var(--warn);
+      background: var(--bg-card-hover);
+      border-color: var(--border-strong);
+      color: var(--text-primary);
     }
 
     button.btn.reset {
-      color: var(--danger);
-      border-color: rgba(248, 113, 113, 0.35);
-      background: var(--danger-soft);
+      color: var(--text-secondary);
+      border-color: var(--border);
+      background: var(--bg-card);
     }
 
     .sync-foot {
@@ -375,7 +376,7 @@
   <div class="topbar">
     <div class="brand-wrap">
       <div class="brand">PACE<span>/</span>KEEP</div>
-      <div class="brand-sub">Ritim &amp; Zaman Havuzu Motoru</div>
+      <div class="brand-sub">Soru Ritim &amp; Zaman Havuzu</div>
     </div>
     <div class="badge" id="statusBadge">HAZIR</div>
   </div>
@@ -425,8 +426,8 @@
     </div>
 
     <div class="controls">
-      <button type="button" class="btn primary" id="cogBtn" onclick="toggleCog()">▶ BAŞLAT</button>
-      <button type="button" class="btn reset" onclick="resetCog()">↺ SIFIRLA</button>
+      <button type="button" class="btn primary" id="cogBtn" onclick="toggleCog()">BAŞLAT</button>
+      <button type="button" class="btn reset" onclick="resetCog()">SIFIRLA</button>
     </div>
   </div>
 
@@ -448,8 +449,8 @@
     </div>
 
     <div class="controls">
-      <button type="button" class="btn primary" id="intBtn" onclick="toggleInt()">▶ BAŞLAT</button>
-      <button type="button" class="btn reset" onclick="resetInt()">↺ SIFIRLA</button>
+      <button type="button" class="btn primary" id="intBtn" onclick="toggleInt()">BAŞLAT</button>
+      <button type="button" class="btn reset" onclick="resetInt()">SIFIRLA</button>
     </div>
   </div>
 
@@ -631,7 +632,7 @@
           lastQStart = now;
         }
         cogRun = true;
-        btn.innerText = '⏸ DURAKLAT';
+        btn.innerText = 'DURAKLAT';
         btn.className = 'btn primary running';
         hint.innerText = 'Soruyu bitirince dokun';
         clearInterval(cogTimer);
@@ -642,7 +643,7 @@
         cogPausedAt = now;
         cogRun = false;
         clearInterval(cogTimer);
-        btn.innerText = '▶ DEVAM ET';
+        btn.innerText = 'DEVAM ET';
         btn.className = 'btn primary';
         hint.innerText = 'Duraklatıldı — devam etmek için dokun';
         updateCog();
@@ -694,7 +695,7 @@
       bankEl.className = '';
 
       var btn = document.getElementById('cogBtn');
-      btn.innerText = '▶ BAŞLAT';
+      btn.innerText = 'BAŞLAT';
       btn.className = 'btn primary';
       document.getElementById('poolHint').innerText = 'Başlamak için dokun';
       updateStatusBadge();
@@ -771,7 +772,7 @@
       if (!intRun) {
         intStart = Date.now();
         intRun = true;
-        btn.innerText = '⏸ DURAKLAT';
+        btn.innerText = 'DURAKLAT';
         btn.className = 'btn primary running';
         clearInterval(intTimer);
         intTimer = setInterval(updateInt, 200);
@@ -780,7 +781,7 @@
         intPaused += Math.max(0, Date.now() - intStart);
         intRun = false;
         clearInterval(intTimer);
-        btn.innerText = '▶ DEVAM ET';
+        btn.innerText = 'DEVAM ET';
         btn.className = 'btn primary';
         updateInt();
         flushInt(1);
@@ -803,7 +804,7 @@
       document.getElementById('pavlovCycles').innerText = 'Tamamlanan aralık: 0';
 
       var btn = document.getElementById('intBtn');
-      btn.innerText = '▶ BAŞLAT';
+      btn.innerText = 'BAŞLAT';
       btn.className = 'btn primary';
       updateStatusBadge();
     }

@@ -1290,6 +1290,14 @@ private fun StudentDossierEditorDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant
                 )
+                if (dossier.latestMockNetSummary.isNotBlank()) {
+                    Text(
+                        text = "Son Deneme: ${dossier.latestMockNetSummary}" +
+                            if (dossier.latestMockAnalysis.isNotBlank()) " (${dossier.latestMockAnalysis})" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurface
+                    )
+                }
 
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
 

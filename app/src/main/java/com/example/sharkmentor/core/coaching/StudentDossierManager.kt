@@ -114,6 +114,9 @@ data class StudentDossier(
     val incompletePlanTasks: List<DossierPlanTaskSnapshot> = emptyList(),
     val interviewAnswers: Map<String, String> = emptyMap(),
     val coachingInsights: List<String> = emptyList(),
+    val latestMockNetSummary: String = "",
+    val latestMockAnalysis: String = "",
+    val lastMockUpdatedAtMillis: Long = 0L,
     val efficiencyTrialDeclined: Boolean = false,
     val lastSyncedAtMillis: Long = 0L,
     val updatedAtMillis: Long = 0L
@@ -266,6 +269,13 @@ object StudentDossierManager {
             prompt = "Koçundan nasıl bir yaklaşım beklersin ve bu hedef senin için neden önemli?",
             hint = "Kısa bir not bırakman yeterli.",
             quickOptions = listOf("Destekleyici ve sakin", "Disiplinli ve net", "Dengeli ve analitik")
+        ),
+        DossierQuestion(
+            id = "recent_mock_exam",
+            number = 11,
+            prompt = "Denemeye girdiysen güncel netlerin ve varsa kısa analizin nedir?",
+            hint = "Örn: TYT 82.5 / AYT 54 — Matematik süre yetişmedi",
+            quickOptions = listOf("Henüz girmedim", "Sadece TYT girdim", "TYT + AYT girdim")
         )
     )
 
@@ -337,6 +347,9 @@ object StudentDossierManager {
 
         val now = System.currentTimeMillis()
         val cur = _dossier.value
+        val rawMockAnswer = cleaned["recent_mock_exam"].orEmpty()
+        val hasInitialMock = rawMockAnswer.isNotBlank() &&
+            !rawMockAnswer.equals("Henüz girmedim", ignoreCase = true)
         val updated = cur.copy(
             isCompleted = markCompleted || cur.isCompleted,
             consentAccepted = true,
@@ -344,6 +357,8 @@ object StudentDossierManager {
             weekdayGoalMinutes = parsedHours?.first ?: CoachingEngine.weekdayGoalMinutes.value,
             weekendGoalMinutes = parsedHours?.second ?: CoachingEngine.weekendGoalMinutes.value,
             interviewAnswers = cur.interviewAnswers + cleaned,
+            latestMockNetSummary = if (hasInitialMock) rawMockAnswer.take(180) else cur.latestMockNetSummary,
+            lastMockUpdatedAtMillis = if (hasInitialMock) now else cur.lastMockUpdatedAtMillis,
             updatedAtMillis = now
         )
         persistDossier(context, updated)
@@ -352,6 +367,98 @@ object StudentDossierManager {
         bgScope.launch {
             syncFromDatabase(context, force = true)
         }
+    }
+
+    fun updateMockExamRecord(
+        context: Context,
+        netSummary: String,
+        analysisNote: String = ""
+    ) {
+        ensureLoaded(context)
+        val cleanNets = sanitizeNoPii(netSummary).take(200)
+        val cleanAnalysis = sanitizeNoPii(analysisNote).take(320)
+        if (cleanNets.isBlank() && cleanAnalysis.isBlank()) return
+        val now = System.currentTimeMillis()
+        val cur = _dossier.value
+        val combinedInsight = buildString {
+            append("Deneme Kaydı: ")
+            if (cleanNets.isNotBlank()) append(cleanNets)
+            if (cleanAnalysis.isNotBlank()) {
+                if (cleanNets.isNotBlank()) append(" | Analiz: ")
+                append(cleanAnalysis)
+            }
+        }
+        val filteredInsights = cur.coachingInsights.filterNot { it.startsWith("Deneme Kaydı:") }
+        val nextInsights = (filteredInsights + combinedInsight).distinct().takeLast(18)
+        val nextAnswers = cur.interviewAnswers.toMutableMap().apply {
+            if (cleanNets.isNotBlank()) {
+                put("recent_mock_exam", if (cleanAnalysis.isNotBlank()) "$cleanNets — $cleanAnalysis" else cleanNets)
+            }
+        }
+        val updated = cur.copy(
+            latestMockNetSummary = if (cleanNets.isNotBlank()) cleanNets else cur.latestMockNetSummary,
+            latestMockAnalysis = cleanAnalysis.ifBlank { cur.latestMockAnalysis },
+            lastMockUpdatedAtMillis = now,
+            interviewAnswers = nextAnswers,
+            coachingInsights = nextInsights,
+            updatedAtMillis = now
+        )
+        persistDossier(context, updated)
+    }
+
+    fun recordFlashcardStudySummary(
+        context: Context,
+        masteredTopics: List<String>,
+        struggledTopics: List<String>
+    ) {
+        ensureLoaded(context)
+        val cur = _dossier.value
+        if (!cur.isCompleted && !cur.consentAccepted) return
+        val cleanMastered = masteredTopics.map { sanitizeNoPii(it) }.filter { it.isNotBlank() }.distinct().take(6)
+        val cleanStruggled = struggledTopics.map { sanitizeNoPii(it) }.filter { it.isNotBlank() }.distinct().take(6)
+        if (cleanMastered.isEmpty() && cleanStruggled.isEmpty()) return
+
+        val summary = buildString {
+            append("Bilgi Kartı Özeti: ")
+            if (cleanStruggled.isNotEmpty()) {
+                append("Öncelikli tekrar gerekenler: ${cleanStruggled.joinToString(", ")}")
+            }
+            if (cleanMastered.isNotEmpty()) {
+                if (cleanStruggled.isNotEmpty()) append(" | ")
+                append("Pekiştirilenler: ${cleanMastered.joinToString(", ")}")
+            }
+        }
+        val filtered = cur.coachingInsights.filterNot { it.startsWith("Bilgi Kartı Özeti:") }
+        val nextInsights = (filtered + summary).distinct().takeLast(18)
+        persistDossier(context, cur.copy(coachingInsights = nextInsights, updatedAtMillis = System.currentTimeMillis()))
+    }
+
+    fun isMockExamAnalysisExchange(userMessage: String, aiResponse: String): Boolean {
+        val normUser = userMessage.lowercase(java.util.Locale("tr", "TR"))
+        val normAi = aiResponse.lowercase(java.util.Locale("tr", "TR"))
+        val hasMockKeyword = normUser.contains("deneme") ||
+            normUser.contains("branş") ||
+            normUser.contains("tyt") ||
+            normUser.contains("ayt") ||
+            normUser.contains("netim") ||
+            normUser.contains("net ") ||
+            normUser.contains("doğru") ||
+            normUser.contains("yanlış")
+        val hasNumberInUser = Regex("""\d{1,3}(?:[.,]\d{1,2})?""").containsMatchIn(normUser)
+        val hasAnalysisInAi = normAi.contains("net") || normAi.contains("deneme") || normAi.contains("analiz") || normAi.contains("eksik")
+        return hasMockKeyword && hasNumberInUser && hasAnalysisInAi
+    }
+
+    fun extractCompactMockExamSummary(userMessage: String, aiResponse: String): Pair<String, String> {
+        val cleanUser = sanitizeNoPii(userMessage).replace(Regex("""\s+"""), " ").trim().take(160)
+        val cleanAiFirstLines = sanitizeNoPii(aiResponse)
+            .lineSequence()
+            .map { it.replace(Regex("""^[#>*•\-\s]+"""), "").trim() }
+            .filter { it.length >= 16 && !it.startsWith("#ACTION:") }
+            .take(2)
+            .joinToString(" • ")
+            .take(220)
+        return cleanUser to cleanAiFirstLines
     }
 
     fun updateSingleAnswerOrInsight(
@@ -380,10 +487,13 @@ object StudentDossierManager {
                     useAiRecommendation = false
                 )
             }
+            val isMockQuestion = questionId == "recent_mock_exam" && !clean.equals("Henüz girmedim", ignoreCase = true)
             cur.copy(
                 interviewAnswers = nextAnswers,
                 weekdayGoalMinutes = parsedHours?.first ?: cur.weekdayGoalMinutes,
                 weekendGoalMinutes = parsedHours?.second ?: cur.weekendGoalMinutes,
+                latestMockNetSummary = if (isMockQuestion) clean.take(180) else cur.latestMockNetSummary,
+                lastMockUpdatedAtMillis = if (isMockQuestion) now else cur.lastMockUpdatedAtMillis,
                 updatedAtMillis = now
             )
         }
@@ -731,6 +841,16 @@ object StudentDossierManager {
         if (d.targetAnalysisSummary.isNotBlank()) {
             sb.appendLine("• Hedef Analizi: ${sanitizeNoPii(d.targetAnalysisSummary).take(280)}")
         }
+        if (d.latestMockNetSummary.isNotBlank() || d.latestMockAnalysis.isNotBlank()) {
+            val mockLine = buildString {
+                if (d.latestMockNetSummary.isNotBlank()) append(sanitizeNoPii(d.latestMockNetSummary).take(180))
+                if (d.latestMockAnalysis.isNotBlank()) {
+                    if (isNotEmpty()) append(" | Analiz: ")
+                    append(sanitizeNoPii(d.latestMockAnalysis).take(240))
+                }
+            }
+            sb.appendLine("• Son Deneme Neti ve Analizi: $mockLine")
+        }
         val wdH = CoachingEngine.formatMinutesShort(d.weekdayGoalMinutes)
         val weH = CoachingEngine.formatMinutesShort(d.weekendGoalMinutes)
         sb.appendLine("• Öğrencinin Seçtiği Günlük Çalışma Hedefi: Hafta içi $wdH (${d.weekdayGoalMinutes} dk) | Hafta sonu $weH (${d.weekendGoalMinutes} dk)")
@@ -836,6 +956,9 @@ object StudentDossierManager {
         root.put("targetHeadline", d.targetHeadline)
         if (d.targetRanking != null) root.put("targetRanking", d.targetRanking)
         root.put("targetAnalysisSummary", d.targetAnalysisSummary)
+        root.put("latestMockNetSummary", d.latestMockNetSummary)
+        root.put("latestMockAnalysis", d.latestMockAnalysis)
+        root.put("lastMockUpdatedAtMillis", d.lastMockUpdatedAtMillis)
         root.put("weekdayGoalMinutes", d.weekdayGoalMinutes)
         root.put("weekendGoalMinutes", d.weekendGoalMinutes)
         root.put("activePlanTitle", d.activePlanTitle)
@@ -1000,6 +1123,9 @@ object StudentDossierManager {
                 incompletePlanTasks = incPlan,
                 interviewAnswers = answers,
                 coachingInsights = insights,
+                latestMockNetSummary = root.optString("latestMockNetSummary", ""),
+                latestMockAnalysis = root.optString("latestMockAnalysis", ""),
+                lastMockUpdatedAtMillis = root.optLong("lastMockUpdatedAtMillis", 0L),
                 efficiencyTrialDeclined = root.optBoolean("efficiencyTrialDeclined", false),
                 lastSyncedAtMillis = root.optLong("lastSyncedAtMillis", 0L),
                 updatedAtMillis = root.optLong("updatedAtMillis", 0L)

@@ -7,7 +7,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 enum class AppThemeMode {
-    SYSTEM, DARK, LIGHT
+    SYSTEM, DARK, LIGHT, CIRCADIAN
+}
+
+fun isCircadianNightHour(hourOfDay: Int): Boolean {
+    val safeHour = ((hourOfDay % 24) + 24) % 24
+    return safeHour >= 20 || safeHour < 7
 }
 
 /**

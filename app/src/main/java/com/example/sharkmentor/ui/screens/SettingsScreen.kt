@@ -731,23 +731,30 @@ fun ThemeSelectorSection(
         SegmentedButton(
             selected = themeMode == AppThemeMode.SYSTEM,
             onClick = { onThemeModeToggle(AppThemeMode.SYSTEM) },
-            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 4)
         ) {
-            Text("Sistem", fontSize = 12.sp)
+            Text("Sistem", fontSize = 11.sp, maxLines = 1)
         }
         SegmentedButton(
             selected = themeMode == AppThemeMode.DARK,
             onClick = { onThemeModeToggle(AppThemeMode.DARK) },
-            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 4)
         ) {
-            Text("Koyu", fontSize = 12.sp)
+            Text("Koyu", fontSize = 11.sp, maxLines = 1)
         }
         SegmentedButton(
             selected = themeMode == AppThemeMode.LIGHT,
             onClick = { onThemeModeToggle(AppThemeMode.LIGHT) },
-            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+            shape = SegmentedButtonDefaults.itemShape(index = 2, count = 4)
         ) {
-            Text("Açık", fontSize = 12.sp)
+            Text("Açık", fontSize = 11.sp, maxLines = 1)
+        }
+        SegmentedButton(
+            selected = themeMode == AppThemeMode.CIRCADIAN,
+            onClick = { onThemeModeToggle(AppThemeMode.CIRCADIAN) },
+            shape = SegmentedButtonDefaults.itemShape(index = 3, count = 4)
+        ) {
+            Text("Döngü", fontSize = 11.sp, maxLines = 1)
         }
     }
 
@@ -767,11 +774,14 @@ fun ThemeSelectorSection(
     ) {
         items(palettes, key = { it.name }) { palette ->
             val isSelected = currentPalette == palette
+            val swatchBg = Color(palette.bgHex)
+            val isLightSwatch = (0.2126f * swatchBg.red + 0.7152f * swatchBg.green + 0.0722f * swatchBg.blue) > 0.55f
+            val labelColor = if (isLightSwatch) Color(0xFF181714) else Color.White
             Card(
                 modifier = Modifier
                     .width(106.dp)
                     .clickable { onSelectPalette(palette) },
-                colors = CardDefaults.cardColors(containerColor = Color(palette.bgHex)),
+                colors = CardDefaults.cardColors(containerColor = swatchBg),
                 border = BorderStroke(
                     width = if (isSelected) 2.dp else 1.dp,
                     color = if (isSelected) Color(palette.primaryHex) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
@@ -783,7 +793,7 @@ fun ThemeSelectorSection(
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         palette.title,
-                        color = Color.White,
+                        color = labelColor,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.labelMedium,
                         maxLines = 1,

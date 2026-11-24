@@ -238,14 +238,16 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
 
     enum class PendingDossierActionType {
         SYNC_NOW,
-        EDIT_NOTE
+        EDIT_NOTE,
+        UPDATE_MOCK_EXAM
     }
 
     data class PendingDossierAction(
         val type: PendingDossierActionType,
         val title: String,
         val description: String,
-        val rawNote: String = ""
+        val rawNote: String = "",
+        val mockNetSummary: String = ""
     )
 
     private val _pendingDossierAction = MutableStateFlow<PendingDossierAction?>(null)
@@ -325,6 +327,15 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         )
                     }
                     "Onayınla birlikte bu bilgi anonim Öğrenci Dosyana eklendi. Koçluk ve plan önerilerin artık buna göre şekillenecek."
+                }
+                PendingDossierActionType.UPDATE_MOCK_EXAM -> {
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.updateMockExamRecord(
+                        context = appCtx,
+                        netSummary = pending.mockNetSummary,
+                        analysisNote = pending.rawNote
+                    )
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.syncFromDatabase(appCtx, force = true)
+                    "Deneme netlerin ve analiz özetin Öğrenci Dosyana kaydedildi."
                 }
             }
             val aiMsg = AiChatMessage(
@@ -1409,6 +1420,33 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     toolPlanFolderId = routerResult.createdPlanFolderId,
                     streamingMessageId = streamingMsgId
                 )
+
+                // Hedef Analizi (/hedef) üzerinden deneme analizi yapıldıysa ve Koçluk Yolu açıksa Öğrenci Dosyasını güncelleme onayı sor
+                if (currentPersona == AiPersona.GOAL_SETTER && _pendingDossierAction.value == null) {
+                    val appCtx = getApplication<Application>()
+                    com.example.sharkmentor.core.coaching.CoachingEngine.ensureInitialized(appCtx)
+                    com.example.sharkmentor.core.coaching.StudentDossierManager.ensureLoaded(appCtx)
+                    val coachingActive = com.example.sharkmentor.core.coaching.CoachingEngine.comprehensiveSupportEnabled.value
+                    val dossierReady = com.example.sharkmentor.core.coaching.StudentDossierManager.dossier.value.let {
+                        it.isCompleted || it.consentAccepted
+                    }
+                    if (coachingActive && dossierReady &&
+                        com.example.sharkmentor.core.coaching.StudentDossierManager.isMockExamAnalysisExchange(
+                            effectivePrompt,
+                            routerResult.text
+                        )
+                    ) {
+                        val (mockNets, mockAnalysis) = com.example.sharkmentor.core.coaching.StudentDossierManager
+                            .extractCompactMockExamSummary(effectivePrompt, routerResult.text)
+                        _pendingDossierAction.value = PendingDossierAction(
+                            type = PendingDossierActionType.UPDATE_MOCK_EXAM,
+                            title = "Öğrenci Dosyası Güncellensin mi?",
+                            description = "Hedef Analizi sırasındaki deneme netlerin ve analiz özetin Koçluk Yolu verilerine eklensin mi?",
+                            rawNote = mockAnalysis,
+                            mockNetSummary = mockNets
+                        )
+                    }
+                }
 
                 // YALNIZCA aktif mod Soru Çözümü veya Benzer Soru ise Antrenman Bankasına otomatik kaydet
                 val isExplicitQuestionMode = (resolvedEngine == SharkAiEngine.SOLVER_ENGINE ||

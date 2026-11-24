@@ -19,5 +19,7 @@ enum class ThemePalette(
     AUTUMN("Autumn", 0xFF181310, 0xFFEA580C, "Kiremit Sonbahar"),
     GALATASARAY("Galatasaray", 0xFF1A090D, 0xFFA90432, "Sarı & Kırmızı Özel"),
     BLUEBERRY("Blueberry", 0xFF120C24, 0xFF9333EA, "Mor & Koyu Lacivert"),
-    CHRISTMAS("Christmas", 0xFF0F1B15, 0xFF2E7D5B, "Çam Yeşili & Sıcak Kar")
+    CHRISTMAS("Christmas", 0xFF0F1B15, 0xFF2E7D5B, "Çam Yeşili & Sıcak Kar"),
+    PAPER("Paper", 0xFFF5F1E6, 0xFF2B2822, "Sıcak Kağıt & Mürekkep"),
+    OBSIDIAN("Obsidian", 0xFF000000, 0xFFE2E8F0, "Saf OLED Siyah")
 }

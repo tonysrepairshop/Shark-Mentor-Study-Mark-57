@@ -108,7 +108,8 @@ import java.io.File
 
 private enum class NotesLibraryTab {
     NOTES,
-    PDFS
+    PDFS,
+    CARDS
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -434,7 +435,7 @@ fun NotesScreen(
                     )
                 }
 
-                // ── Notlarım | PDF'lerim Sub-Tab Switcher directly above the search bar ──
+                // ── Notlarım | PDF'lerim | Kartlar Sub-Tab Switcher ──
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -454,7 +455,7 @@ fun NotesScreen(
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Light,
                         color = textMutedColor.copy(alpha = 0.45f),
-                        modifier = Modifier.padding(horizontal = 16.dp)
+                        modifier = Modifier.padding(horizontal = 14.dp)
                     )
                     NotesLibraryTabButton(
                         label = "PDF'lerim",
@@ -463,38 +464,54 @@ fun NotesScreen(
                         mutedColor = textMutedColor,
                         onClick = { activeTabName = NotesLibraryTab.PDFS.name }
                     )
+                    Text(
+                        text = "|",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Light,
+                        color = textMutedColor.copy(alpha = 0.45f),
+                        modifier = Modifier.padding(horizontal = 14.dp)
+                    )
+                    NotesLibraryTabButton(
+                        label = "Kartlar",
+                        isSelected = activeTab == NotesLibraryTab.CARDS,
+                        primaryColor = primaryColor,
+                        mutedColor = textMutedColor,
+                        onClick = { activeTabName = NotesLibraryTab.CARDS.name }
+                    )
                 }
 
-                // ── Search Bar ──
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { viewModel.updateSearchQuery(it) },
-                        placeholder = {
-                            Text(
-                                text = if (activeTab == NotesLibraryTab.NOTES) "Notlarda ara..." else "PDF'lerde ara...",
-                                color = textMutedColor
-                            )
-                        },
-                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = textMutedColor) },
-                        singleLine = true,
+                // ── Search Bar (only on Notes & PDFs) ──
+                if (activeTab != NotesLibraryTab.CARDS) {
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .widthIn(max = 720.dp),
-                        shape = RoundedCornerShape(24.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = primaryColor,
-                            unfocusedBorderColor = colorScheme.outline.copy(alpha = 0.45f),
-                            focusedTextColor = textColor,
-                            unfocusedTextColor = textColor,
-                            cursorColor = primaryColor
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.updateSearchQuery(it) },
+                            placeholder = {
+                                Text(
+                                    text = if (activeTab == NotesLibraryTab.NOTES) "Notlarda ara..." else "PDF'lerde ara...",
+                                    color = textMutedColor
+                                )
+                            },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = textMutedColor) },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .widthIn(max = 720.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = primaryColor,
+                                unfocusedBorderColor = colorScheme.outline.copy(alpha = 0.45f),
+                                focusedTextColor = textColor,
+                                unfocusedTextColor = textColor,
+                                cursorColor = primaryColor
+                            )
                         )
-                    )
+                    }
                 }
 
                 if (activeTab == NotesLibraryTab.NOTES) {
@@ -588,7 +605,7 @@ fun NotesScreen(
                             }
                         }
                     }
-                } else {
+                } else if (activeTab == NotesLibraryTab.PDFS) {
                     // ── PDF'lerim Tab (Identical staggered grid & card aesthetic) ──
                     val pinnedPdfs = filteredPdfs.filter { it.isPinned }
                     val unpinnedPdfs = filteredPdfs.filter { !it.isPinned }
@@ -710,44 +727,54 @@ fun NotesScreen(
                             }
                         }
                     }
+                } else {
+                    SmartFlashcardStudioView(
+                        availableNotes = visibleNotes,
+                        availablePdfs = pdfDocuments,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    )
                 }
             }
 
             // ── Single Contextual FAB: New Note on Notlarım, Import/Open PDF on PDF'lerim ──
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(24.dp)
-            ) {
-                if (activeTab == NotesLibraryTab.NOTES) {
-                    FloatingActionButton(
-                        onClick = { openEditorSession() },
-                        containerColor = primaryColor,
-                        contentColor = colorScheme.onPrimary
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = "Yeni Not")
-                    }
-                } else {
-                    FloatingActionButton(
-                        onClick = {
-                            if (!isImportingPdf) {
-                                pdfPickerLauncher.launch(arrayOf("application/pdf"))
+            if (activeTab != NotesLibraryTab.CARDS) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(24.dp)
+                ) {
+                    if (activeTab == NotesLibraryTab.NOTES) {
+                        FloatingActionButton(
+                            onClick = { openEditorSession() },
+                            containerColor = primaryColor,
+                            contentColor = colorScheme.onPrimary
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Yeni Not")
+                        }
+                    } else if (activeTab == NotesLibraryTab.PDFS) {
+                        FloatingActionButton(
+                            onClick = {
+                                if (!isImportingPdf) {
+                                    pdfPickerLauncher.launch(arrayOf("application/pdf"))
+                                }
+                            },
+                            containerColor = primaryColor,
+                            contentColor = colorScheme.onPrimary
+                        ) {
+                            if (isImportingPdf) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(22.dp),
+                                    strokeWidth = 2.4.dp,
+                                    color = colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.PictureAsPdf,
+                                    contentDescription = "PDF İçe Aktar / Aç"
+                                )
                             }
-                        },
-                        containerColor = primaryColor,
-                        contentColor = colorScheme.onPrimary
-                    ) {
-                        if (isImportingPdf) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                strokeWidth = 2.4.dp,
-                                color = colorScheme.onPrimary
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.PictureAsPdf,
-                                contentDescription = "PDF İçe Aktar / Aç"
-                            )
                         }
                     }
                 }

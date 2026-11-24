@@ -64,12 +64,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-private val PaceDeepBlueBg = Color(0xFF071426)
-private val PaceCardBg = Color(0xFF0C1F3D)
-private val PaceBorderBlue = Color(0xFF1C3D6E)
-private val PaceOffWhite = Color(0xFFF4F6F8)
-private val PaceSecondaryText = Color(0xFF9FB3CE)
-private val PaceIceAccent = Color(0xFF60A5FA)
+private val PacePianoBlackBg = Color(0xFF000000)
+private val PaceCardBg = Color(0xFF060606)
+private val PaceBorderOffWhite = Color(0x5CF2EFE9)
+private val PaceOffWhite = Color(0xFFF2EFE9)
+private val PaceSecondaryText = Color(0xB3F2EFE9)
 
 class PaceKeepBridge(context: Context) {
 
@@ -141,7 +140,7 @@ fun PaceKeepScreen(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(android.graphics.Color.parseColor("#071426"))
+            setBackgroundColor(android.graphics.Color.BLACK)
             overScrollMode = View.OVER_SCROLL_NEVER
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
@@ -185,9 +184,9 @@ fun PaceKeepScreen(
 
         if (window != null) {
             @Suppress("DEPRECATION")
-            window.statusBarColor = 0xFF071426.toInt()
+            window.statusBarColor = android.graphics.Color.BLACK
             @Suppress("DEPRECATION")
-            window.navigationBarColor = 0xFF071426.toInt()
+            window.navigationBarColor = android.graphics.Color.BLACK
             insetsController?.isAppearanceLightStatusBars = false
             insetsController?.isAppearanceLightNavigationBars = false
         }
@@ -226,24 +225,23 @@ fun PaceKeepScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(PaceDeepBlueBg)
+            .background(PacePianoBlackBg)
             .windowInsetsPadding(WindowInsets.statusBars)
             .windowInsetsPadding(WindowInsets.navigationBars)
     ) {
-        // Standalone Deep Blue Minimal Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(PaceDeepBlueBg)
+                .background(PacePianoBlackBg)
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(PaceCardBg)
-                    .border(1.dp, PaceBorderBlue, RoundedCornerShape(12.dp))
+                    .border(1.dp, PaceBorderOffWhite, RoundedCornerShape(10.dp))
                     .clickable(onClick = flushAndExit)
                     .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -251,12 +249,12 @@ fun PaceKeepScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Geri",
-                    tint = PaceIceAccent,
+                    tint = PaceOffWhite,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Geri Dön",
+                    text = "Geri",
                     color = PaceOffWhite,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
@@ -265,17 +263,17 @@ fun PaceKeepScreen(
 
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(PaceCardBg)
-                    .border(1.dp, PaceBorderBlue, RoundedCornerShape(10.dp))
+                    .border(1.dp, PaceBorderOffWhite, RoundedCornerShape(8.dp))
                     .padding(horizontal = 10.dp, vertical = 5.dp)
             ) {
                 Text(
-                    text = "BAĞIMSIZ SAYAÇ",
+                    text = "PACE / KEEP",
                     color = PaceSecondaryText,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
+                    letterSpacing = 1.0.sp
                 )
             }
         }

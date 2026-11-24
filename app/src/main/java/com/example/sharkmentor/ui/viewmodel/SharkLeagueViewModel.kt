@@ -2159,6 +2159,30 @@ try {
                 studentPayload["name"] = name
                 studentPayload["displayName"] = name
             }
+            runCatching {
+                val cardSnap = com.example.sharkmentor.core.league.SharkCardManager.refreshCard(
+                    context = appContext,
+                    displayNameOverride = name.takeIf { isMeaningfulName(it) },
+                    syncToCloud = false
+                )
+                studentPayload["sharkCardPublic"] = cardSnap.isPublic
+                if (cardSnap.isPublic) {
+                    studentPayload["sharkCard"] = mapOf(
+                        "displayName" to cardSnap.displayName,
+                        "targetExam" to cardSnap.targetExam,
+                        "grade" to cardSnap.grade,
+                        "tierLabel" to resolvedTierName,
+                        "archetypeTitle" to cardSnap.archetypeTitle,
+                        "weeklyFocusMinutes" to (weeklyFocusSeconds / 60L).toInt(),
+                        "streakDays" to streakDays,
+                        "mentorPoints" to mentorPoints,
+                        "masteredTopicsCount" to cardSnap.masteredTopicsCount,
+                        "resolvedErrorsCount" to cardSnap.resolvedErrorsCount,
+                        "strongestSubject" to cardSnap.strongestSubject,
+                        "updatedAtMillis" to cardSnap.updatedAtMillis
+                    )
+                }
+            }
 
             val friendCodeSig = "$uid|$friendCode|$name"
             val needsFriendCodeWrite = quotaPrefs.getString("last_friend_code_sig", null) != friendCodeSig
