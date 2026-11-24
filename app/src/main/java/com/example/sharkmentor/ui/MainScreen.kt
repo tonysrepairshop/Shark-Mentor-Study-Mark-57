@@ -98,6 +98,9 @@ import com.example.sharkmentor.data.weather.WeatherUiState
 import com.example.sharkmentor.data.topbar.FocusSessionState
 import com.example.sharkmentor.data.topbar.TopBarPreferences
 import com.example.sharkmentor.data.topbar.TopBarSettings
+import com.example.sharkmentor.data.topbar.TopBarModuleSize
+import com.example.sharkmentor.data.topbar.TopBarModule
+import androidx.compose.ui.graphics.graphicsLayer
 import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.SpecialMemberConfig
 import com.example.sharkmentor.ui.components.TopBarAiShortcutBox
@@ -356,12 +359,19 @@ fun MainScreen(
                             Screen.PaceKeep.route
                         )
                     }
-                    val showGlobalMusicButton = musicPlayerEnabled &&
+                    val isMusicTopBarVisible = musicPlayerEnabled &&
+                        topBarSettings.isModuleVisible(TopBarModule.MUSIC) &&
                         currentRoute != null &&
-                        currentRoute !in excludedMusicRoutes &&
-                        !activeNoteEditor
+                        currentRoute !in excludedMusicRoutes
                     val isOnHomeTab = currentRoute == Screen.Focus.route
                     val isMusicButtonActive = if (isOnHomeTab) isHomeMusicPanelOpen else isFloatingMiniOpen
+                    val onToggleMusicUi: () -> Unit = {
+                        if (isOnHomeTab) {
+                            MusicPlayerHub.toggleHomePanel()
+                        } else {
+                            MusicPlayerHub.toggleFloatingMini()
+                        }
+                    }
 
                     // Restorable background video studio (when tapping the lock-screen/shade notification)
                     val videoRestoreRequested by CampVideoPlaybackController.restoreRequested.collectAsStateWithLifecycle()
@@ -424,6 +434,10 @@ fun MainScreen(
                                             com.example.sharkmentor.core.notification.SocialNotificationMonitor.clearUnreadDmIndicator()
                                             navController.navigate(Screen.SharkLeague.route) { launchSingleTop = true }
                                         },
+                                        showMusicButton = isMusicTopBarVisible,
+                                        isMusicActive = isMusicButtonActive,
+                                        isMusicPlaying = musicPlaybackState.isPlaying,
+                                        onMusicClick = onToggleMusicUi,
                                         onCountdownClick = {
                                             navController.navigate("countdown_settings") {
                                                 launchSingleTop = true
@@ -683,16 +697,10 @@ fun MainScreen(
                         }
                     }
 
-                            // Fixed Small Round Music Note Button just beneath the Top Bar on the left (all tabs except Settings)
-                            if (showGlobalMusicButton) {
+                            // Keep a discreet corner Music Note button whenever the TopBar is hidden (e.g., Note or PDF editor open!)
+                            if (isMusicTopBarVisible && !shouldShowTopBar) {
                                 Surface(
-                                    onClick = {
-                                        if (isOnHomeTab) {
-                                            MusicPlayerHub.toggleHomePanel()
-                                        } else {
-                                            MusicPlayerHub.toggleFloatingMini()
-                                        }
-                                    },
+                                    onClick = onToggleMusicUi,
                                     shape = CircleShape,
                                     color = if (isMusicButtonActive || musicPlaybackState.isPlaying) {
                                         MaterialTheme.colorScheme.primary
@@ -706,30 +714,26 @@ fun MainScreen(
                                     },
                                     border = BorderStroke(
                                         1.dp,
-                                        if (isMusicButtonActive) {
-                                            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.45f)
-                                        } else {
-                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
-                                        }
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
                                     ),
                                     shadowElevation = 4.dp,
                                     modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(start = 10.dp, top = 6.dp)
-                                        .size(36.dp)
+                                        .align(Alignment.TopEnd)
+                                        .padding(end = 12.dp, top = 44.dp)
+                                        .size(34.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = Icons.Default.MusicNote,
                                             contentDescription = "Müzik Oynatıcı",
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(17.dp)
                                         )
                                     }
                                 }
                             }
 
-                            // Draggable Compact Mini Music Window on all tabs outside HomeScreen (minimizing never stops playback)
-                            if (showGlobalMusicButton && !isOnHomeTab && isFloatingMiniOpen) {
+                            // Draggable Compact Mini Music Window on all tabs outside HomeScreen — stays visible in Notes & PDFs!
+                            if (isMusicTopBarVisible && !isOnHomeTab && isFloatingMiniOpen) {
                                 DraggableMiniMusicPlayerWindow(
                                     playbackState = musicPlaybackState,
                                     selectedSkin = musicSelectedSkin,
@@ -854,6 +858,10 @@ private fun SharkMentorTopBar(
     weatherState: WeatherUiState,
     weatherSettings: WeatherSettings,
     hasUnreadDm: Boolean = false,
+    showMusicButton: Boolean = true,
+    isMusicActive: Boolean = false,
+    isMusicPlaying: Boolean = false,
+    onMusicClick: () -> Unit = {},
     onWeatherClick: () -> Unit,
     onOpenSharkAi: () -> Unit,
     onStartZenSound: (com.example.sharkmentor.core.audio.ZenSound, String) -> Unit = { _, _ -> },
@@ -865,91 +873,142 @@ private fun SharkMentorTopBar(
 ) {
     val isLandscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     val hideForFocus = topBarSettings.hideDuringFocus && (isAnyFocusRunning || isPaceKeep)
-    val showTopBarWidgets = isLandscape && !topBarSettings.hideTopBarMenu && !hideForFocus
+    val showTopBarWidgets = !topBarSettings.hideTopBarMenu && !hideForFocus
     val showBubbleFrame = !topBarSettings.hideBubbles
-    val showCountdown = countdown.isNotBlank() && !topBarSettings.hideTopBarMenu && !hideForFocus
-    val showPortraitDmShortcut = !isLandscape && !topBarSettings.hideTopBarMenu && !hideForFocus
 
     TopAppBar(
         expandedHeight = 48.dp,
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(end = 6.dp)
+                    .padding(end = 4.dp)
             ) {
-                SharkMentorBranding(countdown = countdown, isCampus = isCampus)
-                if (showTopBarWidgets) {
-                    TopBarWeatherPill(
-                        weatherState = weatherState,
-                        settings = weatherSettings,
-                        showBubble = showBubbleFrame,
-                        onClick = onWeatherClick
-                    )
-                    TopBarAiShortcutBox(
-                        onClick = { prompt ->
-                            PendingAiPromptBus.pendingPrompt.value = prompt
-                            onOpenSharkAi()
-                        },
-                        modifier = Modifier.weight(1f),
-                        topBarSettings = topBarSettings,
-                        showBubble = showBubbleFrame,
-                        weatherState = weatherState,
-                        isAnyFocusRunning = isAnyFocusRunning,
-                        elapsedFocusMinutes = elapsedFocusMinutes,
-                        onStartZenSound = onStartZenSound,
-                        onNavigateRoute = onNavigateRoute,
-                        onWellnessAck = onWellnessAck
-                    )
-                    com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
-                        hasUnread = hasUnreadDm,
-                        showBubble = showBubbleFrame,
-                        onClick = onOpenDmInbox
-                    )
+                topBarSettings.moduleOrder.forEach { module ->
+                    if (!topBarSettings.isModuleVisible(module)) return@forEach
+                    val scale = topBarSettings.sizeFor(module).scale
+                    when (module) {
+                        TopBarModule.BRANDING -> {
+                            Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
+                                SharkMentorBranding(countdown = countdown, isCampus = isCampus)
+                            }
+                        }
+                        TopBarModule.MUSIC -> {
+                            if (showMusicButton) {
+                                val btnDp = (32f * scale).dp
+                                Surface(
+                                    onClick = onMusicClick,
+                                    shape = CircleShape,
+                                    color = if (isMusicActive || isMusicPlaying) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
+                                    },
+                                    contentColor = if (isMusicActive || isMusicPlaying) {
+                                        MaterialTheme.colorScheme.onPrimary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isMusicActive) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
+                                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.size(btnDp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = "Müzik Oynatıcı",
+                                            modifier = Modifier.size((16f * scale).dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        TopBarModule.WEATHER -> {
+                            if (showTopBarWidgets && (isLandscape || !topBarSettings.isModuleVisible(TopBarModule.AI_BAR))) {
+                                Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
+                                    TopBarWeatherPill(
+                                        weatherState = weatherState,
+                                        settings = weatherSettings,
+                                        showBubble = showBubbleFrame,
+                                        onClick = onWeatherClick
+                                    )
+                                }
+                            }
+                        }
+                        TopBarModule.AI_BAR -> {
+                            if (showTopBarWidgets && isLandscape) {
+                                TopBarAiShortcutBox(
+                                    onClick = { prompt ->
+                                        PendingAiPromptBus.pendingPrompt.value = prompt
+                                        onOpenSharkAi()
+                                    },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .graphicsLayer { scaleY = scale },
+                                    topBarSettings = topBarSettings,
+                                    showBubble = showBubbleFrame,
+                                    weatherState = weatherState,
+                                    isAnyFocusRunning = isAnyFocusRunning,
+                                    elapsedFocusMinutes = elapsedFocusMinutes,
+                                    onStartZenSound = onStartZenSound,
+                                    onNavigateRoute = onNavigateRoute,
+                                    onWellnessAck = onWellnessAck
+                                )
+                            }
+                        }
+                        TopBarModule.DM -> {
+                            if (showTopBarWidgets) {
+                                Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
+                                    com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
+                                        hasUnread = hasUnreadDm,
+                                        showBubble = showBubbleFrame,
+                                        onClick = onOpenDmInbox
+                                    )
+                                }
+                            }
+                        }
+                        TopBarModule.COUNTDOWN -> {
+                            if (showTopBarWidgets && countdown.isNotBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .graphicsLayer { scaleX = scale; scaleY = scale }
+                                        .clickable { onCountdownClick() }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Event,
+                                            contentDescription = "Hedef Sınav Geri Sayım",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Text(
+                                            text = countdown,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
         actions = {
-            if (showPortraitDmShortcut) {
-                com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
-                    hasUnread = hasUnreadDm,
-                    showBubble = showBubbleFrame,
-                    onClick = onOpenDmInbox,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
-            }
-            // Task 6.2: Restored Target Exam Countdown Widget (YKS remaining days pill)
-            if (showCountdown) {
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                    modifier = Modifier
-                        .padding(end = 4.dp)
-                        .clickable { onCountdownClick() }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Event,
-                            contentDescription = "Hedef Sınav Geri Sayım",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = countdown,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
             IconButton(onClick = onMenuClick, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Default.Menu,

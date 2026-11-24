@@ -56,6 +56,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.app.TimePickerDialog
 import androidx.compose.material.icons.filled.Album
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import com.example.sharkmentor.data.topbar.TopBarModule
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Timer
@@ -191,6 +197,8 @@ fun SettingsScreen(
     val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
     val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
     val autoHideBottomBar by themePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
+    val topBarPrefs = remember(context) { TopBarPreferences.getInstance(context.applicationContext) }
+    val topBarSettings by topBarPrefs.settings.collectAsStateWithLifecycle()
 
     LaunchedEffect(context) {
         MusicPlayerHub.ensureInitialized(context)
@@ -489,8 +497,12 @@ fun SettingsScreen(
                         }
                     }
 
-                    // 2. Görünüm & Göz Koruma
-                    SettingsGroupCard(title = "Görünüm") {
+                    // 2. Görünüm & Göz Koruma (Collapsed by default so Settings stays calm & scannable)
+                    ExpandableSettingsGroupCard(
+                        title = "Görünüm & Göz Koruma",
+                        subtitle = "Tema, renk paleti, sirkadiyen saat ve mavi ışık filtresi",
+                        initiallyExpanded = false
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -745,8 +757,12 @@ fun SettingsScreen(
                         )
                     }
 
-                    // 3. Müzik & Plak Çalar (Left of HomeScreen)
-                    SettingsGroupCard(title = "Müzik Çalar") {
+                    // 3. Üst Bar & Müzik Stüdyosu (Customizable TopBar + Music Player unified!)
+                    ExpandableSettingsGroupCard(
+                        title = "Üst Bar & Müzik Stüdyosu",
+                        subtitle = "Üst bar modüllerini sırala, boyutlandır, müzik temasını seç",
+                        initiallyExpanded = false
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -755,134 +771,230 @@ fun SettingsScreen(
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Üst Bar Düzeni",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                TextButton(
+                                    onClick = {
+                                        topBarPrefs.resetTopBarLayout()
+                                        MusicPlayerHub.setEnabled(context, true)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text("Varsayılan", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+
+                            // Live Top Bar Order Preview Strip
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                LazyRow(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    val visibleOrdered = topBarSettings.moduleOrder.filter { topBarSettings.isModuleVisible(it) }
+                                    if (visibleOrdered.isEmpty()) {
+                                        item {
+                                            Text(
+                                                text = "Üst bar modülleri gizli",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    } else {
+                                        items(visibleOrdered, key = { "preview_${it.name}" }) { mod ->
+                                            val sz = topBarSettings.sizeFor(mod)
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                                            ) {
+                                                Text(
+                                                    text = "${mod.label} (${sz.label.first()})",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Per-module visibility, left/right reorder & size controls
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                topBarSettings.moduleOrder.forEachIndexed { index, mod ->
+                                    val isVisible = topBarSettings.isModuleVisible(mod)
+                                    val modSize = topBarSettings.sizeFor(mod)
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = mod.label,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = if (isVisible) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                if (isVisible) {
+                                                    Text(
+                                                        text = "Boyut: ${modSize.label}",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.clickable {
+                                                            topBarPrefs.setModuleSize(mod, modSize.next())
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                            ) {
+                                                IconButton(
+                                                    onClick = { topBarPrefs.moveModule(mod, -1) },
+                                                    enabled = index > 0,
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.ArrowBack, contentDescription = "Sola Taşı", modifier = Modifier.size(15.dp))
+                                                }
+                                                IconButton(
+                                                    onClick = { topBarPrefs.moveModule(mod, 1) },
+                                                    enabled = index < topBarSettings.moduleOrder.lastIndex,
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.ArrowForward, contentDescription = "Sağa Taşı", modifier = Modifier.size(15.dp))
+                                                }
+                                                Switch(
+                                                    checked = isVisible,
+                                                    onCheckedChange = { checked ->
+                                                        topBarPrefs.setModuleVisible(mod, checked)
+                                                        if (mod == TopBarModule.MUSIC) {
+                                                            MusicPlayerHub.setEnabled(context, checked)
+                                                        }
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                            // Media Access + Open Spotify / Open YouTube Music (clear wording!)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Album,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(21.dp)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Medya Kontrol İzni",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    Column {
-                                        Text(
-                                            text = "Ana Ekran Müzik Çalar",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "Üst barın sol altında nota butonu gösterir; ana ekranda sol panel, diğer sekmelerde yüzer mini pencere olarak açılır",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
+                                    Text(
+                                        text = if (mediaAccessGranted) "Aktif • Çalan şarkı otomatik algılanır" else "Spotify ve YouTube Music kontrolü için gerekli",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (mediaAccessGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                                Switch(
-                                    checked = musicPlayerEnabled,
-                                    onCheckedChange = { MusicPlayerHub.setEnabled(context, it) }
-                                )
+                                if (!mediaAccessGranted) {
+                                    OutlinedButton(
+                                        onClick = { MusicPlayerHub.openMediaAccessSettings(context) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Aktif",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
 
-                            if (musicPlayerEnabled) {
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Medya Kontrol Bağlantısı",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = if (mediaAccessGranted) "Aktif • Çalan şarkı otomatik algılanır" else "Spotify ve YouTube Music için gerekli",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = if (mediaAccessGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    if (!mediaAccessGranted) {
-                                        OutlinedButton(
-                                            onClick = { MusicPlayerHub.openMediaAccessSettings(context) },
-                                            shape = RoundedCornerShape(8.dp),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(32.dp)
-                                        ) {
-                                            Text("İzin Ver", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Bağlı",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
+                                    Text("Spotify'ı Aç", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                OutlinedButton(
+                                    onClick = {
+                                        MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp)
                                 ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text("Spotify Bağla", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                    OutlinedButton(
-                                        onClick = {
-                                            MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Text("YouTube Music Bağla", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
+                                    Text("YouTube Music'i Aç", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 }
+                            }
 
-                                Text(
-                                    text = "Çalar Teması",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            Text(
+                                text = "Müzik Oynatıcı Teması",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
-                                LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    contentPadding = PaddingValues(vertical = 2.dp)
-                                ) {
-                                    items(MusicPlayerSkin.entries, key = { it.id }) { skin ->
-                                        val isChosen = musicSelectedSkin == skin
-                                        Surface(
-                                            onClick = { MusicPlayerHub.setSkin(context, skin) },
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                            border = BorderStroke(
-                                                1.dp,
-                                                if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                            )
-                                        ) {
-                                            Text(
-                                                text = skin.displayTitle,
-                                                fontSize = 12.sp,
-                                                fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                                            )
-                                        }
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(vertical = 2.dp)
+                            ) {
+                                items(MusicPlayerSkin.entries, key = { it.id }) { skin ->
+                                    val isChosen = musicSelectedSkin == skin
+                                    Surface(
+                                        onClick = { MusicPlayerHub.setSkin(context, skin) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isChosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                        )
+                                    ) {
+                                        Text(
+                                            text = skin.displayTitle,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isChosen) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isChosen) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        )
                                     }
                                 }
                             }
@@ -1095,6 +1207,58 @@ fun SettingsScreen(
     }
 }
 
+
+@Composable
+private fun ExpandableSettingsGroupCard(
+    title: String,
+    subtitle: String,
+    initiallyExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 14.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Daralt" else "Genişlet",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    content()
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun SettingsGroupCard(

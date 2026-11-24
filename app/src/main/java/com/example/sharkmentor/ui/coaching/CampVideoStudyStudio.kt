@@ -811,32 +811,6 @@ fun CampVideoStudyStudioDialog(
                                     }
                                 }
 
-                                // Minimize & Continue Playing in Background with Media Notification
-                                Surface(
-                                    onClick = {
-                                        isMinimizingToBackground = true
-                                        CampVideoPlaybackController.minimizeToBackground(context)
-                                        Toast.makeText(
-                                            context,
-                                            "Arka planda oynatılıyor • Bildirimden yönetebilirsiniz",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        onDismiss()
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = colorScheme.primary.copy(alpha = 0.14f),
-                                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                    ) {
-                                        Icon(Icons.Default.Headphones, contentDescription = "Arka Planda Çal", tint = colorScheme.primary, modifier = Modifier.size(12.dp))
-                                        Text("Arka Plan", style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.primary)
-                                    }
-                                }
-
                                 // Ad Blocker toggle
                                 Surface(
                                     onClick = {

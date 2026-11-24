@@ -205,6 +205,7 @@ fun ThemedMusicPlayerPage(
     if (showSoundQueueSheet) {
         MusicQuickSourceSheet(
             selectedSkin = selectedSkin,
+            queueTitles = playbackState.queueTitles,
             onSelectSkin = onSelectSkin,
             onDismiss = { showSoundQueueSheet = false }
         )
@@ -274,6 +275,7 @@ fun ThemedMusicPlayerPage(
                                 spinDegreesProvider = { spinDegrees },
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = true,
+                                onTonearmClick = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CLASSIC_VINYL -> VinylTurntableStage(
@@ -281,12 +283,14 @@ fun ThemedMusicPlayerPage(
                                 spinDegreesProvider = { spinDegrees },
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = false,
+                                onTonearmClick = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CD -> WallCdPlayerStage(
                                 artwork = playbackState.artwork,
                                 spinDegreesProvider = { spinDegrees },
                                 isPlaying = playbackState.isPlaying,
+                                onPowerSwitchClick = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CASSETTE -> CassetteDeckStage(
@@ -547,6 +551,7 @@ private fun VinylTurntableStage(
     spinDegreesProvider: () -> Float,
     tonearmSwingDeg: Float,
     isModernBlue: Boolean,
+    onTonearmClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
@@ -651,7 +656,7 @@ private fun VinylTurntableStage(
             }
         }
 
-        // Top-right Tonearm Assembly (pivots smoothly when playing vs paused)
+        // Top-right Tonearm Assembly (pivots smoothly when playing vs paused; tap directly to play/pause!)
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -721,6 +726,14 @@ private fun VinylTurntableStage(
                 )
             }
         }
+
+        // Interactive tonearm hit-area: tapping the needle swings it onto/off the vinyl and toggles playback
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .fillMaxSize(0.48f)
+                .clickable { onTonearmClick() }
+        )
     }
 }
 
@@ -729,6 +742,7 @@ private fun WallCdPlayerStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     isPlaying: Boolean,
+    onPowerSwitchClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -863,6 +877,15 @@ private fun WallCdPlayerStage(
                     }
                 }
             }
+
+            // Interactive bottom pull-cord / power button hit-area (tap to toggle play/pause!)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth(0.55f)
+                    .height(44.dp)
+                    .clickable { onPowerSwitchClick() }
+            )
         }
     }
 }
@@ -1129,6 +1152,7 @@ private fun AlbumOrAtmosphericArt(
 @Composable
 private fun MusicQuickSourceSheet(
     selectedSkin: MusicPlayerSkin,
+    queueTitles: List<String> = emptyList(),
     onSelectSkin: (MusicPlayerSkin) -> Unit,
     onDismiss: () -> Unit
 ) {

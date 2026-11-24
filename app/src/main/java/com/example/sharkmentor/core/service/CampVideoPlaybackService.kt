@@ -12,9 +12,6 @@ import android.content.Intent
 import android.content.MutableContextWrapper
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -421,8 +418,6 @@ class CampVideoPlaybackService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: NotificationManager
-    private var audioManager: AudioManager? = null
-    private var audioFocusRequest: AudioFocusRequest? = null
     private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -472,7 +467,6 @@ class CampVideoPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
-        audioManager = getSystemService(AudioManager::class.java)
         createNotificationChannel()
         initMediaSession()
 
@@ -686,56 +680,8 @@ class CampVideoPlaybackService : Service() {
         }
     }
 
-    private fun requestMediaAudioFocus() {
-        val am = audioManager ?: return
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val req = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setAcceptsDelayedFocusGain(true)
-                    .setOnAudioFocusChangeListener { focusChange ->
-                        when (focusChange) {
-                            AudioManager.AUDIOFOCUS_LOSS,
-                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                                CampVideoPlaybackController.setPlaying(applicationContext, false)
-                            }
-                            AudioManager.AUDIOFOCUS_GAIN -> {
-                                if (CampVideoPlaybackController.state.value.isActive) {
-                                    CampVideoPlaybackController.setPlaying(applicationContext, true)
-                                }
-                            }
-                        }
-                    }
-                    .build()
-                    .also { audioFocusRequest = it }
-                am.requestAudioFocus(req)
-            } else {
-                @Suppress("DEPRECATION")
-                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
-            }
-        }
-    }
-
-    private fun abandonMediaAudioFocus() {
-        val am = audioManager ?: return
-        runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
-            } else {
-                @Suppress("DEPRECATION")
-                am.abandonAudioFocus(null)
-            }
-        }
-    }
-
     private fun updateWakeLock(shouldHold: Boolean) {
         if (shouldHold) {
-            requestMediaAudioFocus()
             if (wakeLock?.isHeld == true) return
             val pm = getSystemService(PowerManager::class.java) ?: return
             val wl = wakeLock ?: pm.newWakeLock(
@@ -759,7 +705,6 @@ class CampVideoPlaybackService : Service() {
     }
 
     private fun stopServiceCleanly() {
-        abandonMediaAudioFocus()
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false
@@ -790,7 +735,6 @@ class CampVideoPlaybackService : Service() {
     }
 
     override fun onDestroy() {
-        abandonMediaAudioFocus()
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false

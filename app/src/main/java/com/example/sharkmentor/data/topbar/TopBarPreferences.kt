@@ -59,6 +59,81 @@ enum class TopBarRefreshInterval(val durationMs: Long, val label: String) {
     HOUR_12(43_200_000L, "12 sa"),
     HOUR_24(86_400_000L, "24 sa");
 
+    private fun loadModuleOrder(): List<TopBarModule> {
+        val raw = prefs.getString(KEY_MODULE_ORDER, null) ?: return TopBarModule.DEFAULT_ORDER
+        val parsed = raw.split(",").mapNotNull { name ->
+            TopBarModule.entries.firstOrNull { it.name == name.trim() }
+        }.distinct()
+        val missing = TopBarModule.DEFAULT_ORDER.filter { it !in parsed }
+        return (parsed + missing).ifEmpty { TopBarModule.DEFAULT_ORDER }
+    }
+
+    private fun loadHiddenModules(): Set<TopBarModule> {
+        val raw = prefs.getString(KEY_HIDDEN_MODULES, null) ?: return emptySet()
+        return raw.split(",").mapNotNull { name ->
+            TopBarModule.entries.firstOrNull { it.name == name.trim() }
+        }.toSet()
+    }
+
+    private fun loadModuleSizes(): Map<TopBarModule, TopBarModuleSize> {
+        val raw = prefs.getString(KEY_MODULE_SIZES, null) ?: return emptyMap()
+        val out = mutableMapOf<TopBarModule, TopBarModuleSize>()
+        raw.split(",").forEach { entry ->
+            val parts = entry.split(":")
+            if (parts.size == 2) {
+                val mod = TopBarModule.entries.firstOrNull { it.name == parts[0].trim() }
+                val sz = TopBarModuleSize.entries.firstOrNull { it.name == parts[1].trim() }
+                if (mod != null && sz != null) out[mod] = sz
+            }
+        }
+        return out
+    }
+
+    fun setModuleVisible(module: TopBarModule, visible: Boolean) {
+        val next = _settings.value.hiddenModules.toMutableSet()
+        if (visible) next.remove(module) else next.add(module)
+        prefs.edit().putString(KEY_HIDDEN_MODULES, next.joinToString(",") { it.name }).apply()
+        _settings.value = _settings.value.copy(hiddenModules = next)
+    }
+
+    fun moveModule(module: TopBarModule, delta: Int) {
+        val list = _settings.value.moduleOrder.toMutableList()
+        val idx = list.indexOf(module)
+        if (idx < 0) return
+        val target = (idx + delta).coerceIn(0, list.lastIndex)
+        if (target == idx) return
+        list.removeAt(idx)
+        list.add(target, module)
+        setModuleOrder(list)
+    }
+
+    fun setModuleOrder(order: List<TopBarModule>) {
+        val normalized = (order.distinct() + TopBarModule.DEFAULT_ORDER.filter { it !in order })
+        prefs.edit().putString(KEY_MODULE_ORDER, normalized.joinToString(",") { it.name }).apply()
+        _settings.value = _settings.value.copy(moduleOrder = normalized)
+    }
+
+    fun setModuleSize(module: TopBarModule, size: TopBarModuleSize) {
+        val next = _settings.value.moduleSizes.toMutableMap()
+        next[module] = size
+        val encoded = next.entries.joinToString(",") { "${it.key.name}:${it.value.name}" }
+        prefs.edit().putString(KEY_MODULE_SIZES, encoded).apply()
+        _settings.value = _settings.value.copy(moduleSizes = next)
+    }
+
+    fun resetTopBarLayout() {
+        prefs.edit()
+            .remove(KEY_MODULE_ORDER)
+            .remove(KEY_HIDDEN_MODULES)
+            .remove(KEY_MODULE_SIZES)
+            .apply()
+        _settings.value = _settings.value.copy(
+            moduleOrder = TopBarModule.DEFAULT_ORDER,
+            hiddenModules = emptySet(),
+            moduleSizes = emptyMap()
+        )
+    }
+
     companion object {
         fun fromNameOrDefault(name: String?): TopBarRefreshInterval =
             entries.firstOrNull { it.name == name } ?: SEC_10
@@ -81,6 +156,33 @@ fun capitalizeTurkishSentence(raw: String): String {
     return trimmed.substring(0, firstLetterIdx) + upper + trimmed.substring(firstLetterIdx + 1)
 }
 
+enum class TopBarModule(val label: String) {
+    BRANDING("Logo"),
+    MUSIC("Müzik"),
+    WEATHER("Hava Durumu"),
+    AI_BAR("Yazı / AI Barı"),
+    DM("Mesajlar"),
+    COUNTDOWN("Sınav Sayacı");
+
+    companion object {
+        val DEFAULT_ORDER: List<TopBarModule> = listOf(
+            BRANDING, MUSIC, WEATHER, AI_BAR, DM, COUNTDOWN
+        )
+    }
+}
+
+enum class TopBarModuleSize(val label: String, val scale: Float) {
+    COMPACT("Küçük", 0.86f),
+    NORMAL("Normal", 1.0f),
+    LARGE("Büyük", 1.14f);
+
+    fun next(): TopBarModuleSize = when (this) {
+        COMPACT -> NORMAL
+        NORMAL -> LARGE
+        LARGE -> COMPACT
+    }
+}
+
 data class TopBarSettings(
     val textSource: TopBarTextSource = TopBarTextSource.AI_SUGGESTIONS,
     val animationType: TopBarAnimationType = TopBarAnimationType.FADE,
@@ -97,8 +199,14 @@ data class TopBarSettings(
     val hydrationReminderEnabled: Boolean = true,
     val hydrationIntervalMinutes: Int = 45,
     val postureReminderEnabled: Boolean = true,
-    val postureIntervalMinutes: Int = 50
-)
+    val postureIntervalMinutes: Int = 50,
+    val moduleOrder: List<TopBarModule> = TopBarModule.DEFAULT_ORDER,
+    val hiddenModules: Set<TopBarModule> = emptySet(),
+    val moduleSizes: Map<TopBarModule, TopBarModuleSize> = emptyMap()
+) {
+    fun isModuleVisible(module: TopBarModule): Boolean = module !in hiddenModules
+    fun sizeFor(module: TopBarModule): TopBarModuleSize = moduleSizes[module] ?: TopBarModuleSize.NORMAL
+}
 
 object FocusSessionState {
     private val _isAnyFocusRunning = MutableStateFlow(false)
@@ -171,7 +279,10 @@ class TopBarPreferences private constructor(context: Context) {
             hydrationReminderEnabled = prefs.getBoolean(KEY_HYDRATION_REMINDER, true),
             hydrationIntervalMinutes = prefs.getInt(KEY_HYDRATION_INTERVAL_MIN, 45).coerceIn(20, 120),
             postureReminderEnabled = prefs.getBoolean(KEY_POSTURE_REMINDER, true),
-            postureIntervalMinutes = prefs.getInt(KEY_POSTURE_INTERVAL_MIN, 50).coerceIn(20, 120)
+            postureIntervalMinutes = prefs.getInt(KEY_POSTURE_INTERVAL_MIN, 50).coerceIn(20, 120),
+            moduleOrder = loadModuleOrder(),
+            hiddenModules = loadHiddenModules(),
+            moduleSizes = loadModuleSizes()
         )
     }
 
@@ -520,6 +631,9 @@ class TopBarPreferences private constructor(context: Context) {
         private const val KEY_HYDRATION_INTERVAL_MIN = "hydration_interval_minutes"
         private const val KEY_POSTURE_REMINDER = "posture_reminder_enabled"
         private const val KEY_POSTURE_INTERVAL_MIN = "posture_interval_minutes"
+        private const val KEY_MODULE_ORDER = "topbar_module_order"
+        private const val KEY_HIDDEN_MODULES = "topbar_hidden_modules"
+        private const val KEY_MODULE_SIZES = "topbar_module_sizes"
 
         const val MAX_CUSTOM_TEXTS = 10
         const val MIN_AI_QUOTES = 5

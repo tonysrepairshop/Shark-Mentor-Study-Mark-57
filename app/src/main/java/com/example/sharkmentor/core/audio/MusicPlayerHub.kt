@@ -58,7 +58,8 @@ data class MusicPlaybackState(
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     val lastPositionUpdateElapsedMs: Long = 0L,
-    val playbackSpeed: Float = 1f
+    val playbackSpeed: Float = 1f,
+    val queueTitles: List<String> = emptyList()
 ) {
     fun estimateCurrentPositionMs(nowElapsedRealtimeMs: Long = SystemClock.elapsedRealtime()): Long {
         if (durationMs <= 0L) return positionMs.coerceAtLeast(0L)
@@ -450,7 +451,12 @@ object MusicPlayerHub {
                     positionMs = pos,
                     durationMs = duration,
                     lastPositionUpdateElapsedMs = lastUpdate,
-                    playbackSpeed = speed
+                    playbackSpeed = speed,
+                    queueTitles = runCatching {
+                        primaryExternalController?.queue?.mapNotNull { qItem ->
+                            qItem.description?.title?.toString()?.trim()?.takeIf { it.isNotBlank() }
+                        }?.take(10).orEmpty()
+                    }.getOrDefault(emptyList())
                 )
             }
 

@@ -783,7 +783,7 @@ fun HomeScreen(
                 modifier = Modifier
                     .width(panelWidth)
                     .fillMaxHeight()
-                    .padding(start = 10.dp, top = 48.dp, bottom = 8.dp)
+                    .padding(start = 10.dp, top = 8.dp, bottom = 8.dp)
             ) {
                 ThemedMusicPlayerPage(
                     playbackState = musicPlaybackState,
