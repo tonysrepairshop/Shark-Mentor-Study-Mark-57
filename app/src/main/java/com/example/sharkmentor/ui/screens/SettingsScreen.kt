@@ -511,7 +511,7 @@ fun SettingsScreen(
                                         }
                                         if (circadianMode == CircadianScheduleMode.LOCATION_SUNSET) {
                                             Text(
-                                                text = "Gün batımı ${solarTimes.sunsetFormatted} • Gün doğumu ${solarTimes.sunriseFormatted}",
+                                                text = "Gün batımı ${solarTimes.formatSunset()} • Gün doğumu ${solarTimes.formatSunrise()}",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -598,7 +598,7 @@ fun SettingsScreen(
                             if (blueLightMode != BlueLightFilterMode.OFF) {
                                 if (blueLightMode == BlueLightFilterMode.LOCATION_SUNSET) {
                                     Text(
-                                        text = "Aktif aralık: ${solarTimes.sunsetFormatted} – ${solarTimes.sunriseFormatted}",
+                                        text = "Aktif aralık: ${solarTimes.formatSunset()} – ${solarTimes.formatSunrise()}",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

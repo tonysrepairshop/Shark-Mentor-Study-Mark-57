@@ -25,6 +25,7 @@ import android.webkit.WebView
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.example.sharkmentor.MainActivity
+import com.example.sharkmentor.R
 import com.example.sharkmentor.core.util.AppIconManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -479,7 +480,12 @@ class CampVideoPlaybackService : Service() {
             mediaStyle.setMediaSession(token)
         }
 
-        val smallIconRes = AppIconManager.getNotificationSmallIconRes(this)
+        val activeShark = AppIconManager.getActiveIcon(this)
+        val smallIconRes = if (activeShark.notificationSmallIconRes != 0) {
+            activeShark.notificationSmallIconRes
+        } else {
+            R.drawable.ic_notification_original
+        }
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIconRes)
             .setContentTitle(st.title.ifBlank { "Ders Videosu" })
