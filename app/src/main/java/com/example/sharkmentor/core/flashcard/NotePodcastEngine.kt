@@ -57,25 +57,47 @@ fun parsePodcastSegmentsJson(rawJson: String): List<PodcastSegment> {
         val root = JsonParser.parseString(candidate)
         val arr = when {
             root.isJsonArray -> root.asJsonArray
-            root.isJsonObject && root.asJsonObject.has("segments") ->
-                root.asJsonObject.getAsJsonArray("segments")
-            root.isJsonObject && root.asJsonObject.has("chapters") ->
-                root.asJsonObject.getAsJsonArray("chapters")
+            root.isJsonObject -> {
+                val obj = root.asJsonObject
+                listOf("segments", "chapters", "dialogue", "podcast", "parts", "items")
+                    .firstOrNull { key -> obj.has(key) && obj.get(key).isJsonArray }
+                    ?.let { obj.getAsJsonArray(it) }
+                    ?: return emptyList()
+            }
             else -> return emptyList()
         }
         val list = mutableListOf<PodcastSegment>()
         for (el in arr) {
             if (!el.isJsonObject) continue
             val obj = el.asJsonObject
-            val title = (obj.get("title")?.asString ?: obj.get("chapter")?.asString ?: "Bölüm ${list.size + 1}").trim()
-            val hostA = (obj.get("hostA")?.asString ?: obj.get("speaker1")?.asString ?: obj.get("summary")?.asString ?: "").trim()
-            val hostB = (obj.get("hostB")?.asString ?: obj.get("speaker2")?.asString ?: obj.get("detail")?.asString ?: "").trim()
+            val title = (
+                obj.get("title")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("chapter")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("baslik")?.takeIf { !it.isJsonNull }?.asString
+                    ?: "Bölüm ${list.size + 1}"
+                ).trim()
+            val hostA = (
+                obj.get("hostA")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("host1")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("speaker1")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("sunucu1")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("summary")?.takeIf { !it.isJsonNull }?.asString
+                    ?: ""
+                ).trim()
+            val hostB = (
+                obj.get("hostB")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("host2")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("speaker2")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("sunucu2")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("detail")?.takeIf { !it.isJsonNull }?.asString
+                    ?: ""
+                ).trim()
             if (hostA.length < 8 && hostB.length < 8) continue
             list.add(
                 PodcastSegment(
                     title = title.ifBlank { "Bölüm ${list.size + 1}" }.take(80),
-                    hostA = sanitizeForNaturalSpeech(hostA.ifBlank { hostB }).take(700),
-                    hostB = sanitizeForNaturalSpeech(hostB).take(700)
+                    hostA = sanitizeForNaturalSpeech(hostA.ifBlank { hostB }).take(900),
+                    hostB = sanitizeForNaturalSpeech(hostB).take(900)
                 )
             )
         }
@@ -199,31 +221,47 @@ object NotePodcastEngine {
             "KAYNAK: $title\n$body"
         }.take(14_000)
 
-        val aiSegments = runCatching {
-            val systemPrompt = """
-Sen öğrencinin ders notlarını ve PDF kaynaklarını iki sunuculu, akıcı ve öğretici bir çalışma podcast'ine dönüştüren sesli eğitim editörüsün.
+        val systemPrompt = """
+Sen NotebookLM Audio Overview kalitesinde, öğrencinin ders notlarını ve PDF kaynaklarını iki sunuculu (1. Sunucu: konuyu akıcı biçimde açan ve öğrencinin aklındaki kritik soruları yönelten anlatıcı; 2. Sunucu: konuyu sezgisel benzetmelerle, temel mantığıyla ve YKS/sınav tuzaklarıyla açıklayan uzman anlatıcı) doğal bir Türkçe eğitim podcast'ine dönüştüren sesli içerik yönetmenisin.
 KESİN KURALLAR:
-1. Asla soru-cevap bilgi kartı (flashcard) okur gibi konuşma! Doğrudan notların ve PDF'lerin bütünlüklü ÖZETİNİ sohbet/podcast akışında anlat.
-2. "hostA" konunun çerçevesini açan ve ana fikri özetleyen anlatıcı, "hostB" ise kritik püf noktalarını, formülün mantığını ve sınavda dikkat edilecek detayları tamamlayan ikinci anlatıcı olsun.
-3. Sembol veya LaTeX kodu kullanma; tüm matematiksel ifadeleri doğal Türkçe okunuşuyla yaz (örnek: "x kare artı iki x"). Emoji kullanma.
-4. İçeriğin uzunluğuna göre 4 ile 6 bölüm üret.
+1. Asla bilgi kartı veya madde listesi okur gibi mekanik konuşma; gerçek iki insanın stüdyoda sohbet ettiği sıcak, akıcı ve sürükleyici bir anlatım kur.
+2. Her bölüm bir önceki bölümle bağlantılı ilerlesin: ilk bölüm konuya ilgi çekici bir giriş yapsın, orta bölümler kritik kavramları, neden-sonuç ilişkilerini ve sınavda en çok karıştırılan noktaları derinleştirsin, son bölüm ise akılda kalıcı kısa bir genel toparlama yapsın.
+3. Sembol, markdown veya LaTeX kodu kullanma; tüm matematiksel/bilimsel ifadeleri doğal Türkçe okunuşuyla yaz (örnek: "x kare artı iki x", "delta büyük sıfır"). Emoji kullanma.
+4. İçeriğin zenginliğine göre 5 ile 7 bölüm üret. Her konuşma 2 ile 4 akıcı cümle olsun.
 5. Yalnızca geçerli bir JSON dizisi döndür:
-[{"title":"Bölüm Başlığı","hostA":"Birinci anlatıcının doğal, akıcı konuşma metni","hostB":"İkinci anlatıcının tamamlayıcı ve özetleyici konuşma metni"}]
+[{"title":"Bölüm Başlığı","hostA":"Birinci sunucunun doğal, merak uyandıran anlatımı","hostB":"İkinci sunucunun net, öğretici ve sınav odaklı açıklaması"}]
 """.trimIndent()
 
+        var aiSegments = runCatching {
             val rawResp = MultiProviderAiClient.executeUnifiedTextPrompt(
                 context = appCtx,
                 systemPrompt = systemPrompt,
-                userPrompt = "Aşağıdaki ders notu ve PDF içeriklerinden akıcı bir podcast özeti hazırla:\n\n$combinedCorpus",
-                temperature = 0.35f,
-                maxTokens = 2400,
+                userPrompt = "Aşağıdaki ders notu ve PDF içeriklerinden iki sunuculu, akıcı bir çalışma podcast'i hazırla:\n\n$combinedCorpus",
+                temperature = 0.45f,
+                maxTokens = 3000,
                 responseJson = true,
-                timeoutMs = 35_000L
+                timeoutMs = 42_000L
             )
             parsePodcastSegmentsJson(rawResp)
         }.getOrDefault(emptyList())
 
-        val finalSegments = if (aiSegments.isNotEmpty()) {
+        if (aiSegments.isEmpty()) {
+            aiSegments = runCatching {
+                val retryResp = MultiProviderAiClient.executeUnifiedTextPrompt(
+                    context = appCtx,
+                    systemPrompt = "Sadece geçerli bir JSON dizisi döndür: [{\"title\":\"Başlık\",\"hostA\":\"1. sunucu konuşması\",\"hostB\":\"2. sunucu konuşması\"}]. Emoji ve sembol kullanma.",
+                    userPrompt = "Aşağıdaki ders içeriğini iki sunuculu 5 bölümlük podcast sohbeti olarak özetle:\n\n${combinedCorpus.take(7500)}",
+                    temperature = 0.4f,
+                    maxTokens = 2400,
+                    responseJson = false,
+                    timeoutMs = 35_000L
+                )
+                parsePodcastSegmentsJson(retryResp)
+            }.getOrDefault(emptyList())
+        }
+
+        val usedAi = aiSegments.isNotEmpty()
+        val finalSegments = if (usedAi) {
             aiSegments
         } else {
             buildOfflineSummaryFallbackSegments(sourceBlocks)
@@ -236,11 +274,12 @@ KESİN KURALLAR:
             } else {
                 "Seçili Notlar (${sourceBlocks.size} Kaynak) • Podcast Özeti"
             },
-            sourceSummaryLabel = sourceTitlesLabel,
+            sourceSummaryLabel = if (usedAi) sourceTitlesLabel else "$sourceTitlesLabel • Çevrimdışı Özet",
             segments = finalSegments
         )
 
-        if (finalSegments.isNotEmpty()) {
+        // Only cache real AI-generated podcasts so transient network failures auto-retry next time
+        if (usedAi && finalSegments.isNotEmpty()) {
             saveCachedEpisode(appCtx, episode)
         }
         episode

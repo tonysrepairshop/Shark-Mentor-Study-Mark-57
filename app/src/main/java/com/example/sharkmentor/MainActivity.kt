@@ -220,6 +220,11 @@ class MainActivity : ComponentActivity() {
     private fun handleIncomingIntent(intent: Intent?) {
         if (intent == null) return
 
+        val restoreCampVideo = intent.getBooleanExtra("EXTRA_RESTORE_CAMP_VIDEO", false)
+        if (restoreCampVideo) {
+            intent.removeExtra("EXTRA_RESTORE_CAMP_VIDEO")
+            com.example.sharkmentor.core.service.CampVideoPlaybackController.requestRestoreStudio()
+        }
         val requestedRoute = intent.getStringExtra("EXTRA_TARGET_ROUTE")?.trim()?.takeIf { it.isNotEmpty() }
         val shouldStartFocus = intent.getBooleanExtra("EXTRA_START_FOCUS", false)
         val openWeeklyCheckIn = intent.getBooleanExtra(

@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -189,6 +190,7 @@ fun SettingsScreen(
     val blueLightStartMin by themePrefs.blueLightStartMinute.collectAsStateWithLifecycle()
     val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
     val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
+    val autoHideBottomBar by themePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
 
     LaunchedEffect(context) {
         MusicPlayerHub.ensureInitialized(context)
@@ -444,6 +446,45 @@ fun SettingsScreen(
                             Switch(
                                 checked = keepScreenOnStopwatch,
                                 onCheckedChange = { themePrefs.setKeepScreenOnInStopwatch(it) }
+                            )
+                        }
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { themePrefs.setAutoHideBottomBar(!autoHideBottomBar) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.VisibilityOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Alt Barı Otomatik Gizle",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Ekrana dokunulmadığında alt çubuğu gizler, dokununca geri getirir",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = autoHideBottomBar,
+                                onCheckedChange = { themePrefs.setAutoHideBottomBar(it) }
                             )
                         }
                     }
@@ -736,7 +777,7 @@ fun SettingsScreen(
                                             color = MaterialTheme.colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "Müzik açıkken ana ekranın solunda açılır",
+                                            text = "Üst barın sol altında nota butonu gösterir; ana ekranda sol panel, diğer sekmelerde yüzer mini pencere olarak açılır",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

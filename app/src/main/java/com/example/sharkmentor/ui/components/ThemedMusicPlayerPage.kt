@@ -8,6 +8,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +35,8 @@ import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -74,8 +78,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.sharkmentor.core.audio.MusicPlaybackState
@@ -89,6 +95,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private val CassetteWindowShape = GenericShape { size, _ ->
@@ -108,8 +115,10 @@ fun ThemedMusicPlayerPage(
     playbackState: MusicPlaybackState,
     selectedSkin: MusicPlayerSkin,
     onSelectSkin: (MusicPlayerSkin) -> Unit,
-    onSlideToDesk: () -> Unit,
-    modifier: Modifier = Modifier
+    onSlideToDesk: () -> Unit = {},
+    modifier: Modifier = Modifier,
+    compactMode: Boolean = false,
+    showSlideToDeskHint: Boolean = false
 ) {
     val context = LocalContext.current
     var showSoundQueueSheet by remember { mutableStateOf(false) }
@@ -201,280 +210,318 @@ fun ThemedMusicPlayerPage(
         )
     }
 
-    Column(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
+            .padding(
+                horizontal = if (compactMode) 0.dp else 6.dp,
+                vertical = if (compactMode) 0.dp else 4.dp
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        // Main Skinned Deck Card
-        Surface(
-            shape = RoundedCornerShape(28.dp),
-            color = Color.Transparent,
-            shadowElevation = 8.dp,
-            modifier = Modifier
-                .widthIn(max = 420.dp)
-                .fillMaxWidth()
-                .weight(1f, fill = true)
+        val tightHeight = compactMode || maxHeight < 430.dp
+        val ultraTight = compactMode || maxHeight < 340.dp
+        val cardCorner = if (compactMode) 22.dp else 26.dp
+        val hPad = if (ultraTight) 12.dp else if (tightHeight) 16.dp else 20.dp
+        val vPad = if (ultraTight) 10.dp else if (tightHeight) 12.dp else 18.dp
+        val titleSize = if (ultraTight) 14.sp else if (tightHeight) 17.sp else 20.sp
+        val artistSize = if (ultraTight) 11.sp else 12.5.sp
+        val playCircleSize = if (ultraTight) 40.dp else if (tightHeight) 46.dp else 54.dp
+        val playIconSize = if (ultraTight) 21.dp else if (tightHeight) 24.dp else 27.dp
+        val skipIconSize = if (ultraTight) 21.dp else if (tightHeight) 24.dp else 27.dp
+        val sideIconSize = if (ultraTight) 17.dp else 20.dp
+        val ctrlBtnSize = if (ultraTight) 34.dp else if (tightHeight) 38.dp else 44.dp
+
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Column(
+            // Main Skinned Deck Card — strictly height-aware so it NEVER clips or squishes on tablet landscape
+            Surface(
+                shape = RoundedCornerShape(cardCorner),
+                color = Color.Transparent,
+                shadowElevation = if (compactMode) 0.dp else 8.dp,
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(cardBrush)
-                    .padding(horizontal = 22.dp, vertical = 20.dp),
-                verticalArrangement = Arrangement.SpaceBetween
+                    .widthIn(max = 380.dp)
+                    .fillMaxWidth()
+                    .weight(1f, fill = true)
             ) {
-                // Top Visual Stage (Default Art / Modern Vinyl / Classic Vinyl / CD / Cassette)
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when (selectedSkin) {
-                        MusicPlayerSkin.DEFAULT -> DefaultAlbumStage(
-                            artwork = playbackState.artwork,
-                            skin = selectedSkin
-                        )
-                        MusicPlayerSkin.MODERN_VINYL -> VinylTurntableStage(
-                            artwork = playbackState.artwork,
-                            spinDegreesProvider = { spinDegrees },
-                            tonearmSwingDeg = tonearmSwingDeg,
-                            isModernBlue = true
-                        )
-                        MusicPlayerSkin.CLASSIC_VINYL -> VinylTurntableStage(
-                            artwork = playbackState.artwork,
-                            spinDegreesProvider = { spinDegrees },
-                            tonearmSwingDeg = tonearmSwingDeg,
-                            isModernBlue = false
-                        )
-                        MusicPlayerSkin.CD -> WallCdPlayerStage(
-                            artwork = playbackState.artwork,
-                            spinDegreesProvider = { spinDegrees },
-                            isPlaying = playbackState.isPlaying
-                        )
-                        MusicPlayerSkin.CASSETTE -> CassetteDeckStage(
-                            artwork = playbackState.artwork,
-                            spinDegreesProvider = { spinDegrees }
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // Track Metadata + Progress + Transport Controls (matches all 5 reference layouts)
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(cardBrush)
+                        .padding(horizontal = hPad, vertical = vPad),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = playbackState.title.ifBlank { "Müzik" },
-                                fontSize = 21.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = playbackState.artist.ifBlank { playbackState.sourceLabel },
-                                fontSize = 13.sp,
-                                color = Color.White.copy(alpha = 0.68f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
-                                    MusicPlayerHub.openActiveSourceApp(context)
-                                } else {
-                                    showSoundQueueSheet = true
-                                }
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
-                                    Icons.AutoMirrored.Filled.OpenInNew
-                                } else {
-                                    Icons.Outlined.StarOutline
-                                },
-                                contentDescription = "Kaynağı Aç",
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(21.dp)
-                            )
-                        }
-                    }
-
-                    Text(
-                        text = playbackState.subtitleLine.ifBlank { playbackState.sourceLabel },
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = Color.White.copy(alpha = 0.82f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    // Minimalist Progress Bar + Timestamps
-                    val progressFraction = if (playbackState.durationMs > 0L) {
-                        (livePositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
-                    } else {
-                        if (playbackState.isPlaying) 1f else 0f
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        BoxWithConstraints(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(18.dp)
-                                .pointerInput(playbackState.durationMs) {
-                                    if (playbackState.durationMs > 0L) {
-                                        detectTapGestures { offset ->
-                                            val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
-                                            MusicPlayerHub.seekToFraction(frac)
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Canvas(modifier = Modifier.fillMaxSize()) {
-                                val centerY = size.height / 2f
-                                drawLine(
-                                    color = Color.White.copy(alpha = 0.28f),
-                                    start = Offset(0f, centerY),
-                                    end = Offset(size.width, centerY),
-                                    strokeWidth = 2.6.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-                                val activeEndX = (size.width * progressFraction).coerceIn(0f, size.width)
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(0f, centerY),
-                                    end = Offset(activeEndX, centerY),
-                                    strokeWidth = 2.8.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-                                drawCircle(
-                                    color = Color.White,
-                                    radius = 5.dp.toPx(),
-                                    center = Offset(activeEndX.coerceIn(5.dp.toPx(), (size.width - 5.dp.toPx()).coerceAtLeast(5.dp.toPx())), centerY)
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(livePositionMs) else "CANLI",
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.58f)
-                            )
-                            Text(
-                                text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(playbackState.durationMs) else playbackState.sourceLabel,
-                                fontSize = 11.sp,
-                                color = Color.White.copy(alpha = 0.58f)
-                            )
-                        }
-                    }
-
-                    // Bottom Transport Row (Skin Switch | Prev | Translucent Play/Pause Circle | Next | Queue)
-                    Row(
+                    // Top Visual Stage dynamically bounded by BOTH width AND height (zero clipping!)
+                    BoxWithConstraints(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
                     ) {
-                        IconButton(
-                            onClick = {
-                                val skins = MusicPlayerSkin.entries
-                                val nextSkin = skins[(skins.indexOf(selectedSkin) + 1) % skins.size]
-                                onSelectSkin(nextSkin)
+                        val stageSide = (minOf(maxWidth, maxHeight) * 0.94f).coerceAtLeast(64.dp)
+                        val stageModifier = Modifier.size(stageSide)
+                        when (selectedSkin) {
+                            MusicPlayerSkin.DEFAULT -> DefaultAlbumStage(
+                                artwork = playbackState.artwork,
+                                skin = selectedSkin,
+                                modifier = stageModifier
+                            )
+                            MusicPlayerSkin.MODERN_VINYL -> VinylTurntableStage(
+                                artwork = playbackState.artwork,
+                                spinDegreesProvider = { spinDegrees },
+                                tonearmSwingDeg = tonearmSwingDeg,
+                                isModernBlue = true,
+                                modifier = stageModifier
+                            )
+                            MusicPlayerSkin.CLASSIC_VINYL -> VinylTurntableStage(
+                                artwork = playbackState.artwork,
+                                spinDegreesProvider = { spinDegrees },
+                                tonearmSwingDeg = tonearmSwingDeg,
+                                isModernBlue = false,
+                                modifier = stageModifier
+                            )
+                            MusicPlayerSkin.CD -> WallCdPlayerStage(
+                                artwork = playbackState.artwork,
+                                spinDegreesProvider = { spinDegrees },
+                                isPlaying = playbackState.isPlaying,
+                                modifier = stageModifier
+                            )
+                            MusicPlayerSkin.CASSETTE -> CassetteDeckStage(
+                                artwork = playbackState.artwork,
+                                spinDegreesProvider = { spinDegrees },
+                                modifier = stageModifier
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(if (ultraTight) 6.dp else if (tightHeight) 8.dp else 12.dp))
+
+                    // Track Metadata + Progress + Transport Controls
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(if (ultraTight) 4.dp else if (tightHeight) 6.dp else 9.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = playbackState.title.ifBlank { "Müzik" },
+                                    fontSize = titleSize,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = playbackState.artist.ifBlank { playbackState.sourceLabel.ifBlank { "Kaynak Seç" } },
+                                    fontSize = artistSize,
+                                    color = Color.White.copy(alpha = 0.72f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Album,
-                                contentDescription = "Plak Teması Değiştir",
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-
-                        IconButton(onClick = { MusicPlayerHub.skipPrevious(context) }) {
-                            Icon(
-                                imageVector = Icons.Default.SkipPrevious,
-                                contentDescription = "Önceki",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-
-                        Surface(
-                            onClick = { MusicPlayerHub.togglePlayPause(context) },
-                            shape = CircleShape,
-                            color = Color.White.copy(alpha = 0.22f),
-                            modifier = Modifier.size(58.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
+                            IconButton(
+                                onClick = {
+                                    if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
+                                        MusicPlayerHub.openActiveSourceApp(context)
+                                    } else {
+                                        showSoundQueueSheet = true
+                                    }
+                                },
+                                modifier = Modifier.size(if (ultraTight) 28.dp else 34.dp)
+                            ) {
                                 Icon(
-                                    imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (playbackState.isPlaying) "Duraklat" else "Oynat",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(28.dp)
+                                    imageVector = if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
+                                        Icons.AutoMirrored.Filled.OpenInNew
+                                    } else {
+                                        Icons.Outlined.StarOutline
+                                    },
+                                    contentDescription = "Kaynağı Aç",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(if (ultraTight) 16.dp else 19.dp)
                                 )
                             }
                         }
 
-                        IconButton(onClick = { MusicPlayerHub.skipNext(context) }) {
-                            Icon(
-                                imageVector = Icons.Default.SkipNext,
-                                contentDescription = "Sonraki",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
+                        if (!ultraTight && playbackState.subtitleLine.isNotBlank()) {
+                            Text(
+                                text = playbackState.subtitleLine,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.White.copy(alpha = 0.78f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
-                        IconButton(onClick = { showSoundQueueSheet = true }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                                contentDescription = "Ses Kaynağı & Tema",
-                                tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(23.dp)
-                            )
+                        // Minimalist Progress Bar + Timestamps
+                        val progressFraction = if (playbackState.durationMs > 0L) {
+                            (livePositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
+                        } else {
+                            if (playbackState.isPlaying) 1f else 0f
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            BoxWithConstraints(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(if (ultraTight) 14.dp else 16.dp)
+                                    .pointerInput(playbackState.durationMs) {
+                                        if (playbackState.durationMs > 0L) {
+                                            detectTapGestures { offset ->
+                                                val frac = (offset.x / size.width.toFloat()).coerceIn(0f, 1f)
+                                                MusicPlayerHub.seekToFraction(frac)
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    val centerY = size.height / 2f
+                                    drawLine(
+                                        color = Color.White.copy(alpha = 0.28f),
+                                        start = Offset(0f, centerY),
+                                        end = Offset(size.width, centerY),
+                                        strokeWidth = 2.4.dp.toPx(),
+                                        cap = StrokeCap.Round
+                                    )
+                                    val activeEndX = (size.width * progressFraction).coerceIn(0f, size.width)
+                                    drawLine(
+                                        color = Color.White,
+                                        start = Offset(0f, centerY),
+                                        end = Offset(activeEndX, centerY),
+                                        strokeWidth = 2.6.dp.toPx(),
+                                        cap = StrokeCap.Round
+                                    )
+                                    drawCircle(
+                                        color = Color.White,
+                                        radius = 4.2.dp.toPx(),
+                                        center = Offset(
+                                            activeEndX.coerceIn(4.2.dp.toPx(), (size.width - 4.2.dp.toPx()).coerceAtLeast(4.2.dp.toPx())),
+                                            centerY
+                                        )
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(livePositionMs) else "CANLI",
+                                    fontSize = 10.sp,
+                                    color = Color.White.copy(alpha = 0.62f)
+                                )
+                                Text(
+                                    text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(playbackState.durationMs) else playbackState.sourceLabel,
+                                    fontSize = 10.sp,
+                                    color = Color.White.copy(alpha = 0.62f)
+                                )
+                            }
+                        }
+
+                        // Bottom Transport Row (Skin Switch | Prev | Play/Pause Circle | Next | Queue)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    val skins = MusicPlayerSkin.entries
+                                    val nextSkin = skins[(skins.indexOf(selectedSkin) + 1) % skins.size]
+                                    onSelectSkin(nextSkin)
+                                },
+                                modifier = Modifier.size(ctrlBtnSize)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Album,
+                                    contentDescription = "Plak Teması Değiştir",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(sideIconSize)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { MusicPlayerHub.skipPrevious(context) },
+                                modifier = Modifier.size(ctrlBtnSize)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SkipPrevious,
+                                    contentDescription = "Önceki",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(skipIconSize)
+                                )
+                            }
+
+                            Surface(
+                                onClick = { MusicPlayerHub.togglePlayPause(context) },
+                                shape = CircleShape,
+                                color = Color.White.copy(alpha = 0.22f),
+                                modifier = Modifier.size(playCircleSize)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        contentDescription = if (playbackState.isPlaying) "Duraklat" else "Oynat",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(playIconSize)
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = { MusicPlayerHub.skipNext(context) },
+                                modifier = Modifier.size(ctrlBtnSize)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SkipNext,
+                                    contentDescription = "Sonraki",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(skipIconSize)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { showSoundQueueSheet = true },
+                                modifier = Modifier.size(ctrlBtnSize)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.QueueMusic,
+                                    contentDescription = "Ses Kaynağı & Tema",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(sideIconSize)
+                                )
+                            }
                         }
                     }
                 }
             }
-        }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Subtle slide-right hint pill to jump cleanly to Timers / Coaching Path
-        Surface(
-            onClick = onSlideToDesk,
-            shape = RoundedCornerShape(50),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-        ) {
-            Text(
-                text = "Çalışma Masasına Kaydır →",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-            )
+            if (showSlideToDeskHint) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    onClick = onSlideToDesk,
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = "Çalışma Masasına Kaydır →",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
+                    )
+                }
+            }
         }
     }
 }
@@ -482,12 +529,11 @@ fun ThemedMusicPlayerPage(
 @Composable
 private fun DefaultAlbumStage(
     artwork: Bitmap?,
-    skin: MusicPlayerSkin
+    skin: MusicPlayerSkin,
+    modifier: Modifier = Modifier
 ) {
     Box(
-        modifier = Modifier
-            .fillMaxWidth(0.92f)
-            .aspectRatio(1f)
+        modifier = modifier
             .clip(RoundedCornerShape(18.dp)),
         contentAlignment = Alignment.Center
     ) {
@@ -500,12 +546,11 @@ private fun VinylTurntableStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     tonearmSwingDeg: Float,
-    isModernBlue: Boolean
+    isModernBlue: Boolean,
+    modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth(0.95f)
-            .aspectRatio(1f),
+        modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
         // Spinning Vinyl Platter + Center Art
@@ -683,16 +728,15 @@ private fun VinylTurntableStage(
 private fun WallCdPlayerStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
-    isPlaying: Boolean
+    isPlaying: Boolean,
+    modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(34.dp),
+        shape = RoundedCornerShape(28.dp),
         color = Color(0xFF2B293B),
         border = BorderStroke(2.dp, Color(0xFF3A374E)),
         shadowElevation = 6.dp,
-        modifier = Modifier
-            .fillMaxWidth(0.92f)
-            .aspectRatio(1f)
+        modifier = modifier
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             // Speaker Grilles + Pull Switch + Volume Knob
@@ -826,23 +870,27 @@ private fun WallCdPlayerStage(
 @Composable
 private fun CassetteDeckStage(
     artwork: Bitmap?,
-    spinDegreesProvider: () -> Float
+    spinDegreesProvider: () -> Float,
+    modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(30.dp),
+        shape = RoundedCornerShape(26.dp),
         color = Color(0xFF47474B),
         border = BorderStroke(2.dp, Color(0xFF5A5A5F)),
         shadowElevation = 6.dp,
-        modifier = Modifier
-            .fillMaxWidth(0.92f)
-            .aspectRatio(1f)
+        modifier = modifier
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val topPad = (maxHeight * 0.08f).coerceIn(8.dp, 24.dp)
+            val sidePad = (maxWidth * 0.075f).coerceIn(8.dp, 22.dp)
+            val reelSize = (minOf(maxWidth, maxHeight) * 0.21f).coerceIn(22.dp, 54.dp)
+            val reelInset = (maxWidth * 0.08f).coerceIn(10.dp, 24.dp)
+
             // Central Chamfered Cassette Window + Artwork + Dual Spinning Toothed Reels
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
-                    .padding(top = 24.dp, start = 22.dp, end = 22.dp)
+                    .padding(top = topPad, start = sidePad, end = sidePad)
                     .fillMaxWidth()
                     .fillMaxSize(0.66f)
                     .clip(CassetteWindowShape)
@@ -858,12 +906,12 @@ private fun CassetteDeckStage(
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 24.dp),
+                        .padding(horizontal = reelInset),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(54.dp))
-                    CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(54.dp))
+                    CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(reelSize))
+                    CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(reelSize))
                 }
             }
 
@@ -1232,6 +1280,115 @@ private fun MusicQuickSourceSheet(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+
+/**
+ * Compact, draggable floating mini music window shown on non-Home tabs (Notes, PDFs, AI, Error Bank, etc.).
+ * Preserves the exact active player theme (Default / Modern Vinyl / Classic Vinyl / CD / Cassette)
+ * and minimizes cleanly without stopping playback.
+ */
+@Composable
+fun DraggableMiniMusicPlayerWindow(
+    playbackState: MusicPlaybackState,
+    selectedSkin: MusicPlayerSkin,
+    onSelectSkin: (MusicPlayerSkin) -> Unit,
+    onMinimize: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val winWidthDp = (maxWidth * 0.56f).coerceIn(224.dp, 256.dp)
+        val winHeightDp = (maxHeight * 0.56f).coerceIn(252.dp, 296.dp)
+        val containerW = with(density) { maxWidth.toPx() }
+        val containerH = with(density) { maxHeight.toPx() }
+        val winW = with(density) { winWidthDp.toPx() }
+        val winH = with(density) { winHeightDp.toPx() }
+        val edgePad = with(density) { 10.dp.toPx() }
+        val initialTop = with(density) { 52.dp.toPx() }
+
+        var offsetX by remember { mutableFloatStateOf(edgePad) }
+        var offsetY by remember { mutableFloatStateOf(initialTop) }
+
+        LaunchedEffect(containerW, containerH) {
+            val maxX = (containerW - winW - edgePad).coerceAtLeast(edgePad)
+            val maxY = (containerH - winH - edgePad).coerceAtLeast(edgePad)
+            offsetX = offsetX.coerceIn(edgePad, maxX)
+            offsetY = offsetY.coerceIn(edgePad, maxY)
+        }
+
+        Surface(
+            shape = RoundedCornerShape(22.dp),
+            color = Color(0xFF191B22),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)),
+            shadowElevation = 12.dp,
+            modifier = Modifier
+                .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                .size(width = winWidthDp, height = winHeightDp)
+        ) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Draggable Top Handle Bar
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(28.dp)
+                        .background(Color.Black.copy(alpha = 0.38f))
+                        .pointerInput(containerW, containerH, winW, winH) {
+                            detectDragGestures { change, dragAmount ->
+                                change.consume()
+                                val maxX = (containerW - winW - edgePad).coerceAtLeast(edgePad)
+                                val maxY = (containerH - winH - edgePad).coerceAtLeast(edgePad)
+                                offsetX = (offsetX + dragAmount.x).coerceIn(edgePad, maxX)
+                                offsetY = (offsetY + dragAmount.y).coerceIn(edgePad, maxY)
+                            }
+                        }
+                        .padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DragHandle,
+                            contentDescription = "Taşı",
+                            tint = Color.White.copy(alpha = 0.65f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = selectedSkin.displayTitle,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White.copy(alpha = 0.72f)
+                        )
+                    }
+                    IconButton(
+                        onClick = onMinimize,
+                        modifier = Modifier.size(22.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Küçült",
+                            tint = Color.White.copy(alpha = 0.8f),
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+
+                ThemedMusicPlayerPage(
+                    playbackState = playbackState,
+                    selectedSkin = selectedSkin,
+                    onSelectSkin = onSelectSkin,
+                    compactMode = true,
+                    showSlideToDeskHint = false,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
             }
         }
     }

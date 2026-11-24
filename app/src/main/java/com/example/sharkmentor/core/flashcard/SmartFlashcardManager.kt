@@ -165,19 +165,44 @@ fun parseAiFlashcardsJson(
         val root = JsonParser.parseString(arraySlice)
         val arr = when {
             root.isJsonArray -> root.asJsonArray
-            root.isJsonObject && root.asJsonObject.has("cards") ->
-                root.asJsonObject.getAsJsonArray("cards")
+            root.isJsonObject -> {
+                val obj = root.asJsonObject
+                listOf("cards", "flashcards", "questions", "items", "deck", "data")
+                    .firstOrNull { key -> obj.has(key) && obj.get(key).isJsonArray }
+                    ?.let { obj.getAsJsonArray(it) }
+                    ?: return emptyList()
+            }
             else -> return emptyList()
         }
         val out = mutableListOf<SmartFlashcard>()
         for (el in arr) {
             if (!el.isJsonObject) continue
             val obj = el.asJsonObject
-            val front = (obj.get("front")?.asString ?: obj.get("question")?.asString ?: "").trim()
-            val back = (obj.get("back")?.asString ?: obj.get("answer")?.asString ?: "").trim()
-            if (front.length < 3 || back.length < 2) continue
-            val topic = (obj.get("topic")?.asString ?: sourceTitle).trim().ifBlank { sourceTitle }
-            val subject = (obj.get("subject")?.asString ?: defaultSubject).trim()
+            val front = (
+                obj.get("front")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("question")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("soru")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("q")?.takeIf { !it.isJsonNull }?.asString
+                    ?: ""
+                ).trim()
+            val back = (
+                obj.get("back")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("answer")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("cevap")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("a")?.takeIf { !it.isJsonNull }?.asString
+                    ?: ""
+                ).trim()
+            if (!isQualityFlashcard(front, back)) continue
+            val topic = (
+                obj.get("topic")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("konu")?.takeIf { !it.isJsonNull }?.asString
+                    ?: sourceTitle
+                ).trim().ifBlank { sourceTitle }
+            val subject = (
+                obj.get("subject")?.takeIf { !it.isJsonNull }?.asString
+                    ?: obj.get("ders")?.takeIf { !it.isJsonNull }?.asString
+                    ?: defaultSubject
+                ).trim()
             val stableId = stableCardHash("${sourceType.name}|$sourceId|${front.lowercase(Locale.ROOT)}")
             out.add(
                 SmartFlashcard(
@@ -194,6 +219,17 @@ fun parseAiFlashcardsJson(
         }
         out.distinctBy { it.id }
     }.getOrDefault(emptyList())
+}
+
+internal fun isQualityFlashcard(front: String, back: String): Boolean {
+    val f = front.trim()
+    val b = back.trim()
+    if (f.length < 8 || b.length < 3) return false
+    if (f.equals(b, ignoreCase = true)) return false
+    val lowerF = f.lowercase(Locale("tr", "TR"))
+    if (lowerF.contains("önemli nokta ") || lowerF.endsWith("önemli nokta")) return false
+    if (lowerF.matches(Regex("""^(madde|not|bölüm|kısım|başlık)\s*\d+[:.\-]?$"""))) return false
+    return true
 }
 
 private fun stableCardHash(seed: String): String {
@@ -320,7 +356,9 @@ object SmartFlashcardManager {
         val chosenNotes = availableNotes.filter { it.id in selection.noteIds }
         for (note in chosenNotes) {
             val cachedForNote = _allStoredCards.value.filter {
-                it.sourceType == FlashcardSourceType.NOTE && it.sourceId == note.id
+                it.sourceType == FlashcardSourceType.NOTE &&
+                    it.sourceId == note.id &&
+                    isQualityFlashcard(it.front, it.back)
             }
             if (cachedForNote.isNotEmpty() && !forceRegenerate) {
                 generatedDeck.addAll(cachedForNote)
@@ -354,7 +392,9 @@ object SmartFlashcardManager {
         val chosenPdfs = availablePdfs.filter { it.id in selection.pdfIds }
         for (pdf in chosenPdfs) {
             val cachedForPdf = _allStoredCards.value.filter {
-                it.sourceType == FlashcardSourceType.PDF && it.sourceId == pdf.id
+                it.sourceType == FlashcardSourceType.PDF &&
+                    it.sourceId == pdf.id &&
+                    isQualityFlashcard(it.front, it.back)
             }
             if (cachedForPdf.isNotEmpty() && !forceRegenerate) {
                 generatedDeck.addAll(cachedForPdf)
@@ -462,69 +502,151 @@ object SmartFlashcardManager {
         sourceTitle: String,
         rawContent: String
     ): List<SmartFlashcard> {
-        if (rawContent.length >= 35) {
+        if (rawContent.length >= 30) {
             val systemPrompt = """
-                Sen sınav hazırlık öğrencileri için NotebookLM ve Anki kalitesinde minimalist bilgi kartı üreten bir uzmansın.
-                Verilen ders notu veya PDF metninden en kritik 6 ila 8 adet soru-cevap kartı üret.
-                Kurallar:
-                - Yalnızca geçerli bir JSON dizisi döndür: [{"subject":"Ders","topic":"Alt Konu","front":"Net ve kısa soru","back":"Özlü ve net cevap"}]
-                - Gereksiz giriş cümlesi, emoji veya açıklama yazma.
-                - Kartlar sınavda çıkabilecek kavram, formül, kural veya sık yapılan hatalara odaklansın.
+                Sen YKS ve üniversite sınavına hazırlanan öğrenciler için Anki ve NotebookLM kalitesinde aktif hatırlama (active recall) bilgi kartları üreten uzman bir eğitmensin.
+                Verilen ders notu veya PDF içeriğinden sınavda gerçekten sorulabilecek en kritik 7 ila 10 adet soru-cevap kartı üret.
+
+                KESİN KURALLAR:
+                1. Her kartın "front" alanı MUTLAKA net, tek bir bilgiyi yoklayan gerçek bir soru cümlesi olsun ve soru işareti (?) ile bitsin (örnek: "Oksijenli solunumda Krebs döngüsü ökaryot hücrenin hangi bölümünde gerçekleşir ve net kaç ATP üretilir?").
+                2. ASLA başlık, madde adı veya soru olmayan genel ifadeler yazma ("Önemli Nokta 1", "Konu özeti", sadece kavram adı vb. YASAK).
+                3. Sorular doğrudan verilen kaynak metindeki tanım, formül, neden-sonuç ilişkisi, karşılaştırma, istisna veya sık yapılan sınav tuzaklarını ölçsün.
+                4. "back" alanı kısa, net, doğrudan soruyu yanıtlayan ve ezberlenebilir bir cevap olsun (1-3 cümle).
+                5. Yalnızca geçerli bir JSON dizisi döndür, başına/sonuna açıklama veya markdown ekleme:
+                [{"subject":"Ders Adı","topic":"Alt Konu","front":"Net ve ölçülebilir sınav sorusu?","back":"Özlü ve doğru cevap."}]
             """.trimIndent()
 
-            val aiJson = runCatching {
+            val primaryJson = runCatching {
                 MultiProviderAiClient.executeUnifiedTextPrompt(
                     context = context,
                     systemPrompt = systemPrompt,
-                    userPrompt = "Kaynak Başlığı: $sourceTitle\n\nİçerik:\n$rawContent",
-                    temperature = 0.2f,
-                    maxTokens = 2048,
+                    userPrompt = "Kaynak Başlığı: $sourceTitle\n\nDers İçeriği:\n$rawContent",
+                    temperature = 0.25f,
+                    maxTokens = 2400,
                     responseJson = true,
-                    timeoutMs = 35_000L
+                    timeoutMs = 40_000L
                 )
             }.getOrDefault("")
 
-            val parsed = parseAiFlashcardsJson(
-                rawJson = aiJson,
+            val parsedPrimary = parseAiFlashcardsJson(
+                rawJson = primaryJson,
                 sourceType = sourceType,
                 sourceId = sourceId,
                 sourceTitle = sourceTitle
             )
-            if (parsed.isNotEmpty()) return parsed
+            if (parsedPrimary.size >= 2) return parsedPrimary
+
+            // Second attempt without strict responseJson flag for providers that wrap JSON in text
+            val retryJson = runCatching {
+                MultiProviderAiClient.executeUnifiedTextPrompt(
+                    context = context,
+                    systemPrompt = "Sadece JSON dizisi döndür: [{\"subject\":\"Ders\",\"topic\":\"Konu\",\"front\":\"Soru?\",\"back\":\"Cevap\"}]. Her front gerçek bir soru olsun ve ? ile bitsin.",
+                    userPrompt = "Kaynak: $sourceTitle\n\nBu metinden 6 adet kaliteli soru-cevap bilgi kartı çıkar:\n${rawContent.take(5500)}",
+                    temperature = 0.2f,
+                    maxTokens = 2000,
+                    responseJson = false,
+                    timeoutMs = 35_000L
+                )
+            }.getOrDefault("")
+
+            val parsedRetry = parseAiFlashcardsJson(
+                rawJson = retryJson,
+                sourceType = sourceType,
+                sourceId = sourceId,
+                sourceTitle = sourceTitle
+            )
+            if (parsedRetry.isNotEmpty()) return parsedRetry
+            if (parsedPrimary.isNotEmpty()) return parsedPrimary
         }
 
-        // Clean deterministic offline fallback from note lines/paragraphs
-        val chunks = rawContent
-            .split(Regex("""\n{2,}|(?<=[.!?])\s+"""))
-            .map { it.trim() }
-            .filter { it.length >= 18 }
-            .take(6)
-        if (chunks.isEmpty()) {
-            val singleId = stableCardHash("${sourceType.name}|$sourceId|$sourceTitle")
-            return listOf(
-                SmartFlashcard(
-                    id = singleId,
-                    sourceType = sourceType,
-                    sourceId = sourceId,
-                    sourceTitle = sourceTitle,
-                    topic = sourceTitle,
-                    front = "$sourceTitle temel noktaları nelerdir?",
-                    back = rawContent.ifBlank { sourceTitle }.take(420)
+        // Clean deterministic offline fallback: extract real concept/definition pairs or cloze questions
+        return buildStructuredOfflineFallbackCards(
+            sourceType = sourceType,
+            sourceId = sourceId,
+            sourceTitle = sourceTitle,
+            rawContent = rawContent
+        )
+    }
+
+    private fun buildStructuredOfflineFallbackCards(
+        sourceType: FlashcardSourceType,
+        sourceId: String,
+        sourceTitle: String,
+        rawContent: String
+    ): List<SmartFlashcard> {
+        val lines = rawContent
+            .split(Regex("""\n+"""))
+            .map { it.trim().trimStart('-', '*', '•', ' ') }
+            .filter { it.length >= 16 && !it.equals(sourceTitle, ignoreCase = true) }
+
+        val out = mutableListOf<SmartFlashcard>()
+        for (line in lines) {
+            if (out.size >= 6) break
+            // Pattern 1: "Kavram: Açıklama" or "Kavram - Açıklama"
+            val colonIdx = line.indexOf(':').takeIf { it in 3..58 }
+                ?: line.indexOf(" - ").takeIf { it in 3..58 }
+            if (colonIdx != null) {
+                val term = line.substring(0, colonIdx).trim()
+                val def = line.substring(colonIdx + 1).trimStart('-', ' ', ':').trim()
+                if (term.length >= 3 && def.length >= 10) {
+                    val front = "$term nedir ve temel özelliği nasıl tanımlanır?"
+                    val id = stableCardHash("${sourceType.name}|$sourceId|def|${term.lowercase(Locale.ROOT)}")
+                    out.add(
+                        SmartFlashcard(
+                            id = id,
+                            sourceType = sourceType,
+                            sourceId = sourceId,
+                            sourceTitle = sourceTitle,
+                            topic = sourceTitle,
+                            front = front,
+                            back = def.take(480)
+                        )
+                    )
+                    continue
+                }
+            }
+            // Pattern 2: Cloze deletion on the longest meaningful word (>5 chars)
+            val words = line.split(Regex("""\s+"""))
+            val targetIdx = words.indices
+                .filter { idx ->
+                    val clean = words[idx].trim(',', '.', ';', ':', '(', ')', '"', '\'')
+                    clean.length >= 6 && clean.all { it.isLetter() }
+                }
+                .maxByOrNull { words[it].length }
+            if (targetIdx != null && words.size >= 5) {
+                val answerWord = words[targetIdx].trim(',', '.', ';', ':', '(', ')', '"', '\'')
+                val masked = words.mapIndexed { i, w ->
+                    if (i == targetIdx) "______" else w
+                }.joinToString(" ")
+                val front = "Boşluğu doldur ($sourceTitle): $masked"
+                val id = stableCardHash("${sourceType.name}|$sourceId|cloze|${line.take(40)}")
+                out.add(
+                    SmartFlashcard(
+                        id = id,
+                        sourceType = sourceType,
+                        sourceId = sourceId,
+                        sourceTitle = sourceTitle,
+                        topic = sourceTitle,
+                        front = front.take(360),
+                        back = "$answerWord — $line".take(480)
+                    )
                 )
-            )
+            }
         }
-        return chunks.mapIndexed { idx, line ->
-            val id = stableCardHash("${sourceType.name}|$sourceId|$idx|${line.take(32)}")
+        if (out.isNotEmpty()) return out.distinctBy { it.id }
+
+        val singleId = stableCardHash("${sourceType.name}|$sourceId|$sourceTitle")
+        return listOf(
             SmartFlashcard(
-                id = id,
+                id = singleId,
                 sourceType = sourceType,
                 sourceId = sourceId,
                 sourceTitle = sourceTitle,
                 topic = sourceTitle,
-                front = "$sourceTitle — Önemli Nokta ${idx + 1}",
-                back = line.take(480)
+                front = "$sourceTitle konusunda bilmen gereken temel kavramlar nelerdir?",
+                back = rawContent.ifBlank { sourceTitle }.take(420)
             )
-        }
+        )
     }
 
     /**

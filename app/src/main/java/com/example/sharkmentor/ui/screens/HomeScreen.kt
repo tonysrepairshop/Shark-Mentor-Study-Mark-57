@@ -1,6 +1,10 @@
 package com.example.sharkmentor.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -223,7 +227,7 @@ fun HomeScreen(
     val musicPlayerEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
     val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
     val musicPlaybackState by MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
-    val showLeftMusicScreen = shouldShowLeftMusicScreen(musicPlayerEnabled, musicPlaybackState)
+    val isHomeMusicPanelOpen by MusicPlayerHub.isHomePanelOpen.collectAsStateWithLifecycle()
 
     val streakRepository = remember(context) { com.example.sharkmentor.data.repository.StreakRepository(context) }
     val streakState by streakRepository.streakState.collectAsStateWithLifecycle()
@@ -715,77 +719,82 @@ fun HomeScreen(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-        contentAlignment = Alignment.TopCenter
+            .background(MaterialTheme.colorScheme.background)
     ) {
-        if (showLeftMusicScreen) {
-            // Left = Music Player (0), Right = Timers / Coaching Path / Focus Score slid cleanly right (1)
-            val deckPagerState = rememberPagerState(initialPage = 0, pageCount = { 2 })
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    modifier = Modifier
-                        .padding(top = 6.dp, bottom = 2.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            RoundedCornerShape(50)
-                        )
-                        .padding(3.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    listOf(0 to "Müzik", 1 to "Çalışma Masası").forEach { (idx, label) ->
-                        val active = deckPagerState.currentPage == idx
-                        androidx.compose.material3.Surface(
-                            onClick = {
-                                uiScope.launch { deckPagerState.animateScrollToPage(idx) }
-                            },
-                            shape = RoundedCornerShape(50),
-                            color = if (active) MaterialTheme.colorScheme.primary else Color.Transparent
-                        ) {
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                                color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp)
-                            )
-                        }
-                    }
-                }
-
-                HorizontalPager(
-                    state = deckPagerState,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    beyondViewportPageCount = 1,
-                    key = { page -> if (page == 0) "left_music_deck" else "right_study_desk" }
-                ) { outerPage ->
-                    if (outerPage == 0) {
-                        ThemedMusicPlayerPage(
-                            playbackState = musicPlaybackState,
-                            selectedSkin = musicSelectedSkin,
-                            onSelectSkin = { chosenSkin ->
-                                MusicPlayerHub.setSkin(context, chosenSkin)
-                            },
-                            onSlideToDesk = {
-                                uiScope.launch { deckPagerState.animateScrollToPage(1) }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        RenderDeskContent()
-                    }
-                }
-            }
+        val isWideLayout = maxWidth >= 600.dp
+        val panelVisible = musicPlayerEnabled && isHomeMusicPanelOpen
+        // Phone-slim left panel width on tablets/landscape, sleek drawer width on narrow phones
+        val panelWidth = if (isWideLayout) {
+            (maxWidth * 0.32f).coerceIn(256.dp, 316.dp)
         } else {
+            (maxWidth * 0.80f).coerceIn(256.dp, 316.dp)
+        }
+
+        // Shift the entire study desk (Coaching Path switch, Water Streak, Timers, Focus Score)
+        // smoothly to the right with balanced breathing room — never glued flush to the right edge.
+        val deskStartPadding by animateDpAsState(
+            targetValue = if (isWideLayout && panelVisible) panelWidth + 22.dp else 0.dp,
+            animationSpec = tween(durationMillis = 280),
+            label = "desk_shift_start"
+        )
+        val deskEndPadding by animateDpAsState(
+            targetValue = if (isWideLayout && panelVisible) 20.dp else 0.dp,
+            animationSpec = tween(durationMillis = 280),
+            label = "desk_shift_end"
+        )
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = deskStartPadding, end = deskEndPadding),
+            contentAlignment = Alignment.TopCenter
+        ) {
             RenderDeskContent()
+        }
+
+        // Narrow portrait phone scrim so tapping outside closes the left music drawer without stopping music
+        if (!isWideLayout) {
+            AnimatedVisibility(
+                visible = panelVisible,
+                enter = fadeIn(tween(220)),
+                exit = fadeOut(tween(200))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.36f))
+                        .clickable { MusicPlayerHub.setHomePanelOpen(false) }
+                )
+            }
+        }
+
+        // Left Phone-Slim Music Player Panel (positioned cleanly beneath the fixed top-left music note icon)
+        AnimatedVisibility(
+            visible = panelVisible,
+            enter = slideInHorizontally(tween(280)) { -it } + fadeIn(tween(220)),
+            exit = slideOutHorizontally(tween(240)) { -it } + fadeOut(tween(180)),
+            modifier = Modifier.align(Alignment.CenterStart)
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(panelWidth)
+                    .fillMaxHeight()
+                    .padding(start = 10.dp, top = 48.dp, bottom = 8.dp)
+            ) {
+                ThemedMusicPlayerPage(
+                    playbackState = musicPlaybackState,
+                    selectedSkin = musicSelectedSkin,
+                    onSelectSkin = { chosenSkin ->
+                        MusicPlayerHub.setSkin(context, chosenSkin)
+                    },
+                    compactMode = false,
+                    showSlideToDeskHint = false,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }

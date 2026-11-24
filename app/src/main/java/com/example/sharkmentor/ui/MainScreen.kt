@@ -2,6 +2,17 @@ package com.example.sharkmentor.ui
 
 import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import com.example.sharkmentor.core.audio.MusicPlayerHub
+import com.example.sharkmentor.core.service.CampVideoPlaybackController
+import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
+import com.example.sharkmentor.ui.components.DraggableMiniMusicPlayerWindow
+import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -305,12 +316,74 @@ fun MainScreen(
                             "ai_zen_coach"
                         )
                     }
-                    val shouldShowTopBar = (currentDestination?.route in topBarRoutes) && !isPaceKeep && !activeNoteEditor
+                    val currentRoute = currentDestination?.route
+                    val shouldShowTopBar = (currentRoute in topBarRoutes) && !isPaceKeep && !activeNoteEditor
                     val isImeOpen = WindowInsets.isImeVisible
-                    val shouldShowBottomBar = (currentDestination?.route in primaryTabRoutes) && !isImeOpen && !activeNoteEditor
+
+                    // Auto-hide bottom bar after inactivity when enabled in Settings
+                    val mainThemePrefs = remember(context) { ThemePreferences.initialize(context.applicationContext) }
+                    val autoHideBottomBar by mainThemePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
+                    var lastInteractionMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    var isBottomBarAutoHidden by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(autoHideBottomBar, lastInteractionMs, currentRoute) {
+                        if (!autoHideBottomBar) {
+                            isBottomBarAutoHidden = false
+                        } else {
+                            isBottomBarAutoHidden = false
+                            delay(5500L)
+                            isBottomBarAutoHidden = true
+                        }
+                    }
+
+                    // Global Music Player Hub state (note icon visible on all tabs except Settings)
+                    LaunchedEffect(context) {
+                        MusicPlayerHub.ensureInitialized(context)
+                    }
+                    val musicPlayerEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
+                    val musicSelectedSkin by MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
+                    val musicPlaybackState by MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+                    val isHomeMusicPanelOpen by MusicPlayerHub.isHomePanelOpen.collectAsStateWithLifecycle()
+                    val isFloatingMiniOpen by MusicPlayerHub.isFloatingMiniOpen.collectAsStateWithLifecycle()
+
+                    val excludedMusicRoutes = remember {
+                        setOf(
+                            "settings",
+                            "ai_settings",
+                            "note_settings",
+                            "countdown_settings",
+                            Screen.Login.route,
+                            Screen.PaceKeep.route
+                        )
+                    }
+                    val showGlobalMusicButton = musicPlayerEnabled &&
+                        currentRoute != null &&
+                        currentRoute !in excludedMusicRoutes &&
+                        !activeNoteEditor
+                    val isOnHomeTab = currentRoute == Screen.Focus.route
+                    val isMusicButtonActive = if (isOnHomeTab) isHomeMusicPanelOpen else isFloatingMiniOpen
+
+                    // Restorable background video studio (when tapping the lock-screen/shade notification)
+                    val videoRestoreRequested by CampVideoPlaybackController.restoreRequested.collectAsStateWithLifecycle()
+
+                    val shouldShowBottomBar = (currentRoute in primaryTabRoutes) &&
+                        !isImeOpen &&
+                        !activeNoteEditor &&
+                        !isBottomBarAutoHidden
+
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
+                            .pointerInput(autoHideBottomBar) {
+                                if (!autoHideBottomBar) return@pointerInput
+                                awaitEachGesture {
+                                    awaitPointerEvent(pass = PointerEventPass.Initial)
+                                    lastInteractionMs = System.currentTimeMillis()
+                                    if (isBottomBarAutoHidden) {
+                                        isBottomBarAutoHidden = false
+                                    }
+                                }
+                            }
                             .background(
                                 if (isPaceKeep) androidx.compose.ui.graphics.Color(0xFF071426)
                                 else MaterialTheme.colorScheme.background
@@ -383,15 +456,18 @@ fun MainScreen(
                             val effectiveTopPadding = if (shouldShowTopBar) innerPadding.calculateTopPadding() else 0.dp
                             val effectiveBottomPadding = if (shouldShowBottomBar) innerPadding.calculateBottomPadding() else 0.dp
 
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(
+                                        top = effectiveTopPadding,
+                                        bottom = effectiveBottomPadding
+                                    )
+                            ) {
                             NavHost(
                                 navController    = navController,
                                 startDestination = Screen.Focus.route,
-                                modifier         = Modifier
-                                        .fillMaxSize()
-                                        .padding(
-                                            top = effectiveTopPadding,
-                                            bottom = effectiveBottomPadding
-                                        ),
+                                modifier         = Modifier.fillMaxSize(),
                                     enterTransition  = { fadeIn() },
                                     exitTransition   = { fadeOut() },
                                 ) {
@@ -604,6 +680,89 @@ fun MainScreen(
                                     }
                                 }
                             )
+                        }
+                    }
+
+                            // Fixed Small Round Music Note Button just beneath the Top Bar on the left (all tabs except Settings)
+                            if (showGlobalMusicButton) {
+                                Surface(
+                                    onClick = {
+                                        if (isOnHomeTab) {
+                                            MusicPlayerHub.toggleHomePanel()
+                                        } else {
+                                            MusicPlayerHub.toggleFloatingMini()
+                                        }
+                                    },
+                                    shape = CircleShape,
+                                    color = if (isMusicButtonActive || musicPlaybackState.isPlaying) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)
+                                    },
+                                    contentColor = if (isMusicButtonActive || musicPlaybackState.isPlaying) {
+                                        MaterialTheme.colorScheme.onPrimary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (isMusicButtonActive) {
+                                            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.45f)
+                                        } else {
+                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
+                                        }
+                                    ),
+                                    shadowElevation = 4.dp,
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(start = 10.dp, top = 6.dp)
+                                        .size(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.MusicNote,
+                                            contentDescription = "Müzik Oynatıcı",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Draggable Compact Mini Music Window on all tabs outside HomeScreen (minimizing never stops playback)
+                            if (showGlobalMusicButton && !isOnHomeTab && isFloatingMiniOpen) {
+                                DraggableMiniMusicPlayerWindow(
+                                    playbackState = musicPlaybackState,
+                                    selectedSkin = musicSelectedSkin,
+                                    onSelectSkin = { chosenSkin ->
+                                        MusicPlayerHub.setSkin(context, chosenSkin)
+                                    },
+                                    onMinimize = {
+                                        MusicPlayerHub.setFloatingMiniOpen(false)
+                                    },
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            }
+                }
+
+                if (videoRestoreRequested) {
+                    val payload = remember(videoRestoreRequested) {
+                        CampVideoPlaybackController.peekRestorablePayload()
+                    }
+                    if (payload != null) {
+                        CampVideoStudyStudioDialog(
+                            campTitle = payload.campTitle,
+                            subject = payload.subject,
+                            initialEpisode = payload.activeEpisode,
+                            allEpisodes = payload.allEpisodes,
+                            resourceId = payload.resourceId,
+                            onDismiss = {
+                                CampVideoPlaybackController.consumeRestoreRequest()
+                            }
+                        )
+                    } else {
+                        LaunchedEffect(Unit) {
+                            CampVideoPlaybackController.consumeRestoreRequest()
                         }
                     }
                 }

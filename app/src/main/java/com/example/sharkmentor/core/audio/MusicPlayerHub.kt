@@ -127,6 +127,28 @@ object MusicPlayerHub {
     private val _isEnabled = MutableStateFlow(true)
     val isEnabled: StateFlow<Boolean> = _isEnabled.asStateFlow()
 
+    private val _isHomePanelOpen = MutableStateFlow(false)
+    val isHomePanelOpen: StateFlow<Boolean> = _isHomePanelOpen.asStateFlow()
+
+    private val _isFloatingMiniOpen = MutableStateFlow(false)
+    val isFloatingMiniOpen: StateFlow<Boolean> = _isFloatingMiniOpen.asStateFlow()
+
+    fun toggleHomePanel() {
+        _isHomePanelOpen.value = !_isHomePanelOpen.value
+    }
+
+    fun setHomePanelOpen(open: Boolean) {
+        _isHomePanelOpen.value = open
+    }
+
+    fun toggleFloatingMini() {
+        _isFloatingMiniOpen.value = !_isFloatingMiniOpen.value
+    }
+
+    fun setFloatingMiniOpen(open: Boolean) {
+        _isFloatingMiniOpen.value = open
+    }
+
     private val _selectedSkin = MutableStateFlow(MusicPlayerSkin.MODERN_VINYL)
     val selectedSkin: StateFlow<MusicPlayerSkin> = _selectedSkin.asStateFlow()
 
@@ -218,6 +240,9 @@ object MusicPlayerHub {
         _isEnabled.value = enabled
         if (enabled) {
             refreshPermissionsAndSessions(context)
+        } else {
+            _isHomePanelOpen.value = false
+            _isFloatingMiniOpen.value = false
         }
     }
 

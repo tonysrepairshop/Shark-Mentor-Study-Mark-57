@@ -975,24 +975,34 @@ private fun PodcastBetaBottomSheet(
         loadPodcast(forceRefresh = false)
     }
 
-    fun speakSegment(index: Int, rate: Float) {
+    fun speakHostPart(index: Int, part: Char, rate: Float) {
         val engine = ttsHolder[0] ?: return
         val currentSegments = episode?.segments.orEmpty()
         if (!ttsReady || currentSegments.isEmpty()) return
         val safeIdx = index.coerceIn(0, currentSegments.lastIndex)
-        activeTrackIdx = safeIdx
         val seg = currentSegments[safeIdx]
+        val textToSpeak = if (part == 'a') seg.hostA else seg.hostB
+        if (textToSpeak.isBlank()) {
+            if (part == 'a' && seg.hostB.isNotBlank()) {
+                speakHostPart(safeIdx, 'b', rate)
+            } else {
+                val nextIdx = safeIdx + 1
+                if (nextIdx < currentSegments.size) speakHostPart(nextIdx, 'a', rate) else isPlaying = false
+            }
+            return
+        }
+        activeTrackIdx = safeIdx
         engine.stop()
         engine.setSpeechRate(rate)
+        // Distinct host pitch applied strictly per utterance (Android TTS applies pitch globally)
+        engine.setPitch(if (part == 'a') 1.07f else 0.90f)
         val params = Bundle()
-        engine.setPitch(1.04f)
-        engine.speak(seg.hostA, TextToSpeech.QUEUE_FLUSH, params, "pod_${safeIdx}_a")
-        if (seg.hostB.isNotBlank()) {
-            engine.playSilentUtterance(320L, TextToSpeech.QUEUE_ADD, "pod_${safeIdx}_pause")
-            engine.setPitch(0.94f)
-            engine.speak(seg.hostB, TextToSpeech.QUEUE_ADD, params, "pod_${safeIdx}_b")
-        }
+        engine.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, params, "pod_${safeIdx}_${part}")
         isPlaying = true
+    }
+
+    fun speakSegment(index: Int, rate: Float) {
+        speakHostPart(index, 'a', rate)
     }
 
     DisposableEffect(context) {
@@ -1007,17 +1017,28 @@ private fun PodcastBetaBottomSheet(
                     }
                     override fun onDone(utteranceId: String?) {
                         if (utteranceId == null) return
-                        val currentSegments = episode?.segments.orEmpty()
-                        val safeIdx = activeTrackIdx.coerceIn(0, (currentSegments.size - 1).coerceAtLeast(0))
-                        val hasHostB = currentSegments.getOrNull(safeIdx)?.hostB?.isNotBlank() == true
-                        val finishedSegment = utteranceId.endsWith("_b") || (!hasHostB && utteranceId.endsWith("_a"))
-                        if (finishedSegment) {
-                            mainHandler.post {
-                                val nextIdx = activeTrackIdx + 1
-                                if (nextIdx < currentSegments.size) {
-                                    speakSegment(nextIdx, speechRate)
-                                } else {
-                                    isPlaying = false
+                        mainHandler.post {
+                            val currentSegments = episode?.segments.orEmpty()
+                            if (currentSegments.isEmpty() || !isPlaying) return@post
+                            val safeIdx = activeTrackIdx.coerceIn(0, currentSegments.lastIndex)
+                            val seg = currentSegments[safeIdx]
+                            when {
+                                utteranceId == "pod_${safeIdx}_a" && seg.hostB.isNotBlank() -> {
+                                    mainHandler.postDelayed({
+                                        if (isPlaying && activeTrackIdx == safeIdx) {
+                                            speakHostPart(safeIdx, 'b', speechRate)
+                                        }
+                                    }, 260L)
+                                }
+                                utteranceId == "pod_${safeIdx}_b" || (utteranceId == "pod_${safeIdx}_a" && seg.hostB.isBlank()) -> {
+                                    val nextIdx = safeIdx + 1
+                                    if (nextIdx < currentSegments.size) {
+                                        mainHandler.postDelayed({
+                                            if (isPlaying) speakHostPart(nextIdx, 'a', speechRate)
+                                        }, 380L)
+                                    } else {
+                                        isPlaying = false
+                                    }
                                 }
                             }
                         }

@@ -5,15 +5,22 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.MutableContextWrapper
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.widget.FrameLayout
+import com.example.sharkmentor.core.coaching.CampDayEpisode
+import java.lang.ref.WeakReference
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -83,17 +90,74 @@ object CampVideoPlaybackController {
     private val _state = MutableStateFlow(CampVideoPlaybackState())
     val state: StateFlow<CampVideoPlaybackState> = _state.asStateFlow()
 
+    data class RestorableStudioPayload(
+        val campTitle: String,
+        val subject: String,
+        val activeEpisode: CampDayEpisode,
+        val allEpisodes: List<CampDayEpisode>,
+        val resourceId: Long? = null
+    )
+
+    private const val HIDDEN_HOST_TAG = "shark_bg_video_hidden_host"
+
     private var contextWrapper: MutableContextWrapper? = null
     private var activeWebView: BackgroundPlayableWebView? = null
+    private var hostActivityRef: WeakReference<Activity>? = null
+
+    @Volatile
+    private var restorablePayload: RestorableStudioPayload? = null
+
+    private val _restoreRequested = MutableStateFlow(false)
+    val restoreRequested: StateFlow<Boolean> = _restoreRequested.asStateFlow()
+
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
+
+    fun registerStudioPayload(
+        hostContext: Context,
+        campTitle: String,
+        subject: String,
+        activeEpisode: CampDayEpisode,
+        allEpisodes: List<CampDayEpisode>,
+        resourceId: Long? = null
+    ) {
+        hostContext.findActivity()?.let { hostActivityRef = WeakReference(it) }
+        restorablePayload = RestorableStudioPayload(
+            campTitle = campTitle,
+            subject = subject,
+            activeEpisode = activeEpisode,
+            allEpisodes = allEpisodes,
+            resourceId = resourceId
+        )
+    }
+
+    fun peekRestorablePayload(): RestorableStudioPayload? = restorablePayload
+
+    fun requestRestoreStudio() {
+        if (_state.value.isActive && restorablePayload != null) {
+            _restoreRequested.value = true
+        }
+    }
+
+    fun consumeRestoreRequest() {
+        _restoreRequested.value = false
+    }
 
     fun acquireOrCreateWebView(
         hostContext: Context,
         initializer: (BackgroundPlayableWebView) -> Unit
     ): BackgroundPlayableWebView {
+        hostContext.findActivity()?.let { hostActivityRef = WeakReference(it) }
         val existing = activeWebView
         if (existing != null) {
+            (existing.parent as? ViewGroup)?.removeView(existing)
             contextWrapper?.baseContext = hostContext
             existing.allowBackgroundPlayback = true
+            existing.onResume()
+            existing.resumeTimers()
             return existing
         }
         val wrapper = MutableContextWrapper(hostContext)
@@ -160,20 +224,52 @@ object CampVideoPlaybackController {
 
     fun minimizeToBackground(context: Context) {
         val appCtx = context.applicationContext
+        context.findActivity()?.let { hostActivityRef = WeakReference(it) }
         mainHandler.post {
             val wv = activeWebView ?: return@post
+            val activity = hostActivityRef?.get()
+            val decor = activity?.window?.decorView as? ViewGroup
             (wv.parent as? ViewGroup)?.removeView(wv)
-            contextWrapper?.baseContext = appCtx
+            if (decor != null && !activity.isFinishing && !activity.isDestroyed) {
+                // Keep WebView attached to a tiny invisible host inside decorView so Chromium
+                // never suspends the HTML5 audio pipeline when the dialog closes or screen locks.
+                var hiddenHost = decor.findViewWithTag<FrameLayout>(HIDDEN_HOST_TAG)
+                if (hiddenHost == null) {
+                    hiddenHost = FrameLayout(activity).apply {
+                        tag = HIDDEN_HOST_TAG
+                        alpha = 0.01f
+                        isClickable = false
+                        isFocusable = false
+                    }
+                    decor.addView(hiddenHost, FrameLayout.LayoutParams(2, 2))
+                }
+                hiddenHost.removeAllViews()
+                hiddenHost.addView(wv, FrameLayout.LayoutParams(2, 2))
+                contextWrapper?.baseContext = activity
+            } else {
+                contextWrapper?.baseContext = appCtx
+            }
+            wv.visibility = View.VISIBLE
             wv.allowBackgroundPlayback = true
             wv.onResume()
             wv.resumeTimers()
+            if (_state.value.isPlaying) {
+                runCatching {
+                    wv.evaluateJavascript(
+                        "(function(){try{window.__sharkUserPaused=false;var v=document.querySelector('video');if(v&&v.paused&&!v.ended){v.play();}}catch(e){}})();",
+                        null
+                    )
+                }
+            }
         }
         _state.value = _state.value.copy(isActive = true, isMinimized = true)
         CampVideoPlaybackService.startOrSync(appCtx)
     }
 
     fun markRestoredToForeground(hostContext: Context) {
+        hostContext.findActivity()?.let { hostActivityRef = WeakReference(it) }
         contextWrapper?.baseContext = hostContext
+        _restoreRequested.value = false
         _state.value = _state.value.copy(isMinimized = false)
     }
 
@@ -185,10 +281,35 @@ object CampVideoPlaybackController {
     fun setPlaying(context: Context, play: Boolean) {
         mainHandler.post {
             val wv = activeWebView ?: return@post
+            wv.allowBackgroundPlayback = true
+            wv.onResume()
+            wv.resumeTimers()
             val js = if (play) {
-                "(function(){try{var v=document.querySelector('video');if(v){v.play();}}catch(e){}})();"
+                """
+                (function(){
+                  try {
+                    window.__sharkUserPaused = false;
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.playVideo === 'function') { mp.playVideo(); }
+                    var vids = document.querySelectorAll('video');
+                    for (var i = 0; i < vids.length; i++) { vids[i].play(); }
+                    if (window.__sharkSendTelemetryNow) { setTimeout(window.__sharkSendTelemetryNow, 200); }
+                  } catch(e) {}
+                })();
+                """.trimIndent()
             } else {
-                "(function(){try{var v=document.querySelector('video');if(v){v.pause();}}catch(e){}})();"
+                """
+                (function(){
+                  try {
+                    window.__sharkUserPaused = true;
+                    var mp = document.getElementById('movie_player');
+                    if (mp && typeof mp.pauseVideo === 'function') { mp.pauseVideo(); }
+                    var vids = document.querySelectorAll('video');
+                    for (var i = 0; i < vids.length; i++) { vids[i].pause(); }
+                    if (window.__sharkSendTelemetryNow) { setTimeout(window.__sharkSendTelemetryNow, 200); }
+                  } catch(e) {}
+                })();
+                """.trimIndent()
             }
             runCatching { wv.evaluateJavascript(js, null) }
         }
@@ -211,7 +332,13 @@ object CampVideoPlaybackController {
                         target = Math.min(v.duration, target);
                       }
                       v.currentTime = target;
+                    } else {
+                      var mp = document.getElementById('movie_player');
+                      if (mp && typeof mp.getCurrentTime === 'function' && typeof mp.seekTo === 'function') {
+                        mp.seekTo(Math.max(0, mp.getCurrentTime() + ($deltaSeconds)), true);
+                      }
                     }
+                    if (window.__sharkSendTelemetryNow) { setTimeout(window.__sharkSendTelemetryNow, 200); }
                   } catch(e) {}
                 })();
             """.trimIndent()
@@ -231,7 +358,19 @@ object CampVideoPlaybackController {
         mainHandler.post {
             val wv = activeWebView ?: return@post
             val safe = targetSeconds.coerceAtLeast(0)
-            val js = "(function(){try{var v=document.querySelector('video');if(v){v.currentTime=$safe;}}catch(e){}})();"
+            val js = """
+                (function(){
+                  try {
+                    var v = document.querySelector('video');
+                    if (v) { v.currentTime = $safe; }
+                    else {
+                      var mp = document.getElementById('movie_player');
+                      if (mp && typeof mp.seekTo === 'function') { mp.seekTo($safe, true); }
+                    }
+                    if (window.__sharkSendTelemetryNow) { setTimeout(window.__sharkSendTelemetryNow, 200); }
+                  } catch(e) {}
+                })();
+            """.trimIndent()
             runCatching { wv.evaluateJavascript(js, null) }
         }
         val cur = _state.value
@@ -243,12 +382,21 @@ object CampVideoPlaybackController {
 
     fun stopAndRelease(context: Context) {
         val appCtx = context.applicationContext
+        _restoreRequested.value = false
+        restorablePayload = null
         _state.value = CampVideoPlaybackState()
         mainHandler.post {
             val wv = activeWebView
             activeWebView = null
             contextWrapper?.baseContext = appCtx
             contextWrapper = null
+            val decor = hostActivityRef?.get()?.window?.decorView as? ViewGroup
+            decor?.findViewWithTag<FrameLayout>(HIDDEN_HOST_TAG)?.let { hiddenHost ->
+                runCatching {
+                    hiddenHost.removeAllViews()
+                    decor.removeView(hiddenHost)
+                }
+            }
             if (wv != null) {
                 runCatching {
                     wv.allowBackgroundPlayback = false
@@ -273,6 +421,8 @@ class CampVideoPlaybackService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: NotificationManager
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
     private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
@@ -322,6 +472,7 @@ class CampVideoPlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
+        audioManager = getSystemService(AudioManager::class.java)
         createNotificationChannel()
         initMediaSession()
 
@@ -344,6 +495,9 @@ class CampVideoPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!isForegroundStarted) {
+            startForegroundCompat(buildMediaNotification(CampVideoPlaybackController.state.value))
+        }
         val action = intent?.action ?: ACTION_SYNC
         when (action) {
             ACTION_STOP -> {
@@ -434,6 +588,7 @@ class CampVideoPlaybackService : Service() {
     private fun buildMediaNotification(st: CampVideoPlaybackState): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("EXTRA_RESTORE_CAMP_VIDEO", true)
         }
         val openPending = PendingIntent.getActivity(
             this,
@@ -507,12 +662,12 @@ class CampVideoPlaybackService : Service() {
         val intent = Intent(this, CampVideoPlaybackService::class.java).apply {
             action = actionName
         }
-        return PendingIntent.getService(
-            this,
-            requestCode,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(this, requestCode, intent, flags)
+        } else {
+            PendingIntent.getService(this, requestCode, intent, flags)
+        }
     }
 
     private fun startForegroundCompat(notification: Notification) {
@@ -531,8 +686,56 @@ class CampVideoPlaybackService : Service() {
         }
     }
 
+    private fun requestMediaAudioFocus() {
+        val am = audioManager ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val req = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAcceptsDelayedFocusGain(true)
+                    .setOnAudioFocusChangeListener { focusChange ->
+                        when (focusChange) {
+                            AudioManager.AUDIOFOCUS_LOSS,
+                            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                                CampVideoPlaybackController.setPlaying(applicationContext, false)
+                            }
+                            AudioManager.AUDIOFOCUS_GAIN -> {
+                                if (CampVideoPlaybackController.state.value.isActive) {
+                                    CampVideoPlaybackController.setPlaying(applicationContext, true)
+                                }
+                            }
+                        }
+                    }
+                    .build()
+                    .also { audioFocusRequest = it }
+                am.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            }
+        }
+    }
+
+    private fun abandonMediaAudioFocus() {
+        val am = audioManager ?: return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                am.abandonAudioFocus(null)
+            }
+        }
+    }
+
     private fun updateWakeLock(shouldHold: Boolean) {
         if (shouldHold) {
+            requestMediaAudioFocus()
             if (wakeLock?.isHeld == true) return
             val pm = getSystemService(PowerManager::class.java) ?: return
             val wl = wakeLock ?: pm.newWakeLock(
@@ -556,6 +759,7 @@ class CampVideoPlaybackService : Service() {
     }
 
     private fun stopServiceCleanly() {
+        abandonMediaAudioFocus()
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false
@@ -586,6 +790,7 @@ class CampVideoPlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        abandonMediaAudioFocus()
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false

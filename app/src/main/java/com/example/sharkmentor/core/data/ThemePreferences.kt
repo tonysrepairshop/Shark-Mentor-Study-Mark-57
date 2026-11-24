@@ -176,6 +176,17 @@ class ThemePreferences private constructor(context: Context) {
         _keepScreenOnInStopwatch.value = enabled
     }
 
+    // ── Auto-Hide Bottom Bar after inactivity ("Alt Barı Otomatik Gizle") ────
+    private val _autoHideBottomBar = MutableStateFlow(
+        prefs.getBoolean(KEY_AUTO_HIDE_BOTTOM_BAR, false)
+    )
+    val autoHideBottomBar: StateFlow<Boolean> = _autoHideBottomBar.asStateFlow()
+
+    fun setAutoHideBottomBar(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_AUTO_HIDE_BOTTOM_BAR, enabled).apply()
+        _autoHideBottomBar.value = enabled
+    }
+
     // ── Live Solar & Window Evaluators ────────────────────────────────────────
 
     fun resolveTodaySolarTimes(): SolarTimes {
@@ -229,6 +240,7 @@ class ThemePreferences private constructor(context: Context) {
         private const val KEY_BLUE_LIGHT_START_MIN = "blue_light_start_min"
         private const val KEY_BLUE_LIGHT_END_MIN = "blue_light_end_min"
         private const val KEY_KEEP_SCREEN_ON_STOPWATCH = "keep_screen_on_stopwatch"
+        private const val KEY_AUTO_HIDE_BOTTOM_BAR = "auto_hide_bottom_bar"
 
         @Volatile
         private var INSTANCE: ThemePreferences? = null

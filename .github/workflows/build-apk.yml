@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 71 APK
+name: Build SharkMentor Mark 72 APK
 
 on:
   push:
@@ -15,6 +15,7 @@ on:
       - mark-69
       - mark-70
       - mark-71
+      - mark-72
   workflow_dispatch:
 
 permissions:

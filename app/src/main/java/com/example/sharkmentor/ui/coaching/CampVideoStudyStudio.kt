@@ -207,9 +207,17 @@ fun CampVideoStudyStudioDialog(
     }
     var pendingDeleteStudioEpisode by remember { mutableStateOf<CampDayEpisode?>(null) }
     var isMinimizingToBackground by remember { mutableStateOf(false) }
-    var hasEnteredMediaSession by remember { mutableStateOf(false) }
+    var sawSessionActive by remember { mutableStateOf(false) }
 
-    LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.topicTitle, campTitle) {
+    LaunchedEffect(activeEpisode.dayNumber, activeEpisode.videoId, activeEpisode.topicTitle, campTitle, safeEpisodes) {
+        CampVideoPlaybackController.registerStudioPayload(
+            hostContext = context,
+            campTitle = campTitle,
+            subject = subject,
+            activeEpisode = activeEpisode,
+            allEpisodes = safeEpisodes,
+            resourceId = resourceId
+        )
         CampVideoPlaybackController.markRestoredToForeground(context)
         CampVideoPlaybackController.startOrUpdateSession(
             context = context,
@@ -218,12 +226,13 @@ fun CampVideoStudyStudioDialog(
             url = activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true),
             isPlaying = true
         )
-        hasEnteredMediaSession = true
     }
 
-    // If user clicks "Kapat" on the top media notification while studio is open, close cleanly
-    LaunchedEffect(bgPlaybackState.isActive, hasEnteredMediaSession) {
-        if (hasEnteredMediaSession && !bgPlaybackState.isActive && !isMinimizingToBackground) {
+    // Only dismiss if the media session was genuinely active and then explicitly stopped (e.g. "Kapat" in notification)
+    LaunchedEffect(bgPlaybackState.isActive) {
+        if (bgPlaybackState.isActive) {
+            sawSessionActive = true
+        } else if (sawSessionActive && !isMinimizingToBackground) {
             onDismiss()
         }
     }
@@ -1624,6 +1633,7 @@ private const val STUDIO_BACKGROUND_PLAY_JS = """
 (function() {
   if (window.__sharkBgKeepAliveInstalled) return;
   window.__sharkBgKeepAliveInstalled = true;
+  window.__sharkUserPaused = false;
   try {
     Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
     Object.defineProperty(document, 'webkitHidden', { configurable: true, get: function() { return false; } });
@@ -1632,6 +1642,8 @@ private const val STUDIO_BACKGROUND_PLAY_JS = """
     var blockVis = function(e) { e.stopImmediatePropagation(); };
     document.addEventListener('visibilitychange', blockVis, true);
     document.addEventListener('webkitvisibilitychange', blockVis, true);
+    window.addEventListener('pagehide', blockVis, true);
+    window.addEventListener('freeze', blockVis, true);
     window.addEventListener('blur', blockVis, true);
   } catch (e) {}
 })();
