@@ -133,11 +133,10 @@ class Mark69QuotaStreakGoalsTextBoxAndPathTest {
     @Test
     fun textBox_closingOrSwitchingToolNeverDeletesNonEmptyText() {
         val controller = DrawingController()
-        val box = controller.addTextBox(normalizedX = 0.2f, normalizedY = 0.25f)
+        val box = controller.addTextBox(xFraction = 0.2f, yFraction = 0.25f)
         assertEquals(box.id, controller.activeTextBoxId)
 
-        controller.updateTextBoxFieldValue(
-            box.id,
+        controller.onActiveTextBoxValueChange(
             TextFieldValue(text = "Türev kritik nokta notu", selection = TextRange(23))
         )
 
@@ -145,21 +144,21 @@ class Mark69QuotaStreakGoalsTextBoxAndPathTest {
         controller.closeActiveTextBox()
         assertNull(controller.activeTextBoxId)
         assertEquals(1, controller.textBoxes.size)
-        assertEquals("Türev kritik nokta notu", controller.textBoxes.first().text)
+        assertTrue(controller.textBoxes.first().taggedContent.contains("Türev kritik nokta notu"))
 
         // Re-opening and switching to Pen tool must also preserve the text box
         controller.selectTextBox(box.id)
         assertEquals(box.id, controller.activeTextBoxId)
-        controller.selectTool(DrawingTool.PEN)
+        controller.selectTool(DrawingTool.FOUNTAIN_PEN)
         assertNull(controller.activeTextBoxId)
         assertEquals(1, controller.textBoxes.size)
-        assertEquals("Türev kritik nokta notu", controller.textBoxes.first().text)
+        assertTrue(controller.textBoxes.first().taggedContent.contains("Türev kritik nokta notu"))
     }
 
     @Test
     fun textBox_closingBlankPlaceholderPrunesItCleanlyAndExplicitDeleteRemovesBox() {
         val controller = DrawingController()
-        controller.addTextBox(normalizedX = 0.1f, normalizedY = 0.1f)
+        controller.addTextBox(xFraction = 0.1f, yFraction = 0.1f)
         assertEquals(1, controller.textBoxes.size)
 
         // Untouched blank placeholder is cleaned up on close
@@ -167,9 +166,8 @@ class Mark69QuotaStreakGoalsTextBoxAndPathTest {
         assertTrue(controller.textBoxes.isEmpty())
 
         // Non-empty box can still be explicitly deleted via Trash icon
-        val populated = controller.addTextBox(normalizedX = 0.3f, normalizedY = 0.3f)
-        controller.updateTextBoxFieldValue(
-            populated.id,
+        val populated = controller.addTextBox(xFraction = 0.3f, yFraction = 0.3f)
+        controller.onActiveTextBoxValueChange(
             TextFieldValue(text = "Silinecek deneme", selection = TextRange(16))
         )
         controller.closeActiveTextBox()
@@ -182,20 +180,19 @@ class Mark69QuotaStreakGoalsTextBoxAndPathTest {
     @Test
     fun textBox_formattingControlsUpdateBoxEvenWithCollapsedSelection() {
         val controller = DrawingController()
-        val box = controller.addTextBox(normalizedX = 0.2f, normalizedY = 0.2f)
-        controller.updateTextBoxFieldValue(
-            box.id,
+        val box = controller.addTextBox(xFraction = 0.2f, yFraction = 0.2f)
+        controller.onActiveTextBoxValueChange(
             TextFieldValue(text = "Formül", selection = TextRange(6)) // collapsed caret at end
         )
 
-        val initialSize = controller.textBoxes.first().fontSizeSp
+        val initialSize = controller.textBoxes.first().baseFontSizeSp
         controller.stepTextBoxFontSize(4f)
         controller.applyTextBoxColor(Color(0xFF2563EB))
 
         val updated = controller.textBoxes.firstOrNull { it.id == box.id }
         assertNotNull(updated)
-        assertEquals(initialSize + 4f, updated!!.fontSizeSp, 0.01f)
-        assertEquals(0xFF2563EB.toInt(), updated.textColorArgb)
+        assertEquals(initialSize + 4f, updated!!.baseFontSizeSp, 0.01f)
+        assertEquals(0xFF2563EB.toInt(), updated.baseTextColorArgb)
     }
 
     // ── 3. Full-Screen Today-Only Coaching Path Map & Preview Helpers ────────
