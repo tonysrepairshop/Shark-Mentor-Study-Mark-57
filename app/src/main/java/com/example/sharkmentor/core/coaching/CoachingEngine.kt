@@ -502,13 +502,13 @@ object CoachingEngine {
 
         var cleaned = trimmed
             .replace(Regex("""\([^)]*\)"""), "")
-            .replace(Regex("""\b\d{1,3}\.\s*[Gg]ün\b"""), "")
+            .replace(Regex("""\b\d{1,3}\.\s*[Gg]ün(?=\s|$|[•·|,:;-])"""), "")
             .replace(
                 Regex(
-                    """\b(Video Ders Kampı|Video Kampı|Konu Anlatımı)\b""",
+                    """(?:^|\s)(Video Ders Kampı|Video Kampı|Konu Anlatımı)(?=\s|$|[•·|,:;-])""",
                     RegexOption.IGNORE_CASE
                 ),
-                ""
+                " "
             )
             .replace(Regex("""\s+"""), " ")
             .trim()
