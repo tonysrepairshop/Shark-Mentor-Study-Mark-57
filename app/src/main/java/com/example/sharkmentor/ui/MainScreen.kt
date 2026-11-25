@@ -269,38 +269,8 @@ fun MainScreen(
     // Root SharkMentorTheme is applied once in MainActivity to avoid double theming & redundant SideEffects
     if (showSplash) {
         com.example.sharkmentor.ui.splash.SplashScreen(onTimeout = { showSplash = false })
-    } else if (isVideoInPipMode) {
-        // Top-level Activity-Window PiP Surface (OUTSIDE ModalNavigationDrawer so right drawer/tabs NEVER bleed into PiP!)
-        val liveWv = remember(isVideoInPipMode) { CampVideoPlaybackController.currentWebView() }
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(androidx.compose.ui.graphics.Color.Black),
-            contentAlignment = Alignment.Center
-        ) {
-            if (liveWv != null) {
-                androidx.compose.ui.viewinterop.AndroidView(
-                    factory = {
-                        (liveWv.parent as? android.view.ViewGroup)?.removeView(liveWv)
-                        liveWv.layoutParams = android.view.ViewGroup.LayoutParams(
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        liveWv.allowBackgroundPlayback = true
-                        liveWv.onResume()
-                        liveWv.resumeTimers()
-                        liveWv
-                    },
-                    update = { wv ->
-                        wv.allowBackgroundPlayback = true
-                        wv.onResume()
-                        wv.resumeTimers()
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
     } else {
+        Box(modifier = Modifier.fillMaxSize()) {
         val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = androidx.compose.runtime.rememberCoroutineScope()
 
@@ -843,6 +813,40 @@ fun MainScreen(
                 }
 
                 com.example.sharkmentor.ui.components.WellnessReminderSmartwatchOverlay()
+            }
+        }
+            // Top-level Activity-Window PiP Surface DRAWN ABOVE ModalNavigationDrawer
+            // (keeps NavHost & CampVideoStudyStudioDialog alive underneath while covering 100% of PiP!)
+            if (isVideoInPipMode) {
+                val liveWv = remember(isVideoInPipMode) { CampVideoPlaybackController.currentWebView() }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (liveWv != null) {
+                        androidx.compose.ui.viewinterop.AndroidView(
+                            factory = {
+                                (liveWv.parent as? android.view.ViewGroup)?.removeView(liveWv)
+                                liveWv.layoutParams = android.view.ViewGroup.LayoutParams(
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                    android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                                liveWv.allowBackgroundPlayback = true
+                                liveWv.onResume()
+                                liveWv.resumeTimers()
+                                liveWv
+                            },
+                            update = { wv ->
+                                wv.allowBackgroundPlayback = true
+                                wv.onResume()
+                                wv.resumeTimers()
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
             }
         }
     }
