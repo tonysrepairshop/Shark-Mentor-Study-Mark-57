@@ -250,7 +250,7 @@ object SimulationLabEngine {
                 val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
                 val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid
                 if (!uid.isNullOrBlank()) {
-                    val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context)
+                    val db = runCatching { com.google.firebase.firestore.FirebaseFirestore.getInstance() }.getOrNull()
                     db?.collection("users")?.document(uid)?.collection("simulations")?.document(id)?.delete()
                 }
             }
@@ -268,7 +268,7 @@ object SimulationLabEngine {
         val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
         val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid
             ?: return@withContext Result.failure(IllegalStateException("Bulut yedekleme için önce giriş yapmalısınız."))
-        val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context)
+        val db = runCatching { com.google.firebase.firestore.FirebaseFirestore.getInstance() }.getOrNull()
             ?: return@withContext Result.failure(IllegalStateException("Bulut servisi şu an kullanılamıyor."))
 
         val enableBackup = !target.isCloudSynced
@@ -320,7 +320,7 @@ object SimulationLabEngine {
         runCatching {
             val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
             val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid ?: return@runCatching
-            val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context) ?: return@runCatching
+            val db = runCatching { com.google.firebase.firestore.FirebaseFirestore.getInstance() }.getOrNull() ?: return@runCatching
             val snap = db.collection("users").document(uid).collection("simulations").get().await()
             if (snap.isEmpty) return@runCatching
 

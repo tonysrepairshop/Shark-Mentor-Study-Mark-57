@@ -1180,8 +1180,7 @@ private fun AlbumOrAtmosphericArt(
                         )
                     )
                 }
-                    else -> listOf(Color(0xFF1D4D68), Color(0xFF102A3A))
-    }
+                }
         }
     }
 }
