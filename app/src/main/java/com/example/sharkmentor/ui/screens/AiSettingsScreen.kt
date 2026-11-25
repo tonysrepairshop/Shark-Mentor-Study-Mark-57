@@ -349,7 +349,7 @@ fun AiSettingsScreen(
                         )
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                         AiModuleToggleRow(
-                            title = "Yüzen Video Penceresi (PiP)",
+                            title = "Yüzen Video Penceresi (PiP • BETA)",
                             subtitle = "Video oynarken uygulamadan çıkınca küçük pencerede devam eder",
                             checked = videoPipEnabled,
                             onCheckedChange = { themePrefs.setVideoPipEnabled(it) }

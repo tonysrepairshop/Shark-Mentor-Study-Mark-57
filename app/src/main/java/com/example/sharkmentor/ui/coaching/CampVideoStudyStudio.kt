@@ -239,6 +239,18 @@ fun CampVideoStudyStudioDialog(
 
     val isInPipMode by CampVideoPlaybackController.isInPipMode.collectAsStateWithLifecycle()
 
+    // Exit YouTube native custom fullscreen cleanly when entering PiP so the video surface returns into the WebView
+    LaunchedEffect(isInPipMode) {
+        if (isInPipMode) {
+            if (customFullscreenView != null || customFullscreenCallback != null) {
+                runCatching { customFullscreenCallback?.onCustomViewHidden() }
+                customFullscreenView = null
+                customFullscreenCallback = null
+            }
+            manualFullscreen = false
+        }
+    }
+
     DisposableEffect(Unit) {
         CampVideoPlaybackController.setStudioOpen(true)
         onDispose {
