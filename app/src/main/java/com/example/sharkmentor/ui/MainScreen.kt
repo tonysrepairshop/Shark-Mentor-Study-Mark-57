@@ -16,6 +16,9 @@ import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -269,45 +272,19 @@ fun MainScreen(
         com.example.sharkmentor.ui.splash.SplashScreen(onTimeout = { showSplash = false })
     } else {
         Box(modifier = Modifier.fillMaxSize()) {
-        val drawerState = androidx.compose.material3.rememberDrawerState(initialValue = DrawerValue.Closed)
+        // Deterministic Boolean-controlled Right Drawer (replaces RTL ModalNavigationDrawer which
+        // snapped open on window resizes, notification intents, and returning from Video Activity!)
+        var isRightDrawerOpen by remember { mutableStateOf(false) }
         val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+        LaunchedEffect(currentDestination?.route) {
+            isRightDrawerOpen = false
+        }
 
         val isNotesRoute = currentDestination?.route == Screen.Notes.route
         val activeNoteEditor = isNoteEditorOpen && isNotesRoute
         val isNotesContext = isNotesRoute || activeNoteEditor
-        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-            ModalNavigationDrawer(
-                drawerState = drawerState,
-                gesturesEnabled = drawerState.isOpen,
-                drawerContent = {
-                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-                        ModalDrawerSheet(
-                            modifier = Modifier.fillMaxWidth(0.82f),
-                            drawerContainerColor = MaterialTheme.colorScheme.surface
-                        ) {
-                            ControlPanelContent(
-                                themeMode       = themeMode,
-                                onThemeToggle   = { themePrefs.setThemeMode(it) },
-                                currentPalette  = currentPalette,
-                                onPaletteChange = { themePrefs.setPalette(it) },
-                                onDismiss       = { scope.launch { drawerState.close() } },
-                                currentRoute    = currentDestination?.route,
-                                onNavigate      = { route ->
-                                    scope.launch { drawerState.close() }
-                                    if (currentDestination?.route != route) {
-                                        navController.navigate(route) { launchSingleTop = true }
-                                    }
-                                },
-                                onLogout        = {
-                                    scope.launch { drawerState.close() }
-                                    performCleanLogout()
-                                }
-                            )
-                        }
-                    }
-                }
-            ) {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Box(modifier = Modifier.fillMaxSize()) {
                     val isPaceKeep = currentDestination?.route == Screen.PaceKeep.route
                     val topBarRoutes = remember {
                         setOf(
@@ -445,7 +422,7 @@ fun MainScreen(
                                                 launchSingleTop = true
                                             }
                                         },
-                                        onMenuClick = { scope.launch { drawerState.open() } }
+                                        onMenuClick = { isRightDrawerOpen = true }
                                     )
                                 }
                             },
@@ -540,7 +517,7 @@ fun MainScreen(
                             NotesScreen(
                                 showTopBar = false,
                                 onBackClick = { navController.popBackStack() },
-                                onOpenDrawer = { scope.launch { drawerState.open() } },
+                                onOpenDrawer = { isRightDrawerOpen = true },
                                 importedNote = pendingImportedNote,
                                 onImportedNoteConsumed = {
                                     pendingImportedNote = null
@@ -812,11 +789,61 @@ fun MainScreen(
 
                 com.example.sharkmentor.ui.components.WellnessReminderSmartwatchOverlay()
             }
+
+            // Deterministic Right-Side Slide-Over Control Panel (NEVER opens spontaneously on resume/resize!)
+            if (isRightDrawerOpen) {
+                androidx.activity.compose.BackHandler { isRightDrawerOpen = false }
+            }
+            AnimatedVisibility(
+                visible = isRightDrawerOpen,
+                enter = fadeIn(androidx.compose.animation.core.tween(180)),
+                exit = fadeOut(androidx.compose.animation.core.tween(160))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.44f))
+                        .clickable { isRightDrawerOpen = false }
+                )
+            }
+            AnimatedVisibility(
+                visible = isRightDrawerOpen,
+                enter = slideInHorizontally(androidx.compose.animation.core.tween(220)) { it },
+                exit = slideOutHorizontally(androidx.compose.animation.core.tween(190)) { it },
+                modifier = Modifier.align(Alignment.CenterEnd)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .widthIn(max = 360.dp)
+                        .fillMaxWidth(0.82f)
+                        .fillMaxHeight(),
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
+                    shadowElevation = 12.dp
+                ) {
+                    ControlPanelContent(
+                        themeMode       = themeMode,
+                        onThemeToggle   = { themePrefs.setThemeMode(it) },
+                        currentPalette  = currentPalette,
+                        onPaletteChange = { themePrefs.setPalette(it) },
+                        onDismiss       = { isRightDrawerOpen = false },
+                        currentRoute    = currentDestination?.route,
+                        onNavigate      = { route ->
+                            isRightDrawerOpen = false
+                            if (currentDestination?.route != route) {
+                                navController.navigate(route) { launchSingleTop = true }
+                            }
+                        },
+                        onLogout        = {
+                            isRightDrawerOpen = false
+                            performCleanLogout()
+                        }
+                    )
+                }
+            }
         }
         }
     }
-}
-}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
