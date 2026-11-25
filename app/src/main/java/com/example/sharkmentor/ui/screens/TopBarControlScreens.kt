@@ -174,11 +174,17 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         SectionContainer(title = "İçerik Kaynağı") {
-            TopBarTextSource.entries.forEachIndexed { index, source ->
+            val visibleSources = listOf(TopBarTextSource.AI_SUGGESTIONS, TopBarTextSource.CUSTOM_TEXTS)
+            visibleSources.forEachIndexed { index, source ->
                 if (index > 0) SectionDivider()
+                val effectiveSelected = if (settings.textSource == TopBarTextSource.AI_QUOTES) {
+                    source == TopBarTextSource.CUSTOM_TEXTS
+                } else {
+                    settings.textSource == source
+                }
                 RadioOptionRow(
                     label = source.label,
-                    selected = settings.textSource == source,
+                    selected = effectiveSelected,
                     onClick = { prefs.setTextSource(source) }
                 )
             }
@@ -226,13 +232,35 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
             }
         }
 
-        if (settings.textSource == TopBarTextSource.CUSTOM_TEXTS) {
+        if (settings.textSource == TopBarTextSource.CUSTOM_TEXTS || settings.textSource == TopBarTextSource.AI_QUOTES) {
             SectionContainer(title = "Kendi Metinlerim") {
                 val texts = settings.customTexts.ifEmpty { listOf("") }
                 Column(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    Button(
+                        onClick = {
+                            quoteError = null
+                            showQuoteDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("AI ile Doldur (Film / Dizi / Kişi)")
+                    }
+                    if (!quoteError.isNullOrBlank()) {
+                        Text(
+                            text = quoteError.orEmpty(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     texts.forEachIndexed { index, value ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -284,74 +312,6 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Metin Ekle")
-                        }
-                    }
-                }
-            }
-        }
-
-        if (settings.textSource == TopBarTextSource.AI_QUOTES) {
-            SectionContainer(title = "AI Motivasyon") {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            quoteError = null
-                            showQuoteDialog = true
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.AutoAwesome,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("AI ile Söz Oluştur")
-                    }
-
-                    if (isLoadingQuotes) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = "Motivasyon sözleri hazırlanıyor...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    if (!quoteError.isNullOrBlank()) {
-                        Text(
-                            text = quoteError.orEmpty(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-
-                    if (settings.aiQuotes.isNotEmpty()) {
-                        if (settings.aiQuotesTopic.isNotBlank()) {
-                            Text(
-                                text = "Konu: ${settings.aiQuotesTopic}",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            settings.aiQuotes.forEachIndexed { idx, quote ->
-                                Text(
-                                    text = "${idx + 1}. $quote",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
                         }
                     }
                 }
@@ -489,7 +449,11 @@ fun TopBarTextSettingsContent(prefs: TopBarPreferences) {
                         scope.launch {
                             val result = prefs.fetchMotivationalQuotes(query)
                             isLoadingQuotes = false
-                            result.onSuccess {
+                            result.onSuccess { generatedQuotes ->
+                                if (generatedQuotes.isNotEmpty()) {
+                                    prefs.setCustomTexts(generatedQuotes)
+                                    prefs.setTextSource(TopBarTextSource.CUSTOM_TEXTS)
+                                }
                                 showQuoteDialog = false
                             }.onFailure { err ->
                                 quoteError = err.localizedMessage ?: "Sözler alınamadı."

@@ -710,6 +710,7 @@ class SyncWorker(
         try {
             val activeCount = com.example.sharkmentor.data.sync.TopicCloudSyncManager
                 .pullAndMergeFromCloud(applicationContext, forceServer = forceServer)
+            runCatching { com.example.sharkmentor.core.simulation.SimulationLabEngine.pullAndMergeCloudSimulations(applicationContext) }
             Log.d(syncTag, "pullRemoteTopics via TopicCloudSyncManager finished (activeLocal=$activeCount, forceServer=$forceServer)")
         } catch (e: Exception) {
             Log.e(syncTag, "Error in pullRemoteTopics: ${e.message}", e)

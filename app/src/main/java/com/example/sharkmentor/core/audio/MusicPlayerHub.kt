@@ -29,7 +29,19 @@ enum class MusicPlayerSkin(val id: String, val displayTitle: String) {
     MODERN_VINYL("modern_vinyl", "Modern Vinyl"),
     CLASSIC_VINYL("classic_vinyl", "Classic Vinyl"),
     CD("cd", "CD"),
-    CASSETTE("cassette", "Cassette");
+    CASSETTE("cassette", "Cassette"),
+    OCEAN("ocean", "Ocean"),
+    COFFEE("coffee", "Coffee"),
+    CHARCOAL("charcoal", "Charcoal"),
+    BLUEBERRY("blueberry", "Blueberry"),
+    AUTUMN("autumn", "Autumn"),
+    SAKURA("sakura", "Sakura"),
+    PAPER("paper", "Paper"),
+    OBSIDIAN("obsidian", "Obsidian"),
+    FOREST("forest", "Forest"),
+    STORM("storm", "Storm"),
+    DREAM("dream", "Dream"),
+    CHRISTMAS("christmas", "Christmas");
 
     companion object {
         fun fromId(raw: String?): MusicPlayerSkin =

@@ -112,8 +112,6 @@
             android:exported="true"
             android:enabled="true"
             android:launchMode="singleTop"
-            android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
             android:icon="@mipmap/ic_launcher"
             android:roundIcon="@mipmap/ic_launcher_round"
             android:label="@string/app_name"
@@ -317,6 +315,17 @@
             android:name=".core.service.ZenAudioService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <!-- ── Standalone Camp Video Study Studio & Native 16:9 PiP Activity ── -->
+        <activity
+            android:name=".ui.coaching.CampVideoPlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.example.sharkmentor.video_pip"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation"
+            android:theme="@style/Theme.SharkMentor"
+            android:windowSoftInputMode="adjustResize" />
 
         <!-- ── Camp Video Background & Lock-Screen Media Service ────────── -->
         <service

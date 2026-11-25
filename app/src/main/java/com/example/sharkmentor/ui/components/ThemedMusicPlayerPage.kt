@@ -193,11 +193,43 @@ fun ThemedMusicPlayerPage(
                 )
             )
             MusicPlayerSkin.CASSETTE -> Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF353538),
-                    Color(0xFF252528),
-                    Color(0xFF1B1B1E)
-                )
+                colors = listOf(Color(0xFF353538), Color(0xFF252528), Color(0xFF1B1B1E))
+            )
+            MusicPlayerSkin.OCEAN -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF0E6C85), Color(0xFF0A4B63), Color(0xFF072B3C))
+            )
+            MusicPlayerSkin.COFFEE -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF8C583A), Color(0xFF633A22), Color(0xFF3B2012))
+            )
+            MusicPlayerSkin.CHARCOAL -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF2B2E36), Color(0xFF1D1F25), Color(0xFF131418))
+            )
+            MusicPlayerSkin.BLUEBERRY -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF432382), Color(0xFF2B145A), Color(0xFF1A0B3A))
+            )
+            MusicPlayerSkin.AUTUMN -> Brush.verticalGradient(
+                colors = listOf(Color(0xFFC46B2B), Color(0xFF8E411A), Color(0xFF5A250E))
+            )
+            MusicPlayerSkin.SAKURA -> Brush.verticalGradient(
+                colors = listOf(Color(0xFFF6C2CF), Color(0xFFE79DB1), Color(0xFFD27D95))
+            )
+            MusicPlayerSkin.PAPER -> Brush.verticalGradient(
+                colors = listOf(Color(0xFFE9E2D2), Color(0xFFD5CBB7), Color(0xFFBFAF96))
+            )
+            MusicPlayerSkin.OBSIDIAN -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF231B33), Color(0xFF161121), Color(0xFF0C0912))
+            )
+            MusicPlayerSkin.FOREST -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF234D2C), Color(0xFF17361E), Color(0xFF0E2212))
+            )
+            MusicPlayerSkin.STORM -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF333C52), Color(0xFF22283A), Color(0xFF151926))
+            )
+            MusicPlayerSkin.DREAM -> Brush.verticalGradient(
+                colors = listOf(Color(0xFFE7B6CE), Color(0xFFC99ED6), Color(0xFF9F7EC4))
+            )
+            MusicPlayerSkin.CHRISTMAS -> Brush.verticalGradient(
+                colors = listOf(Color(0xFF1F4D37), Color(0xFF153827), Color(0xFF0D251A))
             )
         }
     }
@@ -298,6 +330,15 @@ fun ThemedMusicPlayerPage(
                                 spinDegreesProvider = { spinDegrees },
                                 modifier = stageModifier
                             )
+                            else -> ThemedSignaturePlayerStage(
+                                skin = selectedSkin,
+                                artwork = playbackState.artwork,
+                                spinDegreesProvider = { spinDegrees },
+                                tonearmSwingDeg = tonearmSwingDeg,
+                                isPlaying = playbackState.isPlaying,
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
+                                modifier = stageModifier
+                            )
                         }
                     }
 
@@ -330,37 +371,33 @@ fun ThemedMusicPlayerPage(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            IconButton(
-                                onClick = {
-                                    if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
-                                        MusicPlayerHub.openActiveSourceApp(context)
-                                    } else {
-                                        showSoundQueueSheet = true
-                                    }
-                                },
-                                modifier = Modifier.size(if (ultraTight) 28.dp else 34.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
-                                        Icons.AutoMirrored.Filled.OpenInNew
-                                    } else {
-                                        Icons.Outlined.StarOutline
-                                    },
-                                    contentDescription = "Kaynağı Aç",
-                                    tint = Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(if (ultraTight) 16.dp else 19.dp)
-                                )
+                            if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA) {
+                                IconButton(
+                                    onClick = { MusicPlayerHub.openActiveSourceApp(context) },
+                                    modifier = Modifier.size(if (ultraTight) 28.dp else 34.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                        contentDescription = "Kaynağı Aç",
+                                        tint = Color.White.copy(alpha = 0.85f),
+                                        modifier = Modifier.size(if (ultraTight) 16.dp else 19.dp)
+                                    )
+                                }
                             }
                         }
 
-                        if (!ultraTight && playbackState.subtitleLine.isNotBlank()) {
+                        if (!ultraTight) {
+                            val linkText = playbackState.subtitleLine.ifBlank {
+                                if (playbackState.hasActiveSession) playbackState.sourceLabel else "Çalma listesine bağlan →"
+                            }
                             Text(
-                                text = playbackState.subtitleLine,
+                                text = linkText,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = Color.White.copy(alpha = 0.78f),
+                                color = Color.White.copy(alpha = 0.84f),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { showSoundQueueSheet = true }
                             )
                         }
 
@@ -1143,7 +1180,8 @@ private fun AlbumOrAtmosphericArt(
                         )
                     )
                 }
-            }
+                    else -> listOf(Color(0xFF1D4D68), Color(0xFF102A3A))
+    }
         }
     }
 }
@@ -1413,6 +1451,313 @@ fun DraggableMiniMusicPlayerWindow(
                         .fillMaxWidth()
                         .weight(1f)
                 )
+            }
+        }
+    }
+}
+
+
+/**
+ * 12 signature animated & interactive theme-matched player stages (Ocean, Coffee, Charcoal,
+ * Blueberry, Autumn, Sakura, Paper, Obsidian, Forest, Storm, Dream, Christmas).
+ * Powered purely by lightweight GPU Canvas + VSync spinDegrees with tap-to-play/pause interaction.
+ */
+@Composable
+private fun ThemedSignaturePlayerStage(
+    skin: MusicPlayerSkin,
+    artwork: Bitmap?,
+    spinDegreesProvider: () -> Float,
+    tonearmSwingDeg: Float,
+    isPlaying: Boolean,
+    onTogglePlay: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isVinylSkin = skin in setOf(
+        MusicPlayerSkin.CHARCOAL,
+        MusicPlayerSkin.BLUEBERRY,
+        MusicPlayerSkin.AUTUMN,
+        MusicPlayerSkin.SAKURA,
+        MusicPlayerSkin.OBSIDIAN,
+        MusicPlayerSkin.DREAM
+    )
+    val isCassetteSkin = skin in setOf(
+        MusicPlayerSkin.COFFEE,
+        MusicPlayerSkin.PAPER,
+        MusicPlayerSkin.CHRISTMAS
+    )
+
+    BoxWithConstraints(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable { onTogglePlay() },
+        contentAlignment = Alignment.Center
+    ) {
+        val wDp = maxWidth
+        val hDp = maxHeight
+
+        // 1. Base Deck Frame (Vinyl / Cassette / Atmospheric CD)
+        when {
+            isVinylSkin -> {
+                val discTint = when (skin) {
+                    MusicPlayerSkin.BLUEBERRY -> Color(0xFF5D34B6)
+                    MusicPlayerSkin.AUTUMN -> Color(0xFF9C4618)
+                    MusicPlayerSkin.SAKURA -> Color(0xFFF3B4C5)
+                    MusicPlayerSkin.DREAM -> Color(0xFFD5A6DA)
+                    MusicPlayerSkin.OBSIDIAN -> Color(0xFF191326)
+                    else -> Color(0xFF1A1C22) // Charcoal
+                }
+                val grooveTint = when (skin) {
+                    MusicPlayerSkin.SAKURA, MusicPlayerSkin.DREAM -> Color.White.copy(alpha = 0.28f)
+                    MusicPlayerSkin.BLUEBERRY -> Color(0xFFC4B5FD).copy(alpha = 0.28f)
+                    MusicPlayerSkin.AUTUMN -> Color(0xFFFDE68A).copy(alpha = 0.26f)
+                    MusicPlayerSkin.OBSIDIAN -> Color(0xFFA855F7).copy(alpha = 0.32f)
+                    else -> Color(0xFFFB923C).copy(alpha = 0.26f) // Charcoal ember glow
+                }
+
+                // Spinning Vinyl Platter
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize(0.86f)
+                        .graphicsLayer { rotationZ = spinDegreesProvider() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val r = size.minDimension / 2f
+                        drawCircle(color = discTint, radius = r)
+                        for (i in 1..6) {
+                            drawCircle(
+                                color = grooveTint,
+                                radius = r * (0.42f + i * 0.085f),
+                                style = Stroke(width = 1.1.dp.toPx())
+                            )
+                        }
+                        if (skin == MusicPlayerSkin.OBSIDIAN) {
+                            // Crystalline purple facets
+                            for (k in 0 until 8) {
+                                val a = (k * 45f) * (PI.toFloat() / 180f)
+                                val p1 = Offset(center.x + cos(a) * r * 0.42f, center.y + sin(a) * r * 0.42f)
+                                val p2 = Offset(center.x + cos(a + 0.35f) * r * 0.92f, center.y + sin(a + 0.35f) * r * 0.92f)
+                                drawLine(Color(0xFF9333EA).copy(alpha = 0.45f), p1, p2, strokeWidth = 2.dp.toPx())
+                            }
+                        } else if (skin == MusicPlayerSkin.CHARCOAL) {
+                            // Glowing ember core
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(Color(0xFFFF6B00), Color(0xFFB91C1C), Color.Transparent),
+                                    center = center,
+                                    radius = r * 0.48f
+                                ),
+                                radius = r * 0.48f
+                            )
+                        }
+                    }
+                    // Center Art Label
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize(0.42f)
+                            .clip(CircleShape)
+                    ) {
+                        AlbumOrAtmosphericArt(artwork = artwork, skin = skin, modifier = Modifier.fillMaxSize())
+                    }
+                }
+
+                // Swinging Interactive Tonearm (on Blueberry, Autumn, Sakura, Dream)
+                if (skin in setOf(MusicPlayerSkin.BLUEBERRY, MusicPlayerSkin.AUTUMN, MusicPlayerSkin.SAKURA, MusicPlayerSkin.DREAM)) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                transformOrigin = TransformOrigin(0.86f, 0.14f)
+                                rotationZ = tonearmSwingDeg
+                            }
+                    ) {
+                        val pivot = Offset(size.width * 0.86f, size.height * 0.14f)
+                        val tip = Offset(size.width * 0.64f, size.height * 0.56f)
+                        val armColor = if (skin == MusicPlayerSkin.SAKURA || skin == MusicPlayerSkin.DREAM) Color.White else Color(0xFFE2E8F0)
+                        drawCircle(color = armColor.copy(alpha = 0.35f), radius = 12.dp.toPx(), center = pivot)
+                        drawCircle(color = armColor, radius = 6.dp.toPx(), center = pivot)
+                        drawLine(color = armColor, start = pivot, end = tip, strokeWidth = 3.2.dp.toPx(), cap = StrokeCap.Round)
+                        drawCircle(color = armColor, radius = 4.5.dp.toPx(), center = tip)
+                    }
+                }
+            }
+
+            isCassetteSkin -> {
+                val shellColor = when (skin) {
+                    MusicPlayerSkin.COFFEE -> Color(0xFF7B4A2D)
+                    MusicPlayerSkin.PAPER -> Color(0xFFDFD7C5)
+                    else -> Color(0xFF1D4A35) // Christmas
+                }
+                val windowColor = when (skin) {
+                    MusicPlayerSkin.COFFEE -> Color(0xFFF3E2C8)
+                    MusicPlayerSkin.PAPER -> Color(0xFFF7F2E7)
+                    else -> Color(0xFF102A1E)
+                }
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = shellColor,
+                    border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.22f)),
+                    modifier = Modifier.fillMaxSize(0.92f)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        val reelSize = (minOf(wDp, hDp) * 0.21f).coerceIn(22.dp, 46.dp)
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .padding(top = 16.dp, start = 14.dp, end = 14.dp)
+                                .fillMaxWidth()
+                                .fillMaxSize(0.64f)
+                                .clip(CassetteWindowShape)
+                                .background(windowColor),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (artwork != null) {
+                                AlbumOrAtmosphericArt(artwork = artwork, skin = skin, modifier = Modifier.fillMaxSize())
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(reelSize))
+                                CassetteTapeReel(spinDegreesProvider = spinDegreesProvider, modifier = Modifier.size(reelSize))
+                            }
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                // Ocean / Forest / Storm: Atmospheric Square CD / Album Stage
+                val frameBg = when (skin) {
+                    MusicPlayerSkin.OCEAN -> Color(0xFFD8F3FA)
+                    MusicPlayerSkin.FOREST -> Color(0xFFCCE2BE)
+                    else -> Color(0xFF1E2538) // Storm
+                }
+                Surface(
+                    shape = RoundedCornerShape(22.dp),
+                    color = frameBg.copy(alpha = 0.88f),
+                    border = BorderStroke(1.5.dp, Color.White.copy(alpha = 0.28f)),
+                    modifier = Modifier.fillMaxSize(0.84f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                if (skin == MusicPlayerSkin.OCEAN) rotationZ = spinDegreesProvider()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (artwork != null) {
+                            AlbumOrAtmosphericArt(artwork = artwork, skin = skin, modifier = Modifier.fillMaxSize())
+                        } else {
+                            Canvas(modifier = Modifier.fillMaxSize(0.55f)) {
+                                val r = size.minDimension / 2f
+                                val cColor = if (skin == MusicPlayerSkin.STORM) Color(0xFF93C5FD) else Color(0xFF0E6C85).copy(alpha = 0.55f)
+                                drawCircle(color = cColor, radius = r, style = Stroke(width = 6.dp.toPx()))
+                                drawCircle(color = cColor, radius = r * 0.24f)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Live Atmospheric Particle Overlay (VSync animated via spinDegreesProvider, zero extra coroutines!)
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val phase = (spinDegreesProvider() / 360f)
+            val w = size.width
+            val h = size.height
+            when (skin) {
+                MusicPlayerSkin.OCEAN -> {
+                    for (i in 0 until 9) {
+                        val bx = ((i * 0.13f + 0.06f) % 0.92f) * w
+                        val by = (1f - ((phase + i * 0.14f) % 1f)) * h
+                        drawCircle(Color.White.copy(alpha = 0.35f), radius = (3f + (i % 3) * 2f).dp.toPx(), center = Offset(bx, by), style = Stroke(1.2.dp.toPx()))
+                    }
+                }
+                MusicPlayerSkin.COFFEE -> {
+                    // Rising steam wisps
+                    for (i in 0 until 4) {
+                        val sx = w * (0.28f + i * 0.15f)
+                        val sy = h * (0.42f - ((phase + i * 0.25f) % 0.35f))
+                        drawCircle(Color.White.copy(alpha = 0.22f), radius = 10.dp.toPx(), center = Offset(sx, sy))
+                    }
+                }
+                MusicPlayerSkin.CHARCOAL -> {
+                    // Rising glowing embers
+                    for (i in 0 until 10) {
+                        val ex = w * (0.2f + ((i * 0.17f) % 0.6f))
+                        val ey = (1f - ((phase * 1.4f + i * 0.11f) % 1f)) * h
+                        drawCircle(Color(0xFFFB923C).copy(alpha = 0.72f), radius = 2.4.dp.toPx(), center = Offset(ex, ey))
+                    }
+                }
+                MusicPlayerSkin.AUTUMN -> {
+                    // Drifting autumn leaves
+                    for (i in 0 until 8) {
+                        val lx = ((i * 0.19f + phase * 0.4f) % 1f) * w
+                        val ly = ((phase + i * 0.15f) % 1f) * h
+                        drawCircle(Color(0xFFF59E0B).copy(alpha = 0.65f), radius = 4.dp.toPx(), center = Offset(lx, ly))
+                    }
+                }
+                MusicPlayerSkin.SAKURA -> {
+                    // Drifting pink cherry-blossom petals
+                    for (i in 0 until 10) {
+                        val px = ((i * 0.14f + phase * 0.35f) % 1f) * w
+                        val py = ((phase + i * 0.12f) % 1f) * h
+                        drawCircle(Color.White.copy(alpha = 0.72f), radius = 3.2.dp.toPx(), center = Offset(px, py))
+                    }
+                }
+                MusicPlayerSkin.FOREST -> {
+                    // Glowing fireflies
+                    for (i in 0 until 9) {
+                        val fx = w * (0.1f + ((i * 0.11f + sin((phase * 6.28f + i).toDouble()).toFloat() * 0.05f).coerceIn(0f, 0.85f)))
+                        val fy = h * (0.12f + ((i * 0.13f + cos((phase * 6.28f + i).toDouble()).toFloat() * 0.05f).coerceIn(0f, 0.8f)))
+                        drawCircle(Color(0xFFBEF264).copy(alpha = 0.78f), radius = 3.dp.toPx(), center = Offset(fx, fy))
+                    }
+                }
+                MusicPlayerSkin.STORM -> {
+                    // Rain streaks + periodic lightning flash
+                    for (i in 0 until 12) {
+                        val rx = ((i * 0.09f + 0.04f) % 0.96f) * w
+                        val ry = ((phase * 2.5f + i * 0.13f) % 1f) * h
+                        drawLine(Color(0xFF93C5FD).copy(alpha = 0.38f), Offset(rx, ry), Offset(rx - 4f, ry + 14f), strokeWidth = 1.2.dp.toPx())
+                    }
+                    if (isPlaying && ((spinDegreesProvider().toInt() / 45) % 3 == 0)) {
+                        val bolt = Path().apply {
+                            moveTo(w * 0.54f, h * 0.14f)
+                            lineTo(w * 0.44f, h * 0.46f)
+                            lineTo(w * 0.53f, h * 0.48f)
+                            lineTo(w * 0.46f, h * 0.78f)
+                        }
+                        drawPath(bolt, color = Color(0xFFE0E7FF).copy(alpha = 0.85f), style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round))
+                    }
+                }
+                MusicPlayerSkin.CHRISTMAS -> {
+                    // Twinkling warm fairy lights at top + falling snowflakes
+                    for (i in 0 until 7) {
+                        val lx = w * (0.12f + i * 0.125f)
+                        val ly = h * (0.09f + (if (i % 2 == 0) 0.03f else 0f))
+                        val glowColor = if (i % 2 == 0) Color(0xFFFDE047) else Color(0xFFF87171)
+                        drawCircle(glowColor.copy(alpha = 0.85f), radius = 3.4.dp.toPx(), center = Offset(lx, ly))
+                    }
+                    for (i in 0 until 10) {
+                        val sx = ((i * 0.12f + 0.05f) % 0.95f) * w
+                        val sy = ((phase + i * 0.11f) % 1f) * h
+                        drawCircle(Color.White.copy(alpha = 0.72f), radius = 2.2.dp.toPx(), center = Offset(sx, sy))
+                    }
+                }
+                MusicPlayerSkin.DREAM -> {
+                    // Twinkling stars
+                    for (i in 0 until 8) {
+                        val sx = w * (0.12f + (i * 0.11f) % 0.78f)
+                        val sy = h * (0.12f + (i * 0.19f) % 0.72f)
+                        drawCircle(Color.White.copy(alpha = 0.65f), radius = 2.2.dp.toPx(), center = Offset(sx, sy))
+                    }
+                }
+                else -> Unit
             }
         }
     }

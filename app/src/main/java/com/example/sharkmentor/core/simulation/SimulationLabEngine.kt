@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -22,6 +23,7 @@ data class InteractiveSimulation(
     val description: String,
     val htmlContent: String,
     val isBuiltIn: Boolean = false,
+    val isCloudSynced: Boolean = false,
     val createdAtMillis: Long = System.currentTimeMillis()
 )
 
@@ -101,6 +103,22 @@ fun sanitizeAndValidateSimulationHtml(rawResponse: String): String? {
 object SimulationLabEngine {
 
     private const val STORAGE_FILE = "shark_simulations_v1.json"
+    const val MAX_CLOUD_SIMULATIONS = 5
+
+    fun inferSubjectFromTopic(topic: String, hint: String = ""): String {
+        val h = hint.trim()
+        if (h.isNotBlank() && !h.equals("Fen Bilimleri", ignoreCase = true)) return h
+        val lower = topic.lowercase(Locale("tr", "TR"))
+        return when {
+            listOf("kalp", "damar", "kan", "böbrek", "nefron", "sinir", "nöron", "akciğer", "kas", "ekg", "tansiyon", "hormon", "anatomi", "tıp", "beyin").any { it in lower } -> "Tıp / Biyoloji"
+            listOf("hücre", "mitoz", "mayoz", "dna", "rna", "enzim", "fotosentez", "solunum", "genetik", "ekosistem", "biyoloji", "organel", "protein", "osmoz").any { it in lower } -> "Biyoloji"
+            listOf("asit", "baz", "titrasyon", "ph", "mol", "atom", "orbital", "periyodik", "tepkime", "denge", "gaz", "çözelti", "pil", "elektroliz", "kimya", "molekül").any { it in lower } -> "Kimya"
+            listOf("atış", "ivme", "kuvvet", "newton", "enerji", "momentum", "dalga", "optik", "mercek", "ayna", "ohm", "devre", "elektrik", "manyetik", "basınç", "kaldırma", "tork", "sarkaç", "fizik", "vektör", "hız").any { it in lower } -> "Fizik"
+            listOf("türev", "integral", "parabol", "trigonometri", "fonksiyon", "limit", "olasılık", "geometri", "çember", "üçgen", "logaritma", "matris", "matematik").any { it in lower } -> "Matematik"
+            listOf("deprem", "iklim", "harita", "mevsim", "dünya", "ay", "güneş", "gezegen", "yörünge", "coğrafya", "astronomi").any { it in lower } -> "Coğrafya / Astronomi"
+            else -> ""
+        }
+    }
     private val gson = Gson()
     private val lock = Any()
 
@@ -224,14 +242,118 @@ object SimulationLabEngine {
 
     fun deleteSavedSimulation(context: Context, id: String) {
         ensureLoaded(context)
+        val removed = _savedSimulations.value.firstOrNull { it.id == id }
         _savedSimulations.value = _savedSimulations.value.filterNot { it.id == id }
         persist(context)
+        if (removed?.isCloudSynced == true) {
+            runCatching {
+                val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
+                val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid
+                if (!uid.isNullOrBlank()) {
+                    val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context)
+                    db?.collection("users")?.document(uid)?.collection("simulations")?.document(id)?.delete()
+                }
+            }
+        }
+    }
+
+    /**
+     * Toggles Firebase cloud backup for a saved simulation under `users/{uid}/simulations/{simId}`
+     * (uses existing user subcollection rule — zero changes to firestore.rules!). Enforces max 5 selected.
+     */
+    suspend fun toggleCloudBackup(context: Context, simId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        ensureLoaded(context)
+        val target = _savedSimulations.value.firstOrNull { it.id == simId }
+            ?: return@withContext Result.failure(IllegalStateException("Simülasyon bulunamadı."))
+        val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
+        val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid
+            ?: return@withContext Result.failure(IllegalStateException("Bulut yedekleme için önce giriş yapmalısınız."))
+        val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context)
+            ?: return@withContext Result.failure(IllegalStateException("Bulut servisi şu an kullanılamıyor."))
+
+        val enableBackup = !target.isCloudSynced
+        if (enableBackup) {
+            val currentSyncedCount = _savedSimulations.value.count { it.isCloudSynced }
+            if (currentSyncedCount >= MAX_CLOUD_SIMULATIONS) {
+                return@withContext Result.failure(
+                    IllegalStateException("En fazla $MAX_CLOUD_SIMULATIONS simülasyonu buluta yedekleyebilirsiniz. Yeni seçim için mevcut bir yedeği kaldırın.")
+                )
+            }
+            val payload = hashMapOf(
+                "id" to target.id,
+                "title" to target.title,
+                "subject" to target.subject,
+                "description" to target.description,
+                "htmlContent" to target.htmlContent,
+                "createdAtMillis" to target.createdAtMillis,
+                "updatedAtMillis" to System.currentTimeMillis()
+            )
+            runCatching {
+                db.collection("users").document(uid)
+                    .collection("simulations").document(target.id)
+                    .set(payload, com.google.firebase.firestore.SetOptions.merge())
+                    .await()
+            }.getOrElse { err ->
+                return@withContext Result.failure(err)
+            }
+        } else {
+            runCatching {
+                db.collection("users").document(uid)
+                    .collection("simulations").document(target.id)
+                    .delete()
+                    .await()
+            }
+        }
+
+        _savedSimulations.value = _savedSimulations.value.map {
+            if (it.id == simId) it.copy(isCloudSynced = enableBackup) else it
+        }
+        persist(context)
+        Result.success(enableBackup)
+    }
+
+    /**
+     * Pulls cloud-backed simulations (up to 5) from `users/{uid}/simulations` and merges into local storage.
+     */
+    suspend fun pullAndMergeCloudSimulations(context: Context) = withContext(Dispatchers.IO) {
+        ensureLoaded(context)
+        runCatching {
+            val auth = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirebaseAuth(context)
+            val uid = com.example.sharkmentor.core.util.GoogleServicesHelper.getCurrentUser(auth, context)?.uid ?: return@runCatching
+            val db = com.example.sharkmentor.core.util.GoogleServicesHelper.getFirestore(context) ?: return@runCatching
+            val snap = db.collection("users").document(uid).collection("simulations").get().await()
+            if (snap.isEmpty) return@runCatching
+
+            val cloudSims = snap.documents.mapNotNull { doc ->
+                val id = doc.getString("id")?.takeIf { it.isNotBlank() } ?: doc.id
+                val title = doc.getString("title")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val html = doc.getString("htmlContent")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                InteractiveSimulation(
+                    id = id,
+                    title = title,
+                    subject = doc.getString("subject").orEmpty(),
+                    description = doc.getString("description").orEmpty(),
+                    htmlContent = html,
+                    isBuiltIn = false,
+                    isCloudSynced = true,
+                    createdAtMillis = doc.getLong("createdAtMillis") ?: System.currentTimeMillis()
+                )
+            }.take(MAX_CLOUD_SIMULATIONS)
+
+            if (cloudSims.isNotEmpty()) {
+                val mergedById = LinkedHashMap<String, InteractiveSimulation>()
+                _savedSimulations.value.forEach { mergedById[it.id] = it }
+                cloudSims.forEach { cs -> mergedById[cs.id] = cs }
+                _savedSimulations.value = mergedById.values.sortedByDescending { it.createdAtMillis }.take(30)
+                persist(context)
+            }
+        }
     }
 
     suspend fun generateSimulation(
         context: Context,
         topicPrompt: String,
-        subjectHint: String = "Fen Bilimleri",
+        subjectHint: String = "",
         saveImmediately: Boolean = false
     ): Result<InteractiveSimulation> = withContext(Dispatchers.IO) {
         val cleanTopic = topicPrompt.trim()
@@ -252,7 +374,7 @@ KESİN KURALLAR:
 """.trimIndent()
 
         val userPrompt = """
-Ders / Alan: $subjectHint
+Ders / Alan: ${inferSubjectFromTopic(cleanTopic, subjectHint).ifBlank { "Otomatik Belirle" }}
 Konu: $cleanTopic
 
 Bu konuyu öğrencinin dokunarak ve parametreleri değiştirerek sezgisel şekilde kavrayabileceği, görsel açıdan zengin, net Türkçe etiketli bir interaktif HTML5 Canvas simülasyonu oluştur.
@@ -300,7 +422,7 @@ Bu konuyu öğrencinin dokunarak ve parametreleri değiştirerek sezgisel şekil
         val sim = InteractiveSimulation(
             id = id,
             title = cleanTopic.take(64),
-            subject = subjectHint,
+            subject = inferSubjectFromTopic(cleanTopic, subjectHint),
             description = "Yapay zeka tarafından üretilen interaktif simülasyon",
             htmlContent = validatedHtml,
             isBuiltIn = false,

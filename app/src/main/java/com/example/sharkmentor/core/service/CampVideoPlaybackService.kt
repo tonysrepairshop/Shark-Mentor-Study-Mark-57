@@ -646,7 +646,7 @@ class CampVideoPlaybackService : Service() {
     }
 
     private fun buildMediaNotification(st: CampVideoPlaybackState): Notification {
-        val openIntent = Intent(this, MainActivity::class.java).apply {
+        val openIntent = Intent(this, com.example.sharkmentor.ui.coaching.CampVideoPlayerActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("EXTRA_RESTORE_CAMP_VIDEO", true)
         }

@@ -40,6 +40,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material3.AlertDialog
@@ -654,6 +656,35 @@ fun NotesScreen(
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     IconButton(
                                                         onClick = {
+                                                            coroutineScope.launch {
+                                                                val res = com.example.sharkmentor.core.simulation.SimulationLabEngine
+                                                                    .toggleCloudBackup(context, sim.id)
+                                                                res.onSuccess { backedUp ->
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        if (backedUp) "Buluta yedeklendi" else "Bulut yedeğinden çıkarıldı",
+                                                                        Toast.LENGTH_SHORT
+                                                                    ).show()
+                                                                }.onFailure { err ->
+                                                                    Toast.makeText(
+                                                                        context,
+                                                                        err.message ?: "Bulut yedekleme başarısız",
+                                                                        Toast.LENGTH_LONG
+                                                                    ).show()
+                                                                }
+                                                            }
+                                                        },
+                                                        modifier = Modifier.size(26.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (sim.isCloudSynced) Icons.Default.CloudDone else Icons.Default.CloudUpload,
+                                                            contentDescription = if (sim.isCloudSynced) "Bulutta Yedekli" else "Buluta Yedekle",
+                                                            tint = if (sim.isCloudSynced) primaryColor else textMutedColor,
+                                                            modifier = Modifier.size(15.dp)
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = {
                                                             simToRename = sim
                                                             simRenameText = sim.title
                                                         },
@@ -688,7 +719,7 @@ fun NotesScreen(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "${sim.subject} • İnteraktif Simülasyon (BETA)",
+                                                text = if (sim.subject.isNotBlank()) "${sim.subject} • Simülasyon (BETA)" else "İnteraktif Simülasyon (BETA)",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = textMutedColor,
                                                 maxLines = 1,

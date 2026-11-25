@@ -185,6 +185,37 @@ fun CampVideoStudyStudioDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    LaunchedEffect(initialEpisode.dayNumber, initialEpisode.videoId, campTitle) {
+        CampVideoPlayerBridge.launch(
+            context = context,
+            request = CampVideoPlayerBridge.LaunchRequest(
+                campTitle = campTitle,
+                subject = subject,
+                initialEpisode = initialEpisode,
+                allEpisodes = allEpisodes,
+                resourceId = resourceId,
+                onEpisodeChanged = onEpisodeChanged,
+                onDeleteEpisode = onDeleteEpisode,
+                onMarkCompleted = onMarkCompleted
+            )
+        )
+        onDismiss()
+    }
+}
+
+@Composable
+fun CampVideoStudyStudioContent(
+    campTitle: String,
+    subject: String,
+    initialEpisode: CampDayEpisode,
+    allEpisodes: List<CampDayEpisode> = listOf(initialEpisode),
+    resourceId: Long? = null,
+    onEpisodeChanged: ((CampDayEpisode) -> Unit)? = null,
+    onDeleteEpisode: ((CampDayEpisode) -> Unit)? = null,
+    onMarkCompleted: ((CampDayEpisode) -> Unit)? = null,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val density = LocalDensity.current
@@ -619,22 +650,16 @@ fun CampVideoStudyStudioDialog(
         )
     }
 
-    if (!isInPipMode) Dialog(
-        onDismissRequest = {
-            if (isInFullscreen) {
-                exitFullscreen()
-            } else if (isAiPopupOpen) {
-                isAiPopupOpen = false
-            } else {
-                onDismiss()
-            }
-        },
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnClickOutside = false,
-            decorFitsSystemWindows = false
-        )
-    ) {
+    androidx.activity.compose.BackHandler {
+        if (isInFullscreen) {
+            exitFullscreen()
+        } else if (isAiPopupOpen) {
+            isAiPopupOpen = false
+        } else {
+            onDismiss()
+        }
+    }
+    Box(modifier = Modifier.fillMaxSize()) {
         // Immersive system bars toggle when in true Fullscreen
         val dialogView = LocalView.current
         DisposableEffect(isInFullscreen) {
