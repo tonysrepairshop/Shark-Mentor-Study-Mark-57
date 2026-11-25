@@ -187,6 +187,17 @@ class ThemePreferences private constructor(context: Context) {
         _autoHideBottomBar.value = enabled
     }
 
+    // ── Video Player Picture-in-Picture ("Video Yüzen Pencere (PiP)") ────────
+    private val _videoPipEnabled = MutableStateFlow(
+        prefs.getBoolean(KEY_VIDEO_PIP_ENABLED, true)
+    )
+    val videoPipEnabled: StateFlow<Boolean> = _videoPipEnabled.asStateFlow()
+
+    fun setVideoPipEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_VIDEO_PIP_ENABLED, enabled).apply()
+        _videoPipEnabled.value = enabled
+    }
+
     // ── Live Solar & Window Evaluators ────────────────────────────────────────
 
     fun resolveTodaySolarTimes(): SolarTimes {
@@ -241,6 +252,7 @@ class ThemePreferences private constructor(context: Context) {
         private const val KEY_BLUE_LIGHT_END_MIN = "blue_light_end_min"
         private const val KEY_KEEP_SCREEN_ON_STOPWATCH = "keep_screen_on_stopwatch"
         private const val KEY_AUTO_HIDE_BOTTOM_BAR = "auto_hide_bottom_bar"
+        private const val KEY_VIDEO_PIP_ENABLED = "video_pip_enabled"
 
         @Volatile
         private var INSTANCE: ThemePreferences? = null

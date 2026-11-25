@@ -23,7 +23,7 @@ class MeetingReminderWorker(context: Context, params: WorkerParameters) : Corout
         }
 
         val notification = NotificationCompat.Builder(applicationContext, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(com.example.sharkmentor.core.util.AppIconManager.getActiveIcon(applicationContext).notificationSmallIconRes)
             .setContentTitle("Koç Randevu Hatırlatması")
             .setContentText("Koçunuzla randevunuza 36 saat kaldı ($meetingDateStr). Katılabilecek misiniz?")
             .setStyle(NotificationCompat.BigTextStyle().bigText("Koçunuzla planlanan görüşmenize 36 saat kaldı. Bir aksilik veya erteleme talebiniz varsa kurum bağlantı ekranından kontrol edebilirsiniz."))

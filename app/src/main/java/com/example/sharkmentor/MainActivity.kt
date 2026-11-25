@@ -211,6 +211,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val videoState = com.example.sharkmentor.core.service.CampVideoPlaybackController.state.value
+            val pipEnabled = ThemePreferences.initialize(applicationContext).videoPipEnabled.value
+            if (videoState.isActive && pipEnabled) {
+                runCatching {
+                    val params = android.app.PictureInPictureParams.Builder()
+                        .setAspectRatio(android.util.Rational(16, 9))
+                        .build()
+                    enterPictureInPictureMode(params)
+                }
+            }
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

@@ -66,6 +66,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -197,6 +198,7 @@ fun SettingsScreen(
     val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
     val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
     val autoHideBottomBar by themePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
+    val videoPipEnabled by themePrefs.videoPipEnabled.collectAsStateWithLifecycle()
 
     LaunchedEffect(context) {
         MusicPlayerHub.ensureInitialized(context)
@@ -493,12 +495,51 @@ fun SettingsScreen(
                                 onCheckedChange = { themePrefs.setAutoHideBottomBar(it) }
                             )
                         }
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { themePrefs.setVideoPipEnabled(!videoPipEnabled) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PictureInPictureAlt,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Video Yüzen Pencere (PiP)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Ders videosu açıkken uygulamadan çıkınca küçük pencerede devam eder",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = videoPipEnabled,
+                                onCheckedChange = { themePrefs.setVideoPipEnabled(it) }
+                            )
+                        }
                     }
 
                     // 2. Görünüm & Göz Koruma (Collapsed by default so Settings stays calm & scannable)
                     ExpandableSettingsGroupCard(
-                        title = "Görünüm & Göz Koruma",
-                        subtitle = "Tema, renk paleti, sirkadiyen saat ve mavi ışık filtresi",
+                        title = "Görünüm",
+                        subtitle = "Tema, renk paleti, sirkadiyen saat ve uygulama simgesi",
                         initiallyExpanded = false
                     ) {
                         Column(
@@ -603,8 +644,48 @@ fun SettingsScreen(
                         }
 
                         SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showAppIconPicker = !showAppIconPicker }
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Uygulama Simgesi",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Icon(
+                                imageVector = if (showAppIconPicker) {
+                                    Icons.Default.KeyboardArrowUp
+                                } else {
+                                    Icons.Default.KeyboardArrowDown
+                                },
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (showAppIconPicker) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
+                            ) {
+                                AppIconSelectorSection(snackbarHostState = snackbarHostState)
+                            }
+                        }
 
-                        // Blue Light Filter / Eye Comfort Section
+                    }
+
+                    // 2.5 Sağlık & Ergonomi Klasörü (Göz Koruma + Su + Duruş Hatırlatıcıları)
+                    ExpandableSettingsGroupCard(
+                        title = "Sağlık & Ergonomi",
+                        subtitle = "Göz koruma (mavi ışık filtresi), su ve duruş hatırlatıcıları",
+                        initiallyExpanded = false
+                    ) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -704,61 +785,19 @@ fun SettingsScreen(
                                 }
                             }
                         }
-
-                        SettingsCardDivider()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { showAppIconPicker = !showAppIconPicker }
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Uygulama Simgesi",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Icon(
-                                imageVector = if (showAppIconPicker) {
-                                    Icons.Default.KeyboardArrowUp
-                                } else {
-                                    Icons.Default.KeyboardArrowDown
-                                },
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (showAppIconPicker) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(start = 14.dp, end = 14.dp, bottom = 12.dp)
-                            ) {
-                                AppIconSelectorSection(snackbarHostState = snackbarHostState)
-                            }
-                        }
-                        SettingsCardDivider()
-                        SettingRow(
-                            icon = Icons.Default.Tune,
-                            label = "Üst Bar & Hava Durumu",
-                            subtitle = "Konum, yazılar ve sınav sayacı",
-                            onClick = { activeSubPage = "topbar_hub" }
-                        )
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.WaterDrop,
-                            label = "Hatırlatmalar",
-                            subtitle = "Su, duruş ve gün değerlendirmesi",
+                            label = "Su & Duruş Hatırlatıcıları",
+                            subtitle = "Su içme, oturma duruşu ve gün değerlendirmesi",
                             onClick = { activeSubPage = "focus_wellness" }
                         )
                     }
 
                     // 3. Üst Bar & Müzik Stüdyosu (Customizable TopBar + Music Player unified!)
                     ExpandableSettingsGroupCard(
-                        title = "Üst Bar & Müzik Stüdyosu",
-                        subtitle = "Üst bar modüllerini sırala, boyutlandır, müzik temasını seç",
+                        title = "Üst Bar & Müzik",
+                        subtitle = "Üst bar modüllerini sırala, hava durumu/yazılar ve müzik teması",
                         initiallyExpanded = false
                     ) {
                         Column(
@@ -801,7 +840,7 @@ fun SettingsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    val visibleOrdered = topBarSettings.moduleOrder.filter { topBarSettings.isModuleVisible(it) }
+                                    val visibleOrdered = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING && topBarSettings.isModuleVisible(it) }
                                     if (visibleOrdered.isEmpty()) {
                                         item {
                                             Text(
@@ -812,14 +851,13 @@ fun SettingsScreen(
                                         }
                                     } else {
                                         items(visibleOrdered, key = { "preview_${it.name}" }) { mod ->
-                                            val sz = topBarSettings.sizeFor(mod)
                                             Surface(
                                                 shape = RoundedCornerShape(8.dp),
                                                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
                                             ) {
                                                 Text(
-                                                    text = "${mod.label} (${sz.label.first()})",
+                                                    text = mod.label,
                                                     fontSize = 10.sp,
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = MaterialTheme.colorScheme.primary,
@@ -833,9 +871,9 @@ fun SettingsScreen(
 
                             // Per-module visibility, left/right reorder & size controls
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                topBarSettings.moduleOrder.forEachIndexed { index, mod ->
+                                val editableModules = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING }
+                                editableModules.forEachIndexed { index, mod ->
                                     val isVisible = topBarSettings.isModuleVisible(mod)
-                                    val modSize = topBarSettings.sizeFor(mod)
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = MaterialTheme.colorScheme.surface,
@@ -856,16 +894,7 @@ fun SettingsScreen(
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = if (isVisible) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
-                                                if (isVisible) {
-                                                    Text(
-                                                        text = "Boyut: ${modSize.label}",
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.primary,
-                                                        modifier = Modifier.clickable {
-                                                            topBarPrefs.setModuleSize(mod, modSize.next())
-                                                        }
-                                                    )
-                                                }
+
                                             }
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
@@ -880,7 +909,7 @@ fun SettingsScreen(
                                                 }
                                                 IconButton(
                                                     onClick = { topBarPrefs.moveModule(mod, 1) },
-                                                    enabled = index < topBarSettings.moduleOrder.lastIndex,
+                                                    enabled = index < editableModules.lastIndex,
                                                     modifier = Modifier.size(28.dp)
                                                 ) {
                                                     Icon(Icons.Default.ArrowForward, contentDescription = "Sağa Taşı", modifier = Modifier.size(15.dp))
@@ -899,6 +928,13 @@ fun SettingsScreen(
                                     }
                                 }
                             }
+
+                            SettingRow(
+                                icon = Icons.Default.Tune,
+                                label = "Üst Bar Yazıları & Hava Durumu",
+                                subtitle = "Şehir, animasyon, özel sözler ve sınav sayacı",
+                                onClick = { activeSubPage = "topbar_hub" }
+                            )
 
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 

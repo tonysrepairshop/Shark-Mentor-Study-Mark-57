@@ -76,7 +76,7 @@ class StrictAppBlockerService : Service() {
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Dopamin Orucu Aktif")
             .setContentText("Dikkat dağıtıcı uygulamalar engelleniyor.")
-            .setSmallIcon(R.drawable.ic_lock_lock)
+            .setSmallIcon(com.example.sharkmentor.core.util.AppIconManager.getActiveIcon(this).notificationSmallIconRes)
             .build()
     }
 

@@ -146,6 +146,22 @@ fun NotesScreen(
     val notes by viewModel.notes.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val pdfDocuments by PdfLibraryManager.documentsFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(context) {
+        com.example.sharkmentor.core.simulation.SimulationLabEngine.ensureLoaded(context)
+    }
+    val savedSimulations by com.example.sharkmentor.core.simulation.SimulationLabEngine.savedSimulations.collectAsStateWithLifecycle()
+    val filteredSimulations = remember(savedSimulations, searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isBlank()) savedSimulations
+        else savedSimulations.filter {
+            it.title.contains(q, ignoreCase = true) ||
+                it.subject.contains(q, ignoreCase = true) ||
+                "simülasyon".contains(q, ignoreCase = true)
+        }
+    }
+    var simToRename by remember { mutableStateOf<com.example.sharkmentor.core.simulation.InteractiveSimulation?>(null) }
+    var simRenameText by remember { mutableStateOf("") }
+    var simToDelete by remember { mutableStateOf<com.example.sharkmentor.core.simulation.InteractiveSimulation?>(null) }
 
     var activeTabName by rememberSaveable { mutableStateOf(NotesLibraryTab.NOTES.name) }
     val activeTab = remember(activeTabName) {
@@ -517,7 +533,7 @@ fun NotesScreen(
                 if (activeTab == NotesLibraryTab.NOTES) {
                     val pinnedNotes = visibleNotes.filter { it.isPinned }
                     val unpinnedNotes = visibleNotes.filter { !it.isPinned }
-                    val isListEmpty = pinnedNotes.isEmpty() && unpinnedNotes.isEmpty()
+                    val isListEmpty = pinnedNotes.isEmpty() && unpinnedNotes.isEmpty() && filteredSimulations.isEmpty()
 
                     if (isListEmpty) {
                         Box(
@@ -601,6 +617,85 @@ fun NotesScreen(
                                         onDelete = { noteToDelete = note },
                                         onTogglePin = { viewModel.togglePin(note) }
                                     )
+                                }
+                            }
+                            if (filteredSimulations.isNotEmpty()) {
+                                items(filteredSimulations, key = { "sim_${it.id}" }) { sim ->
+                                    Surface(
+                                        onClick = {
+                                            com.example.sharkmentor.core.simulation.SimulationLabEngine.openSimulationPreview(sim)
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = cardColor,
+                                        border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.35f)),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(6.dp),
+                                                    color = primaryColor.copy(alpha = 0.14f)
+                                                ) {
+                                                    Text(
+                                                        text = "SİMÜLASYON",
+                                                        fontSize = 10.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = primaryColor,
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    IconButton(
+                                                        onClick = {
+                                                            simToRename = sim
+                                                            simRenameText = sim.title
+                                                        },
+                                                        modifier = Modifier.size(26.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Edit,
+                                                            contentDescription = "Yeniden Adlandır",
+                                                            tint = textMutedColor,
+                                                            modifier = Modifier.size(15.dp)
+                                                        )
+                                                    }
+                                                    IconButton(
+                                                        onClick = { simToDelete = sim },
+                                                        modifier = Modifier.size(26.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Delete,
+                                                            contentDescription = "Sil",
+                                                            tint = textMutedColor,
+                                                            modifier = Modifier.size(15.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                text = sim.title,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = textColor,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "${sim.subject} • İnteraktif Simülasyon (BETA)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = textMutedColor,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -854,6 +949,54 @@ fun NotesScreen(
                 TextButton(onClick = { pdfToDelete = null }) {
                     Text("İptal")
                 }
+            }
+        )
+    }
+
+    simToRename?.let { targetSim ->
+        AlertDialog(
+            onDismissRequest = { simToRename = null },
+            title = { Text("Simülasyonu Yeniden Adlandır", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = simRenameText,
+                    onValueChange = { simRenameText = it },
+                    singleLine = true,
+                    label = { Text("Simülasyon Adı") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        com.example.sharkmentor.core.simulation.SimulationLabEngine
+                            .renameSavedSimulation(context, targetSim.id, simRenameText)
+                        simToRename = null
+                    }
+                ) { Text("Kaydet", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { simToRename = null }) { Text("İptal") }
+            }
+        )
+    }
+
+    simToDelete?.let { targetSim ->
+        AlertDialog(
+            onDismissRequest = { simToDelete = null },
+            title = { Text("Simülasyonu Sil", fontWeight = FontWeight.Bold) },
+            text = { Text("\"${targetSim.title}\" notlardan kaldırılsın mı?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        com.example.sharkmentor.core.simulation.SimulationLabEngine
+                            .deleteSavedSimulation(context, targetSim.id)
+                        simToDelete = null
+                    }
+                ) { Text("Sil", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { simToDelete = null }) { Text("Vazgeç") }
             }
         )
     }

@@ -280,6 +280,18 @@ fun SmartFlashcardStudioView(
                                 fontWeight = FontWeight.SemiBold,
                                 color = colorScheme.onSurface
                             )
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = colorScheme.primary.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = "BETA",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1080,7 +1092,7 @@ private fun PodcastBetaBottomSheet(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = episode?.episodeTitle ?: "Not & PDF Podcast Özeti",
+                        text = (episode?.episodeTitle ?: "Not & PDF Podcast Özeti") + " • BETA",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onSurface,

@@ -5,6 +5,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -89,6 +90,16 @@ enum class SharkSlashCommand(
         persona = AiPersona.DOPAMINE_COACH,
         engine = SharkAiEngine.CONVERSATIONAL_PEER,
         aliases = listOf("/dopamine", "/aliskanlik")
+    ),
+    SIMULASYON(
+        command = "/simulasyon",
+        title = "Simülasyon (BETA)",
+        subtitle = "Fizik, Kimya, Biyoloji ve Tıp konuları için interaktif görselleştirme",
+        examplePrompt = "Kalpte büyük ve küçük kan dolaşımı veya eğik atış simülasyonu hazırla",
+        icon = Icons.Default.Science,
+        persona = AiPersona.SHARK_COACH,
+        engine = SharkAiEngine.CONVERSATIONAL_PEER,
+        aliases = listOf("/sim", "/simülasyon", "/deney")
     )
 }
 
@@ -280,5 +291,20 @@ object SharkSlashCommandRegistry {
             ?.trim()
             ?.takeIf { it.startsWith("/") }
         return display to payload
+    }
+
+    private val SIM_TAG_REGEX = Regex("""\[\[SHARK_SIM:([^|\]]+)\|([^\]]+)\]\]""")
+
+    fun buildSimulationShortcutTag(simId: String, title: String): String {
+        val safeTitle = title.replace("|", " ").replace("]", " ").trim()
+        return "[[SHARK_SIM:$simId|$safeTitle]]"
+    }
+
+    fun extractSimulationShortcut(rawText: String): Pair<String, Pair<String, String>?> {
+        val match = SIM_TAG_REGEX.find(rawText) ?: return rawText to null
+        val simId = match.groupValues[1].trim()
+        val simTitle = match.groupValues[2].trim()
+        val cleaned = rawText.replace(match.value, "").trim()
+        return cleaned to (simId to simTitle)
     }
 }

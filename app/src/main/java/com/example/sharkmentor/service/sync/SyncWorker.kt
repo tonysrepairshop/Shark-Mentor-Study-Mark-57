@@ -190,7 +190,7 @@ class SyncWorker(
         val notification = NotificationCompat.Builder(applicationContext, channelId)
             .setContentTitle("SharkMentor Senkronize Ediliyor")
             .setContentText("Koç planları ve hedefler güncelleniyor...")
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(com.example.sharkmentor.core.util.AppIconManager.getActiveIcon(applicationContext).notificationSmallIconRes)
             .setColor(applicationContext.getColor(R.color.shark_blue_primary))
             .setOngoing(true)
             .setSilent(true)

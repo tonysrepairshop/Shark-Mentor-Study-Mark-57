@@ -920,6 +920,67 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 return
             }
 
+            // Handle `/simulasyon <konu>` (BETA) directly via SimulationLabEngine and emit an in-app shortcut card
+            if (cmd == com.example.sharkmentor.ui.aichat.SharkSlashCommand.SIMULASYON && parsedSlash.argumentText.isNotBlank()) {
+                val topicArg = parsedSlash.argumentText.trim()
+                val userMsg = AiChatMessage(
+                    sender = "user",
+                    text = rawInput,
+                    personaTag = _uiState.value.currentPersona.id
+                )
+                _inputText.value = ""
+                SharkAiChatSessionStore.saveDraftState(getApplication(), "", _lockedEngine.value)
+                _uiState.value = _uiState.value.copy(
+                    messages = _uiState.value.messages + userMsg,
+                    isLoading = true,
+                    error = null
+                )
+                persistCurrentChatState()
+
+                viewModelScope.launch {
+                    val lower = topicArg.lowercase(java.util.Locale("tr", "TR"))
+                    val builtInMatch = com.example.sharkmentor.core.simulation.SimulationLabEngine.builtInSimulations.firstOrNull { sim ->
+                        (lower.contains("atış") || lower.contains("atis")) && sim.id == "builtin_projectile" ||
+                            (lower.contains("ohm") || lower.contains("devre")) && sim.id == "builtin_ohm" ||
+                            (lower.contains("titrasyon") || lower.contains("asit")) && sim.id == "builtin_titration" ||
+                            (lower.contains("mitoz") || lower.contains("hücre bölün")) && sim.id == "builtin_mitosis"
+                    }
+                    val result = if (builtInMatch != null) {
+                        com.example.sharkmentor.core.simulation.SimulationLabEngine.openSimulationPreview(builtInMatch)
+                        Result.success(builtInMatch)
+                    } else {
+                        com.example.sharkmentor.core.simulation.SimulationLabEngine.generateSimulation(
+                            context = getApplication(),
+                            topicPrompt = topicArg,
+                            saveImmediately = false
+                        )
+                    }
+                    val replyText = result.fold(
+                        onSuccess = { sim ->
+                            val tag = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
+                                .buildSimulationShortcutTag(sim.id, sim.title)
+                            "**${sim.title}** simülasyonu hazır (BETA). Aşağıdaki kısayola dokunarak simülasyonu açabilir, beğenirsen sağ üstten **Simülasyonu Kaydet** diyerek Notlar sekmesine ekleyebilirsin.
+
+$tag"
+                        },
+                        onFailure = { err ->
+                            "Simülasyon şu an oluşturulamadı: ${err.message ?: "Bağlantı veya model hatası"}. Konuyu biraz daha net yazarak `/simulasyon` ile tekrar deneyebilirsin."
+                        }
+                    )
+                    _uiState.value = _uiState.value.copy(
+                        messages = _uiState.value.messages + AiChatMessage(
+                            sender = "ai",
+                            text = replyText,
+                            personaTag = _uiState.value.currentPersona.id
+                        ),
+                        isLoading = false,
+                        error = null
+                    )
+                    persistCurrentChatState()
+                }
+                return
+            }
+
             // Activate the sub-runner persona for this invocation
             if (_uiState.value.currentPersona != cmd.persona) {
                 _uiState.value = _uiState.value.copy(currentPersona = cmd.persona)

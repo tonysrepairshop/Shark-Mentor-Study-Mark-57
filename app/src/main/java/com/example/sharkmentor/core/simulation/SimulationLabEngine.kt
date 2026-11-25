@@ -103,6 +103,55 @@ object SimulationLabEngine {
     private val _savedSimulations = MutableStateFlow<List<InteractiveSimulation>>(emptyList())
     val savedSimulations: StateFlow<List<InteractiveSimulation>> = _savedSimulations.asStateFlow()
 
+    // Ephemeral previews generated from AI `/simulasyon` before user taps "Simülasyonu Kaydet"
+    private val previewCache = mutableMapOf<String, InteractiveSimulation>()
+
+    private val _activePreviewSimulation = MutableStateFlow<InteractiveSimulation?>(null)
+    val activePreviewSimulation: StateFlow<InteractiveSimulation?> = _activePreviewSimulation.asStateFlow()
+
+    fun openSimulationPreview(sim: InteractiveSimulation) {
+        previewCache[sim.id] = sim
+        _activePreviewSimulation.value = sim
+    }
+
+    fun openSimulationById(context: Context, id: String): Boolean {
+        ensureLoaded(context)
+        val found = previewCache[id]
+            ?: _savedSimulations.value.firstOrNull { it.id == id }
+            ?: builtInSimulations.firstOrNull { it.id == id }
+            ?: return false
+        _activePreviewSimulation.value = found
+        return true
+    }
+
+    fun closeSimulationPreview() {
+        _activePreviewSimulation.value = null
+    }
+
+    fun isSavedInNotes(id: String): Boolean = _savedSimulations.value.any { it.id == id }
+
+    fun saveSimulationToNotes(context: Context, sim: InteractiveSimulation) {
+        ensureLoaded(context)
+        val savedItem = sim.copy(isBuiltIn = false)
+        previewCache[savedItem.id] = savedItem
+        _savedSimulations.value = (listOf(savedItem) + _savedSimulations.value.filterNot { it.id == savedItem.id }).take(30)
+        persist(context)
+    }
+
+    fun renameSavedSimulation(context: Context, id: String, newTitle: String) {
+        val clean = newTitle.trim().take(80)
+        if (clean.isBlank()) return
+        ensureLoaded(context)
+        _savedSimulations.value = _savedSimulations.value.map {
+            if (it.id == id) it.copy(title = clean) else it
+        }
+        previewCache[id]?.let { previewCache[id] = it.copy(title = clean) }
+        _activePreviewSimulation.value?.let { cur ->
+            if (cur.id == id) _activePreviewSimulation.value = cur.copy(title = clean)
+        }
+        persist(context)
+    }
+
     val builtInSimulations: List<InteractiveSimulation> by lazy {
         listOf(
             InteractiveSimulation(
@@ -175,7 +224,8 @@ object SimulationLabEngine {
     suspend fun generateSimulation(
         context: Context,
         topicPrompt: String,
-        subjectHint: String = "Fen Bilimleri"
+        subjectHint: String = "Fen Bilimleri",
+        saveImmediately: Boolean = false
     ): Result<InteractiveSimulation> = withContext(Dispatchers.IO) {
         val cleanTopic = topicPrompt.trim()
         if (cleanTopic.length < 3) {
@@ -230,8 +280,10 @@ Bu konuyu öğrencinin dokunarak ve parametreleri değiştirerek sezgisel şekil
             isBuiltIn = false,
             createdAtMillis = System.currentTimeMillis()
         )
-        _savedSimulations.value = (listOf(sim) + _savedSimulations.value.filterNot { it.id == sim.id }).take(20)
-        persist(context)
+        previewCache[sim.id] = sim
+        if (saveImmediately) {
+            saveSimulationToNotes(context, sim)
+        }
         Result.success(sim)
     }
 

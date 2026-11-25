@@ -8,7 +8,9 @@ import android.app.Service
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.MutableContextWrapper
 import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
@@ -73,6 +75,14 @@ class BackgroundPlayableWebView(context: Context) : WebView(context) {
             super.onVisibilityChanged(changedView, View.VISIBLE)
         } else {
             super.onVisibilityChanged(changedView, visibility)
+        }
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        if (allowBackgroundPlayback && !hasWindowFocus) {
+            super.onWindowFocusChanged(true)
+        } else {
+            super.onWindowFocusChanged(hasWindowFocus)
         }
     }
 }
@@ -270,6 +280,23 @@ object CampVideoPlaybackController {
         _state.value = _state.value.copy(isMinimized = false)
     }
 
+    fun resumeIfPlayingAfterScreenOff() {
+        if (!_state.value.isActive || !_state.value.isPlaying) return
+        mainHandler.postDelayed({
+            if (!_state.value.isActive || !_state.value.isPlaying) return@postDelayed
+            val wv = activeWebView ?: return@postDelayed
+            wv.allowBackgroundPlayback = true
+            wv.onResume()
+            wv.resumeTimers()
+            runCatching {
+                wv.evaluateJavascript(
+                    "(function(){try{if(!window.__sharkUserPaused){var v=document.querySelector('video');if(v&&v.paused&&!v.ended){v.play();}}}catch(e){}})();",
+                    null
+                )
+            }
+        }, 380L)
+    }
+
     fun togglePlayPause(context: Context) {
         val targetPlay = !_state.value.isPlaying
         setPlaying(context, targetPlay)
@@ -420,6 +447,7 @@ class CampVideoPlaybackService : Service() {
     private lateinit var notificationManager: NotificationManager
     private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var screenOffReceiver: BroadcastReceiver? = null
 
     @Volatile
     private var isForegroundStarted = false
@@ -469,6 +497,17 @@ class CampVideoPlaybackService : Service() {
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
         initMediaSession()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                    CampVideoPlaybackController.resumeIfPlayingAfterScreenOff()
+                }
+            }
+        }
+        screenOffReceiver = receiver
+        runCatching {
+            registerReceiver(receiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
+        }
 
         val initialState = CampVideoPlaybackController.state.value
         startForegroundCompat(buildMediaNotification(initialState))
@@ -735,6 +774,8 @@ class CampVideoPlaybackService : Service() {
     }
 
     override fun onDestroy() {
+        screenOffReceiver?.let { runCatching { unregisterReceiver(it) } }
+        screenOffReceiver = null
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false

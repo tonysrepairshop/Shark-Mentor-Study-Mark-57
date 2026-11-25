@@ -89,29 +89,17 @@ fun SharkScreen(
                         )
                     }
                 )
-                Tab(
-                    modifier = Modifier.height(40.dp),
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = {
-                        Text(
-                            "Simülasyon",
-                            color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = if (selectedTab == 2) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                )
             }
         }
 
-        when (selectedTab) {
-            0 -> SharkAiScreen(onNavigateToPlans = onNavigateToPlans)
-            1 -> SharkArenaContent(
+        if (selectedTab == 0) {
+            SharkAiScreen(onNavigateToPlans = onNavigateToPlans)
+        } else {
+            SharkArenaContent(
                 viewModel = viewModel,
                 onNavigateToDetailed = onNavigateToDetailed,
                 onNavigateToLeague = onNavigateToLeague
             )
-            else -> com.example.sharkmentor.ui.screens.simulation.SimulationLabScreen()
         }
     }
 }

@@ -129,7 +129,7 @@ data class TopBarSettings(
     val hiddenModules: Set<TopBarModule> = emptySet(),
     val moduleSizes: Map<TopBarModule, TopBarModuleSize> = emptyMap()
 ) {
-    fun isModuleVisible(module: TopBarModule): Boolean = module !in hiddenModules
+    fun isModuleVisible(module: TopBarModule): Boolean = (module == TopBarModule.BRANDING) || (module !in hiddenModules)
     fun sizeFor(module: TopBarModule): TopBarModuleSize = moduleSizes[module] ?: TopBarModuleSize.NORMAL
 }
 

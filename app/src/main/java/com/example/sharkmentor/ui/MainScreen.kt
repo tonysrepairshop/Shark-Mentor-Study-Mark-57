@@ -375,6 +375,7 @@ fun MainScreen(
 
                     // Restorable background video studio (when tapping the lock-screen/shade notification)
                     val videoRestoreRequested by CampVideoPlaybackController.restoreRequested.collectAsStateWithLifecycle()
+                    val activePreviewSimulation by com.example.sharkmentor.core.simulation.SimulationLabEngine.activePreviewSimulation.collectAsStateWithLifecycle()
 
                     val shouldShowBottomBar = (currentRoute in primaryTabRoutes) &&
                         !isImeOpen &&
@@ -718,8 +719,8 @@ fun MainScreen(
                                     ),
                                     shadowElevation = 4.dp,
                                     modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(end = 12.dp, top = 44.dp)
+                                        .align(Alignment.TopStart)
+                                        .padding(start = 10.dp, top = 8.dp)
                                         .size(34.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
@@ -747,6 +748,15 @@ fun MainScreen(
                                 )
                             }
                             }
+                }
+
+                activePreviewSimulation?.let { previewSim ->
+                    com.example.sharkmentor.ui.screens.simulation.SimulationViewerDialog(
+                        simulation = previewSim,
+                        onDismiss = {
+                            com.example.sharkmentor.core.simulation.SimulationLabEngine.closeSimulationPreview()
+                        }
+                    )
                 }
 
                 if (videoRestoreRequested) {
@@ -886,18 +896,14 @@ private fun SharkMentorTopBar(
                     .fillMaxWidth()
                     .padding(end = 4.dp)
             ) {
+                // App Logo is always fixed on the left
+                SharkMentorBranding(countdown = countdown, isCampus = isCampus)
                 topBarSettings.moduleOrder.forEach { module ->
-                    if (!topBarSettings.isModuleVisible(module)) return@forEach
-                    val scale = topBarSettings.sizeFor(module).scale
+                    if (module == TopBarModule.BRANDING || !topBarSettings.isModuleVisible(module)) return@forEach
                     when (module) {
-                        TopBarModule.BRANDING -> {
-                            Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
-                                SharkMentorBranding(countdown = countdown, isCampus = isCampus)
-                            }
-                        }
+                        TopBarModule.BRANDING -> Unit
                         TopBarModule.MUSIC -> {
                             if (showMusicButton) {
-                                val btnDp = (32f * scale).dp
                                 Surface(
                                     onClick = onMusicClick,
                                     shape = CircleShape,
@@ -916,13 +922,13 @@ private fun SharkMentorTopBar(
                                         if (isMusicActive) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
                                         else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                                     ),
-                                    modifier = Modifier.size(btnDp)
+                                    modifier = Modifier.size(32.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = Icons.Default.MusicNote,
                                             contentDescription = "Müzik Oynatıcı",
-                                            modifier = Modifier.size((16f * scale).dp)
+                                            modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
@@ -930,14 +936,12 @@ private fun SharkMentorTopBar(
                         }
                         TopBarModule.WEATHER -> {
                             if (showTopBarWidgets && (isLandscape || !topBarSettings.isModuleVisible(TopBarModule.AI_BAR))) {
-                                Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
-                                    TopBarWeatherPill(
-                                        weatherState = weatherState,
-                                        settings = weatherSettings,
-                                        showBubble = showBubbleFrame,
-                                        onClick = onWeatherClick
-                                    )
-                                }
+                                TopBarWeatherPill(
+                                    weatherState = weatherState,
+                                    settings = weatherSettings,
+                                    showBubble = showBubbleFrame,
+                                    onClick = onWeatherClick
+                                )
                             }
                         }
                         TopBarModule.AI_BAR -> {
@@ -947,9 +951,7 @@ private fun SharkMentorTopBar(
                                         PendingAiPromptBus.pendingPrompt.value = prompt
                                         onOpenSharkAi()
                                     },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .graphicsLayer { scaleY = scale },
+                                    modifier = Modifier.weight(1f),
                                     topBarSettings = topBarSettings,
                                     showBubble = showBubbleFrame,
                                     weatherState = weatherState,
@@ -963,13 +965,11 @@ private fun SharkMentorTopBar(
                         }
                         TopBarModule.DM -> {
                             if (showTopBarWidgets) {
-                                Box(modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale }) {
-                                    com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
-                                        hasUnread = hasUnreadDm,
-                                        showBubble = showBubbleFrame,
-                                        onClick = onOpenDmInbox
-                                    )
-                                }
+                                com.example.sharkmentor.ui.components.TopBarDmShortcutButton(
+                                    hasUnread = hasUnreadDm,
+                                    showBubble = showBubbleFrame,
+                                    onClick = onOpenDmInbox
+                                )
                             }
                         }
                         TopBarModule.COUNTDOWN -> {
@@ -978,9 +978,7 @@ private fun SharkMentorTopBar(
                                     shape = RoundedCornerShape(20.dp),
                                     color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-                                    modifier = Modifier
-                                        .graphicsLayer { scaleX = scale; scaleY = scale }
-                                        .clickable { onCountdownClick() }
+                                    modifier = Modifier.clickable { onCountdownClick() }
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),

@@ -774,9 +774,13 @@ fun SharkAiScreen(
                                             tonalElevation = 2.dp
                                         ) {
                                             Column(modifier = Modifier.padding(14.dp)) {
-                                                val (cleanBubbleText, slashQuickFillPayload) = remember(msg.text) {
+                                                val (afterQuickFill, slashQuickFillPayload) = remember(msg.text) {
                                                     com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
                                                         .extractQuickFillPayload(msg.text)
+                                                }
+                                                val (cleanBubbleText, simShortcut) = remember(afterQuickFill) {
+                                                    com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
+                                                        .extractSimulationShortcut(afterQuickFill)
                                                 }
                                                 // Header: Unified Shark AI brand & copy button
                                                 Row(
@@ -857,6 +861,55 @@ fun SharkAiScreen(
                                                     )
                                                 }
 
+                                                if (simShortcut != null) {
+                                                    val (simId, simTitle) = simShortcut
+                                                    Spacer(modifier = Modifier.height(10.dp))
+                                                    Surface(
+                                                        onClick = {
+                                                            val opened = com.example.sharkmentor.core.simulation.SimulationLabEngine
+                                                                .openSimulationById(context, simId)
+                                                            if (!opened) {
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    "Bu simülasyon oturumu sona ermiş; /simulasyon ile yeniden üretebilirsin",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                        },
+                                                        shape = RoundedCornerShape(12.dp),
+                                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+                                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.AutoAwesome,
+                                                                contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primary,
+                                                                modifier = Modifier.size(18.dp)
+                                                            )
+                                                            Column(modifier = Modifier.weight(1f)) {
+                                                                Text(
+                                                                    text = simTitle,
+                                                                    style = MaterialTheme.typography.labelLarge,
+                                                                    fontWeight = FontWeight.Bold,
+                                                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                                    maxLines = 1,
+                                                                    overflow = TextOverflow.Ellipsis
+                                                                )
+                                                                Text(
+                                                                    text = "Simülasyonu Aç • BETA",
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    color = MaterialTheme.colorScheme.primary
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 if (!slashQuickFillPayload.isNullOrBlank()) {
                                                     val cmdToken = slashQuickFillPayload.substringBefore(' ')
                                                     Spacer(modifier = Modifier.height(8.dp))

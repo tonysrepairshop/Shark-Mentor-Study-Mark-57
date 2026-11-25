@@ -6,6 +6,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -16,30 +17,27 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,7 +45,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,336 +58,184 @@ import com.example.sharkmentor.core.simulation.InteractiveSimulation
 import com.example.sharkmentor.core.simulation.SimulationLabEngine
 import kotlinx.coroutines.launch
 
+/**
+ * Full-screen MaterialTheme-bound Interactive Simulation Viewer opened from AI `/simulasyon` (BETA)
+ * shortcuts or from saved "SİMÜLASYON" cards inside NotesScreen.
+ * Features a top-right "Simülasyonu Kaydet" button and cleans up its WebView immediately on close
+ * for low-end device RAM efficiency.
+ */
 @Composable
-fun SimulationLabScreen(
-    modifier: Modifier = Modifier
+fun SimulationViewerDialog(
+    simulation: InteractiveSimulation,
+    onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
-
-    LaunchedEffect(context) {
-        SimulationLabEngine.ensureLoaded(context)
+    val savedList by SimulationLabEngine.savedSimulations.collectAsStateWithLifecycle()
+    val isAlreadySaved = remember(savedList, simulation.id) {
+        savedList.any { it.id == simulation.id }
     }
 
-    val savedSims by SimulationLabEngine.savedSimulations.collectAsStateWithLifecycle()
-    val allSims = remember(savedSims) {
-        savedSims + SimulationLabEngine.builtInSimulations
-    }
+    var currentSim by remember(simulation.id) { mutableStateOf(simulation) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
-    var activeSim by remember { mutableStateOf<InteractiveSimulation>(SimulationLabEngine.builtInSimulations.first()) }
-    var promptText by remember { mutableStateOf("") }
-    var selectedSubject by remember { mutableStateOf("Fizik") }
-    var isGenerating by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isFullscreen by remember { mutableStateOf(false) }
-
-    fun triggerGenerate(topic: String, subject: String) {
-        if (topic.isBlank() || isGenerating) return
-        scope.launch {
-            isGenerating = true
-            errorMessage = null
-            val res = SimulationLabEngine.generateSimulation(context, topic, subject)
-            res.onSuccess { created ->
-                activeSim = created
-                promptText = ""
-            }.onFailure { err ->
-                errorMessage = err.message ?: "Simülasyon oluşturulamadı, lütfen tekrar deneyin."
-            }
-            isGenerating = false
-        }
-    }
-
-    if (isFullscreen) {
-        Dialog(
-            onDismissRequest = { isFullscreen = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xFF0B1220))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF111827))
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = activeSim.title,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "${activeSim.subject} • İnteraktif Simülasyon",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF94A3B8)
-                        )
-                    }
-                    IconButton(onClick = { isFullscreen = false }) {
-                        Icon(Icons.Default.Close, contentDescription = "Tam Ekrandan Çık", tint = Color.White)
-                    }
-                }
-                SandboxedSimulationWebView(
-                    html = activeSim.htmlContent,
-                    simId = activeSim.id,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                )
-            }
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(colorScheme.background)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        // AI Simulation Generator Input Card
-        Surface(
-            shape = RoundedCornerShape(16.dp),
-            color = colorScheme.surfaceContainerLow,
-            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
-            modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colorScheme.background)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            // Theme-bound Top Bar with "Simülasyonu Kaydet" on the top-right
+            Surface(
+                color = colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Science,
-                        contentDescription = null,
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = "AI İnteraktif Simülasyon Laboratuvarı",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
-                    )
-                }
-
-                // Subject selector chips
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(listOf("Fizik", "Kimya", "Biyoloji", "Tıp / Anatomi", "Matematik")) { subj ->
-                        val chosen = selectedSubject == subj
-                        Surface(
-                            onClick = { selectedSubject = subj },
-                            shape = RoundedCornerShape(8.dp),
-                            color = if (chosen) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.55f)
-                        ) {
-                            Text(
-                                text = subj,
-                                fontSize = 11.sp,
-                                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
-                                color = if (chosen) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = promptText,
-                        onValueChange = { promptText = it },
-                        placeholder = {
-                            Text(
-                                "Örn: Kalpte kan dolaşımı, dalga girişimi, enzim-substrat...",
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Button(
-                        onClick = { triggerGenerate(promptText, selectedSubject) },
-                        enabled = !isGenerating && promptText.trim().length >= 3,
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(34.dp)
                     ) {
-                        if (isGenerating) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Kapat",
+                            tint = colorScheme.onSurface
+                        )
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Science,
+                                contentDescription = null,
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = currentSim.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = colorScheme.primary.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = "BETA",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "${currentSim.subject} • İnteraktif Simülasyon",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    // 1-tap regenerate/repair button
+                    IconButton(
+                        onClick = {
+                            if (isRefreshing) return@IconButton
+                            scope.launch {
+                                isRefreshing = true
+                                val res = SimulationLabEngine.generateSimulation(
+                                    context = context,
+                                    topicPrompt = currentSim.title,
+                                    subjectHint = currentSim.subject,
+                                    saveImmediately = isAlreadySaved
+                                )
+                                res.onSuccess { rebuilt ->
+                                    currentSim = rebuilt
+                                    SimulationLabEngine.openSimulationPreview(rebuilt)
+                                }.onFailure {
+                                    Toast.makeText(context, "Yenilenemedi, tekrar deneyin", Toast.LENGTH_SHORT).show()
+                                }
+                                isRefreshing = false
+                            }
+                        },
+                        enabled = !isRefreshing,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        if (isRefreshing) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
                                 strokeWidth = 2.dp,
-                                color = colorScheme.onPrimary
+                                color = colorScheme.primary
                             )
                         } else {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Üret", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                if (errorMessage != null) {
-                    Text(
-                        text = errorMessage.orEmpty(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colorScheme.error
-                    )
-                }
-            }
-        }
-
-        // Simulation Switcher Strip (Saved AI Sims + 4 Verified Built-in Demos)
-        LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(vertical = 2.dp)
-        ) {
-            items(allSims, key = { it.id }) { sim ->
-                val isSelected = activeSim.id == sim.id
-                Surface(
-                    onClick = { activeSim = sim },
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) colorScheme.primaryContainer else colorScheme.surfaceContainerLow,
-                    border = BorderStroke(
-                        1.dp,
-                        if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Column {
-                            Text(
-                                text = sim.title,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) colorScheme.onPrimaryContainer else colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (sim.isBuiltIn) "${sim.subject} • Hazır Demo" else "${sim.subject} • AI",
-                                fontSize = 10.sp,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (!sim.isBuiltIn) {
-                            IconButton(
-                                onClick = {
-                                    SimulationLabEngine.deleteSavedSimulation(context, sim.id)
-                                    if (activeSim.id == sim.id) {
-                                        activeSim = SimulationLabEngine.builtInSimulations.first()
-                                    }
-                                },
-                                modifier = Modifier.size(20.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.DeleteOutline,
-                                    contentDescription = "Sil",
-                                    tint = colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Active Interactive Simulation Stage
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = Color(0xFF0B1220),
-            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f)),
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF111827))
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = activeSim.title,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = activeSim.description,
-                            fontSize = 10.sp,
-                            color = Color(0xFF94A3B8),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!activeSim.isBuiltIn) {
-                            IconButton(
-                                onClick = { triggerGenerate(activeSim.title, activeSim.subject) },
-                                enabled = !isGenerating,
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Simülasyonu Yenile",
-                                    tint = Color(0xFF38BDF8),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { isFullscreen = true },
-                            modifier = Modifier.size(32.dp)
-                        ) {
                             Icon(
-                                imageVector = Icons.Default.Fullscreen,
-                                contentDescription = "Tam Ekran",
-                                tint = Color.White,
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Yenile",
+                                tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(19.dp)
                             )
                         }
                     }
-                }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                ) {
-                    SandboxedSimulationWebView(
-                        html = activeSim.htmlContent,
-                        simId = activeSim.id,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    // Top-right "Simülasyonu Kaydet" button -> saves as SİMÜLASYON card in NotesScreen!
+                    Button(
+                        onClick = {
+                            if (!isAlreadySaved) {
+                                SimulationLabEngine.saveSimulationToNotes(context, currentSim)
+                                Toast.makeText(context, "Notlar sekmesine kaydedildi", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isAlreadySaved) colorScheme.secondaryContainer else colorScheme.primary,
+                            contentColor = if (isAlreadySaved) colorScheme.onSecondaryContainer else colorScheme.onPrimary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isAlreadySaved) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (isAlreadySaved) "Kaydedildi" else "Simülasyonu Kaydet",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
+            }
+
+            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                SandboxedSimulationWebView(
+                    html = currentSim.htmlContent,
+                    simId = currentSim.id,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
         }
     }
@@ -403,6 +248,22 @@ private fun SandboxedSimulationWebView(
     simId: String,
     modifier: Modifier = Modifier
 ) {
+    val webViewHolder = remember { arrayOfNulls<WebView>(1) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewHolder[0]?.let { wv ->
+                runCatching {
+                    wv.stopLoading()
+                    wv.loadUrl("about:blank")
+                    wv.clearHistory()
+                    wv.destroy()
+                }
+            }
+            webViewHolder[0] = null
+        }
+    }
+
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
@@ -425,11 +286,9 @@ private fun SandboxedSimulationWebView(
                     override fun shouldOverrideUrlLoading(
                         view: WebView?,
                         request: WebResourceRequest?
-                    ): Boolean {
-                        // Block external navigation so sandboxed simulation stays 100% self-contained
-                        return true
-                    }
+                    ): Boolean = true
                 }
+                webViewHolder[0] = this
             }
         },
         update = { webView ->
