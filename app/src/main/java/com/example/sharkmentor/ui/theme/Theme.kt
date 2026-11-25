@@ -941,11 +941,7 @@ fun SharkMentorTheme(
     }
 
     val basePalette = if (palette == ThemePalette.GALATASARAY && !SpecialMemberConfig.isEmreBey()) ThemePalette.OCEAN else palette
-    val effectivePalette = if (themeMode == AppThemeMode.CIRCADIAN && circadianNight) {
-        ThemePalette.OBSIDIAN
-    } else {
-        basePalette
-    }
+    val effectivePalette = basePalette
     val effectiveIsDark = isDark || isZenMode
     val finalColors = if (isZenMode) {
         ZenMonochromeScheme

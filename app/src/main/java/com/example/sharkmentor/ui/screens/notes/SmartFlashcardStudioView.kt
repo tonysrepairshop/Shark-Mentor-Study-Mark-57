@@ -78,6 +78,14 @@ import com.example.sharkmentor.core.flashcard.PodcastSegment
 import com.example.sharkmentor.core.flashcard.SelectedFlashcardSources
 import com.example.sharkmentor.core.flashcard.SmartFlashcard
 import com.example.sharkmentor.core.flashcard.SmartFlashcardManager
+import com.example.sharkmentor.core.flashcard.SmartFlashcardDeck
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.lazy.LazyRow
+import android.widget.Toast
 import com.example.sharkmentor.core.flashcard.orderDeckByPriority
 import com.example.sharkmentor.core.util.ImportedPdfDocument
 import com.example.sharkmentor.data.local.SharkMentorDatabase
@@ -104,6 +112,12 @@ fun SmartFlashcardStudioView(
 
     val savedSelection by SmartFlashcardManager.selectedSources.collectAsStateWithLifecycle()
     val topicStats by SmartFlashcardManager.topicStats.collectAsStateWithLifecycle()
+    val savedDecks by SmartFlashcardManager.savedDecks.collectAsStateWithLifecycle()
+    val activeDeckId by SmartFlashcardManager.activeDeckId.collectAsStateWithLifecycle()
+    var deckToRename by remember { mutableStateOf<SmartFlashcardDeck?>(null) }
+    var deckRenameText by remember { mutableStateOf("") }
+    var deckToDelete by remember { mutableStateOf<SmartFlashcardDeck?>(null) }
+    var pendingDeckName by remember { mutableStateOf("") }
 
     var errorBankSubjects by remember { mutableStateOf<List<String>>(emptyList()) }
     var activeDeck by remember { mutableStateOf<List<SmartFlashcard>>(emptyList()) }
@@ -155,7 +169,19 @@ fun SmartFlashcardStudioView(
         }
     }
 
-    fun launchDeckBuild(selection: SelectedFlashcardSources, forceRegenerate: Boolean) {
+    LaunchedEffect(activeDeckId, savedDecks) {
+        val current = savedDecks.firstOrNull { it.id == activeDeckId } ?: savedDecks.firstOrNull()
+        if (current != null) {
+            activeDeck = orderDeckByPriority(current.cards, topicStats)
+            currentIndex = 0
+            isBackVisible = false
+            sessionFinished = false
+        } else if (savedDecks.isEmpty()) {
+            activeDeck = emptyList()
+        }
+    }
+
+    fun launchDeckBuild(selection: SelectedFlashcardSources, forceRegenerate: Boolean, customName: String = "") {
         if (isGenerating) return
         if (!sessionFinished && sessionOutcomes.isNotEmpty()) {
             SmartFlashcardManager.flushSessionOutcomesInBackground(
@@ -167,30 +193,87 @@ fun SmartFlashcardStudioView(
             isGenerating = true
             sessionOutcomes.clear()
             sessionFinished = false
-            val deck = SmartFlashcardManager.buildOrRefreshDeck(
+            val result = SmartFlashcardManager.createNamedDeck(
                 context = context,
+                customName = customName,
                 selection = selection,
                 availableNotes = availableNotes,
                 availablePdfs = availablePdfs,
                 forceRegenerate = forceRegenerate
             )
-            activeDeck = deck
+            result.onSuccess { created ->
+                activeDeck = orderDeckByPriority(created.cards, topicStats)
+            }.onFailure { err ->
+                Toast.makeText(
+                    context,
+                    err.message ?: "Flashcard serisi oluşturulamadı.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
             currentIndex = 0
             isBackVisible = false
             isGenerating = false
         }
     }
 
+    deckToRename?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deckToRename = null },
+            title = { Text("Seriyi Yeniden Adlandır", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = deckRenameText,
+                    onValueChange = { deckRenameText = it },
+                    singleLine = true,
+                    label = { Text("Seri Adı") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        SmartFlashcardManager.renameDeck(context, target.id, deckRenameText)
+                        deckToRename = null
+                    }
+                ) { Text("Kaydet", fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deckToRename = null }) { Text("İptal") }
+            }
+        )
+    }
+
+    deckToDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deckToDelete = null },
+            title = { Text("Flashcard Serisini Sil", fontWeight = FontWeight.Bold) },
+            text = { Text("\"${target.name}\" serisi kalıcı olarak silinsin mi?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        SmartFlashcardManager.deleteDeck(context, target.id)
+                        deckToDelete = null
+                    }
+                ) { Text("Sil", color = colorScheme.error, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deckToDelete = null }) { Text("Vazgeç") }
+            }
+        )
+    }
+
     if (showSourceSheet) {
         FlashcardSourcePickerSheet(
-            initialSelection = savedSelection,
+            initialSelection = SelectedFlashcardSources(),
             availableNotes = availableNotes,
             availablePdfs = availablePdfs,
             availableErrorSubjects = errorBankSubjects,
             onDismiss = { showSourceSheet = false },
             onConfirm = { newSel, forceAi ->
                 showSourceSheet = false
-                launchDeckBuild(newSel, forceAi)
+                val chosenName = pendingDeckName
+                pendingDeckName = ""
+                launchDeckBuild(newSel, forceAi, customName = chosenName)
             }
         )
     }
@@ -227,7 +310,17 @@ fun SmartFlashcardStudioView(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    onClick = { showSourceSheet = true },
+                    onClick = {
+                        if (savedDecks.size >= SmartFlashcardManager.MAX_SAVED_DECKS) {
+                            Toast.makeText(
+                                context,
+                                "En fazla 5 flashcard serisi oluşturabilirsiniz. Yeni seri eklemek için mevcut bir seriyi silin.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        } else {
+                            showSourceSheet = true
+                        }
+                    },
                     shape = RoundedCornerShape(10.dp),
                     color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.45f))
@@ -244,11 +337,7 @@ fun SmartFlashcardStudioView(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = if (savedSelection.isEmpty) {
-                                "Kaynak Seç"
-                            } else {
-                                "Kaynaklar (${savedSelection.totalSelectedCount})"
-                            },
+                            text = "+ Yeni Seri",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = colorScheme.onSurface
@@ -291,6 +380,73 @@ fun SmartFlashcardStudioView(
                                     color = colorScheme.primary,
                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (savedDecks.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(savedDecks, key = { it.id }) { deckItem ->
+                        val isSel = deckItem.id == activeDeckId || (activeDeckId == null && deckItem == savedDecks.first())
+                        Surface(
+                            onClick = { SmartFlashcardManager.selectDeck(deckItem.id) },
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSel) colorScheme.primaryContainer else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSel) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.45f)
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Column {
+                                    Text(
+                                        text = deckItem.name,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSel) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "${deckItem.cards.size} kart",
+                                        fontSize = 10.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        deckToRename = deckItem
+                                        deckRenameText = deckItem.name
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Yeniden Adlandır",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { deckToDelete = deckItem },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Sil",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
                             }
                         }
                     }

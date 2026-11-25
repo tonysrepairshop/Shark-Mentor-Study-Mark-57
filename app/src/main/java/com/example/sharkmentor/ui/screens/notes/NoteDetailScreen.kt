@@ -82,6 +82,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckBox
@@ -933,6 +934,11 @@ fun NoteDetailScreen(
     val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
     val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
+    var showInNoteSearch by remember { mutableStateOf(false) }
+    var inNoteSearchQuery by remember { mutableStateOf("") }
+    val musicEnabled by com.example.sharkmentor.core.audio.MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
+    val musicMiniOpen by com.example.sharkmentor.core.audio.MusicPlayerHub.isFloatingMiniOpen.collectAsStateWithLifecycle()
+    val musicPlayback by com.example.sharkmentor.core.audio.MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
     var lassoAiCropBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -1367,6 +1373,17 @@ fun NoteDetailScreen(
                 }
             },
             actions = {
+                if (musicEnabled) {
+                    IconButton(
+                        onClick = { com.example.sharkmentor.core.audio.MusicPlayerHub.toggleFloatingMini() }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Müzik Oynatıcı",
+                            tint = if (musicMiniOpen || musicPlayback.isPlaying) primaryColor else onSurfaceColor
+                        )
+                    }
+                }
                 if (notesAiEnabled) {
                     IconButton(
                         onClick = {
@@ -1380,6 +1397,15 @@ fun NoteDetailScreen(
                             tint = primaryColor
                         )
                     }
+                }
+                IconButton(
+                    onClick = { showInNoteSearch = true }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Not İçinde Ara",
+                        tint = if (inNoteSearchQuery.isNotBlank()) primaryColor else onSurfaceColor
+                    )
                 }
                 IconButton(
                     onClick = {
@@ -3619,6 +3645,64 @@ fun NoteDetailScreen(
                     handleColorSelected(chosenColor)
                 }
                 showCustomColorDialog = false
+            }
+        )
+    }
+
+    if (showInNoteSearch) {
+        val fullText = remember(showInNoteSearch) { buildJoinedPlainText() }
+        val matchingLines = remember(inNoteSearchQuery, fullText) {
+            val q = inNoteSearchQuery.trim()
+            if (q.isBlank()) emptyList()
+            else fullText.lines().mapIndexedNotNull { idx, line ->
+                if (line.contains(q, ignoreCase = true)) (idx + 1) to line.trim() else null
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { showInNoteSearch = false },
+            title = { Text("Not İçinde Ara", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = inNoteSearchQuery,
+                        onValueChange = { inNoteSearchQuery = it },
+                        placeholder = { Text("Aranacak kelime...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (inNoteSearchQuery.isNotBlank()) {
+                        Text(
+                            text = if (matchingLines.isEmpty()) "Eşleşme bulunamadı" else "${matchingLines.size} satırda bulundu:",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = primaryColor,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            matchingLines.take(20).forEach { (lineNum, snippet) ->
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "Satır $lineNum: ${snippet.take(120)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showInNoteSearch = false }) { Text("Kapat") }
             }
         )
     }

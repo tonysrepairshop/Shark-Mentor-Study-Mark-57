@@ -198,7 +198,6 @@ fun SettingsScreen(
     val blueLightEndMin by themePrefs.blueLightEndMinute.collectAsStateWithLifecycle()
     val keepScreenOnStopwatch by themePrefs.keepScreenOnInStopwatch.collectAsStateWithLifecycle()
     val autoHideBottomBar by themePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
-    val videoPipEnabled by themePrefs.videoPipEnabled.collectAsStateWithLifecycle()
 
     LaunchedEffect(context) {
         MusicPlayerHub.ensureInitialized(context)
@@ -417,123 +416,6 @@ fun SettingsScreen(
                             subtitle = "Kalem davranışı ve not içi AI",
                             onClick = onOpenNoteSettings
                         )
-                        SettingsCardDivider()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { themePrefs.setKeepScreenOnInStopwatch(!keepScreenOnStopwatch) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Timer,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                                Column {
-                                    Text(
-                                        text = "Kronometrede Ekran Açık Kalsın",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Yalnızca kronometre çalışırken aktif olur",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = keepScreenOnStopwatch,
-                                onCheckedChange = { themePrefs.setKeepScreenOnInStopwatch(it) }
-                            )
-                        }
-                        SettingsCardDivider()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { themePrefs.setAutoHideBottomBar(!autoHideBottomBar) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.VisibilityOff,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                                Column {
-                                    Text(
-                                        text = "Alt Barı Otomatik Gizle",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Ekrana dokunulmadığında alt çubuğu gizler, dokununca geri getirir",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = autoHideBottomBar,
-                                onCheckedChange = { themePrefs.setAutoHideBottomBar(it) }
-                            )
-                        }
-                        SettingsCardDivider()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { themePrefs.setVideoPipEnabled(!videoPipEnabled) }
-                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PictureInPictureAlt,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(21.dp)
-                                )
-                                Column {
-                                    Text(
-                                        text = "Video Yüzen Pencere (PiP)",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "Ders videosu açıkken uygulamadan çıkınca küçük pencerede devam eder",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = videoPipEnabled,
-                                onCheckedChange = { themePrefs.setVideoPipEnabled(it) }
-                            )
-                        }
                     }
 
                     // 2. Görünüm & Göz Koruma (Collapsed by default so Settings stays calm & scannable)
@@ -676,6 +558,85 @@ fun SettingsScreen(
                             ) {
                                 AppIconSelectorSection(snackbarHostState = snackbarHostState)
                             }
+                        }
+
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { themePrefs.setKeepScreenOnInStopwatch(!keepScreenOnStopwatch) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timer,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Kronometrede Ekran Açık Kalsın",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Yalnızca kronometre çalışırken aktif olur",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = keepScreenOnStopwatch,
+                                onCheckedChange = { themePrefs.setKeepScreenOnInStopwatch(it) }
+                            )
+                        }
+                        SettingsCardDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { themePrefs.setAutoHideBottomBar(!autoHideBottomBar) }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.VisibilityOff,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Alt Barı Otomatik Gizle",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "Ekrana dokunulmadığında alt çubuğu gizler, dokununca geri getirir",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = autoHideBottomBar,
+                                onCheckedChange = { themePrefs.setAutoHideBottomBar(it) }
+                            )
                         }
 
                     }

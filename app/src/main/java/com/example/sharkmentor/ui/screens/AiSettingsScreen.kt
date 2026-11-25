@@ -121,6 +121,8 @@ fun AiSettingsScreen(
     val savedProvider by userAiPrefs.selectedAiProvider.collectAsStateWithLifecycle()
     val videoStudioAiEnabled by userAiPrefs.videoStudioAiEnabled.collectAsStateWithLifecycle()
     val videoAdBlockerEnabled by userAiPrefs.videoAdBlockerEnabled.collectAsStateWithLifecycle()
+    val themePrefs = remember(context) { com.example.sharkmentor.core.data.ThemePreferences.initialize(context.applicationContext) }
+    val videoPipEnabled by themePrefs.videoPipEnabled.collectAsStateWithLifecycle()
 
     // Editable local states
     var geminiKeysInput by remember(savedGemini) { mutableStateOf(savedGemini) }
@@ -344,6 +346,13 @@ fun AiSettingsScreen(
                             subtitle = "Video Stüdyosu'nda reklamları engeller",
                             checked = videoAdBlockerEnabled,
                             onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                        AiModuleToggleRow(
+                            title = "Yüzen Video Penceresi (PiP)",
+                            subtitle = "Video oynarken uygulamadan çıkınca küçük pencerede devam eder",
+                            checked = videoPipEnabled,
+                            onCheckedChange = { themePrefs.setVideoPipEnabled(it) }
                         )
                     }
                 }

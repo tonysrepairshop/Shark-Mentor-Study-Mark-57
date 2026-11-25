@@ -117,6 +117,21 @@ object CampVideoPlaybackController {
     private val _restoreRequested = MutableStateFlow(false)
     val restoreRequested: StateFlow<Boolean> = _restoreRequested.asStateFlow()
 
+    private val _isStudioOpen = MutableStateFlow(false)
+    val isStudioOpen: StateFlow<Boolean> = _isStudioOpen.asStateFlow()
+
+    private val _isInPipMode = MutableStateFlow(false)
+    val isInPipMode: StateFlow<Boolean> = _isInPipMode.asStateFlow()
+
+    fun setStudioOpen(open: Boolean) {
+        _isStudioOpen.value = open
+        if (!open) _isInPipMode.value = false
+    }
+
+    fun setPipMode(inPip: Boolean) {
+        _isInPipMode.value = inPip
+    }
+
     private tailrec fun Context.findActivity(): Activity? = when (this) {
         is Activity -> this
         is ContextWrapper -> baseContext.findActivity()
@@ -404,9 +419,11 @@ object CampVideoPlaybackController {
         }
     }
 
-    fun stopAndRelease(context: Context) {
+    fun releaseSessionOnly(context: Context) {
         val appCtx = context.applicationContext
         _restoreRequested.value = false
+        _isStudioOpen.value = false
+        _isInPipMode.value = false
         restorablePayload = null
         _state.value = CampVideoPlaybackState()
         mainHandler.post {
@@ -433,6 +450,11 @@ object CampVideoPlaybackController {
                 }
             }
         }
+    }
+
+    fun stopAndRelease(context: Context) {
+        val appCtx = context.applicationContext
+        releaseSessionOnly(appCtx)
         CampVideoPlaybackService.stop(appCtx)
     }
 }
@@ -483,11 +505,11 @@ class CampVideoPlaybackService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, CampVideoPlaybackService::class.java).apply {
-                action = ACTION_STOP
+            runCatching {
+                context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
             }
             runCatching {
-                context.startService(intent)
+                context.stopService(Intent(context, CampVideoPlaybackService::class.java))
             }
         }
     }
@@ -528,13 +550,18 @@ class CampVideoPlaybackService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action ?: ACTION_SYNC
+        if (action == ACTION_STOP) {
+            CampVideoPlaybackController.releaseSessionOnly(applicationContext)
+            stopServiceCleanly()
+            return START_NOT_STICKY
+        }
         if (!isForegroundStarted) {
             startForegroundCompat(buildMediaNotification(CampVideoPlaybackController.state.value))
         }
-        val action = intent?.action ?: ACTION_SYNC
         when (action) {
             ACTION_STOP -> {
-                CampVideoPlaybackController.stopAndRelease(applicationContext)
+                CampVideoPlaybackController.releaseSessionOnly(applicationContext)
                 stopServiceCleanly()
                 return START_NOT_STICKY
             }
@@ -696,7 +723,7 @@ class CampVideoPlaybackService : Service() {
             action = actionName
         }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        return if (actionName != ACTION_STOP && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             PendingIntent.getForegroundService(this, requestCode, intent, flags)
         } else {
             PendingIntent.getService(this, requestCode, intent, flags)
@@ -744,16 +771,15 @@ class CampVideoPlaybackService : Service() {
     }
 
     private fun stopServiceCleanly() {
+        serviceScope.cancel()
         releaseWakeLock()
         runCatching {
             mediaSession?.isActive = false
             mediaSession?.release()
             mediaSession = null
         }
-        if (isForegroundStarted) {
-            runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
-            isForegroundStarted = false
-        }
+        isForegroundStarted = false
+        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         runCatching { notificationManager.cancel(NOTIFICATION_ID) }
         stopSelf()
     }

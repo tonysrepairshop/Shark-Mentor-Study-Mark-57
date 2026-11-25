@@ -237,8 +237,12 @@ fun CampVideoStudyStudioDialog(
         }
     }
 
+    val isInPipMode by CampVideoPlaybackController.isInPipMode.collectAsStateWithLifecycle()
+
     DisposableEffect(Unit) {
+        CampVideoPlaybackController.setStudioOpen(true)
         onDispose {
+            CampVideoPlaybackController.setStudioOpen(false)
             if (!isMinimizingToBackground) {
                 CampVideoPlaybackController.stopAndRelease(context)
             }
@@ -253,7 +257,7 @@ fun CampVideoStudyStudioDialog(
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
     var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var manualFullscreen by remember { mutableStateOf(false) }
-    val isInFullscreen = customFullscreenView != null || manualFullscreen
+    val isInFullscreen = customFullscreenView != null || manualFullscreen || isInPipMode
 
     // Direct WebView handle for programmatic pause on Posture Reminder & AI Popup Open
     var activeWebViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -1437,7 +1441,7 @@ fun CampVideoStudyStudioDialog(
                 }
 
                 // ── LAYER 4: Lightweight Draggable Floating AI Orb (Normal + Fullscreen!) ──
-                if (orbOffsetX >= 0f && orbOffsetY >= 0f) {
+                if (!isInPipMode && orbOffsetX >= 0f && orbOffsetY >= 0f) {
                     Surface(
                         shape = CircleShape,
                         color = if (isAiPopupOpen) colorScheme.primaryContainer else colorScheme.primary,

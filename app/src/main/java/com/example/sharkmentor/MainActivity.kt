@@ -214,9 +214,9 @@ class MainActivity : ComponentActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val videoState = com.example.sharkmentor.core.service.CampVideoPlaybackController.state.value
+            val studioOpen = com.example.sharkmentor.core.service.CampVideoPlaybackController.isStudioOpen.value
             val pipEnabled = ThemePreferences.initialize(applicationContext).videoPipEnabled.value
-            if (videoState.isActive && pipEnabled) {
+            if (studioOpen && pipEnabled) {
                 runCatching {
                     val params = android.app.PictureInPictureParams.Builder()
                         .setAspectRatio(android.util.Rational(16, 9))
@@ -225,6 +225,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: android.content.res.Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        com.example.sharkmentor.core.service.CampVideoPlaybackController.setPipMode(isInPictureInPictureMode)
     }
 
     override fun onNewIntent(intent: Intent) {

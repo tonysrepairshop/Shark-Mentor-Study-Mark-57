@@ -698,41 +698,6 @@ fun MainScreen(
                         }
                     }
 
-                            // Keep a discreet corner Music Note button whenever the TopBar is hidden (e.g., Note or PDF editor open!)
-                            if (isMusicTopBarVisible && !shouldShowTopBar) {
-                                Surface(
-                                    onClick = onToggleMusicUi,
-                                    shape = CircleShape,
-                                    color = if (isMusicButtonActive || musicPlaybackState.isPlaying) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.92f)
-                                    },
-                                    contentColor = if (isMusicButtonActive || musicPlaybackState.isPlaying) {
-                                        MaterialTheme.colorScheme.onPrimary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    },
-                                    border = BorderStroke(
-                                        1.dp,
-                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
-                                    ),
-                                    shadowElevation = 4.dp,
-                                    modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(start = 10.dp, top = 8.dp)
-                                        .size(34.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            imageVector = Icons.Default.MusicNote,
-                                            contentDescription = "Müzik Oynatıcı",
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                    }
-                                }
-                            }
-
                             // Draggable Compact Mini Music Window on all tabs outside HomeScreen — stays visible in Notes & PDFs!
                             if (isMusicTopBarVisible && !isOnHomeTab && isFloatingMiniOpen) {
                                 DraggableMiniMusicPlayerWindow(

@@ -55,6 +55,15 @@ data class SmartFlashcard(
 )
 
 @Immutable
+data class SmartFlashcardDeck(
+    val id: String,
+    val name: String,
+    val selection: SelectedFlashcardSources = SelectedFlashcardSources(),
+    val cards: List<SmartFlashcard> = emptyList(),
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
+@Immutable
 data class SelectedFlashcardSources(
     val noteIds: Set<String> = emptySet(),
     val pdfIds: Set<String> = emptySet(),
@@ -255,9 +264,12 @@ object SmartFlashcardManager {
     @Volatile
     private var initialized = false
 
+    const val MAX_SAVED_DECKS = 5
+
     private data class PersistedFlashcardStore(
         val cards: List<SmartFlashcard> = emptyList(),
-        val topicStats: Map<String, TopicPerformanceRecord> = emptyMap()
+        val topicStats: Map<String, TopicPerformanceRecord> = emptyMap(),
+        val decks: List<SmartFlashcardDeck>? = null
     )
 
     private val _selectedSources = MutableStateFlow(SelectedFlashcardSources())
@@ -268,6 +280,12 @@ object SmartFlashcardManager {
 
     private val _topicStats = MutableStateFlow<Map<String, TopicPerformanceRecord>>(emptyMap())
     val topicStats: StateFlow<Map<String, TopicPerformanceRecord>> = _topicStats.asStateFlow()
+
+    private val _savedDecks = MutableStateFlow<List<SmartFlashcardDeck>>(emptyList())
+    val savedDecks: StateFlow<List<SmartFlashcardDeck>> = _savedDecks.asStateFlow()
+
+    private val _activeDeckId = MutableStateFlow<String?>(null)
+    val activeDeckId: StateFlow<String?> = _activeDeckId.asStateFlow()
 
     fun ensureLoaded(context: Context) {
         if (initialized) return
@@ -296,6 +314,11 @@ object SmartFlashcardManager {
                 }.getOrNull()?.let { store ->
                     _allStoredCards.value = store.cards ?: emptyList()
                     _topicStats.value = store.topicStats ?: emptyMap()
+                    val loadedDecks = (store.decks ?: emptyList()).filter { it.cards.isNotEmpty() }.take(MAX_SAVED_DECKS)
+                    _savedDecks.value = loadedDecks
+                    if (_activeDeckId.value == null && loadedDecks.isNotEmpty()) {
+                        _activeDeckId.value = loadedDecks.first().id
+                    }
                 }
             }
             initialized = true
@@ -319,7 +342,8 @@ object SmartFlashcardManager {
                 val tmp = File(context.applicationContext.filesDir, "$STORAGE_FILE_NAME.tmp")
                 val payload = PersistedFlashcardStore(
                     cards = _allStoredCards.value,
-                    topicStats = _topicStats.value
+                    topicStats = _topicStats.value,
+                    decks = _savedDecks.value
                 )
                 tmp.writeText(gson.toJson(payload), Charsets.UTF_8)
                 if (!tmp.renameTo(file)) {
@@ -337,6 +361,78 @@ object SmartFlashcardManager {
      * Uses in-app AI (`MultiProviderAiClient`) to generate cards for newly selected Notes/PDFs
      * (or when [forceRegenerate] is true), preserving existing known/missed counts!
      */
+    fun selectDeck(deckId: String): SmartFlashcardDeck? {
+        val target = _savedDecks.value.firstOrNull { it.id == deckId } ?: return null
+        _activeDeckId.value = target.id
+        return target
+    }
+
+    fun renameDeck(context: Context, deckId: String, newName: String) {
+        val clean = newName.trim().take(60)
+        if (clean.isBlank()) return
+        ensureLoaded(context)
+        _savedDecks.value = _savedDecks.value.map {
+            if (it.id == deckId) it.copy(name = clean) else it
+        }
+        persistStore(context)
+    }
+
+    fun deleteDeck(context: Context, deckId: String) {
+        ensureLoaded(context)
+        val remaining = _savedDecks.value.filterNot { it.id == deckId }
+        _savedDecks.value = remaining
+        if (_activeDeckId.value == deckId) {
+            _activeDeckId.value = remaining.firstOrNull()?.id
+        }
+        persistStore(context)
+    }
+
+    suspend fun createNamedDeck(
+        context: Context,
+        customName: String,
+        selection: SelectedFlashcardSources,
+        availableNotes: List<NoteEntity>,
+        availablePdfs: List<ImportedPdfDocument>,
+        forceRegenerate: Boolean = false
+    ): Result<SmartFlashcardDeck> = withContext(Dispatchers.IO) {
+        ensureLoaded(context)
+        if (_savedDecks.value.size >= MAX_SAVED_DECKS) {
+            return@withContext Result.failure(
+                IllegalStateException("En fazla $MAX_SAVED_DECKS flashcard serisi oluşturabilirsiniz. Yeni seri için mevcut bir seriyi silin.")
+            )
+        }
+        val cards = buildOrRefreshDeck(
+            context = context,
+            selection = selection,
+            availableNotes = availableNotes,
+            availablePdfs = availablePdfs,
+            forceRegenerate = forceRegenerate
+        )
+        if (cards.isEmpty()) {
+            return@withContext Result.failure(
+                IllegalStateException("Seçili kaynaklardan kart oluşturulamadı.")
+            )
+        }
+        val autoName = customName.trim().take(60).ifBlank {
+            val firstNote = availableNotes.firstOrNull { it.id in selection.noteIds }?.title?.takeIf { it.isNotBlank() }
+            val firstPdf = availablePdfs.firstOrNull { it.id in selection.pdfIds }?.displayName?.takeIf { it.isNotBlank() }
+            val firstErr = selection.errorSubjects.firstOrNull()
+            (firstNote ?: firstPdf ?: firstErr ?: "Seri ${_savedDecks.value.size + 1}").take(42)
+        }
+        val deckId = "deck_${System.currentTimeMillis()}_${stableCardHash(autoName)}"
+        val newDeck = SmartFlashcardDeck(
+            id = deckId,
+            name = autoName,
+            selection = selection,
+            cards = cards,
+            createdAtMillis = System.currentTimeMillis()
+        )
+        _savedDecks.value = (listOf(newDeck) + _savedDecks.value).take(MAX_SAVED_DECKS)
+        _activeDeckId.value = newDeck.id
+        persistStore(context)
+        Result.success(newDeck)
+    }
+
     suspend fun buildOrRefreshDeck(
         context: Context,
         selection: SelectedFlashcardSources,

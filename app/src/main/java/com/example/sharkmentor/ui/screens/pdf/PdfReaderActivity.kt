@@ -61,6 +61,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -919,6 +921,14 @@ fun PdfReaderScreen(
     val notesAiEnabled by aiPrefs.notesAiEnabled.collectAsStateWithLifecycle()
     val drawingAiEnabled by aiPrefs.drawingAiEnabled.collectAsStateWithLifecycle()
     var showAiSheet by remember { mutableStateOf(false) }
+    var showPdfSearchDialog by remember { mutableStateOf(false) }
+    var pdfSearchQuery by remember { mutableStateOf("") }
+    var pdfSearchResults by remember { mutableStateOf<List<Pair<Int, String>>>(emptyList()) }
+    var isSearchingPdf by remember { mutableStateOf(false) }
+    val pdfMusicEnabled by com.example.sharkmentor.core.audio.MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
+    val pdfMusicMiniOpen by com.example.sharkmentor.core.audio.MusicPlayerHub.isFloatingMiniOpen.collectAsStateWithLifecycle()
+    val pdfMusicPlayback by com.example.sharkmentor.core.audio.MusicPlayerHub.playbackState.collectAsStateWithLifecycle()
+    val pdfMusicSkin by com.example.sharkmentor.core.audio.MusicPlayerHub.selectedSkin.collectAsStateWithLifecycle()
     var aiQueryText by remember { mutableStateOf("") }
     var aiScope by remember { mutableStateOf(DocumentAiScope.CURRENT_PAGE) }
     var aiResult by remember { mutableStateOf<String?>(null) }
@@ -1592,6 +1602,21 @@ fun PdfReaderScreen(
                     }
                 }
 
+                // Music button right to the LEFT of the AI icon
+                if (pdfMusicEnabled) {
+                    IconButton(
+                        onClick = { com.example.sharkmentor.core.audio.MusicPlayerHub.toggleFloatingMini() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Müzik Oynatıcı",
+                            tint = if (pdfMusicMiniOpen || pdfMusicPlayback.isPlaying) primaryColor else onSurfaceColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
                 // AI Note Assistant button (controlled by Notes AI toggle in Settings)
                 if (notesAiEnabled) {
                     IconButton(
@@ -1605,6 +1630,19 @@ fun PdfReaderScreen(
                             modifier = Modifier.size(18.dp)
                         )
                     }
+                }
+
+                // Search magnifying glass button right to the RIGHT of the AI icon
+                IconButton(
+                    onClick = { showPdfSearchDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "PDF İçinde Ara",
+                        tint = if (pdfSearchQuery.isNotBlank()) primaryColor else onSurfaceColor,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
 
                 // More Menu
@@ -2084,6 +2122,120 @@ fun PdfReaderScreen(
     }
 
     // AI Note Assistant ModalBottomSheet
+    if (pdfMusicEnabled && pdfMusicMiniOpen) {
+        com.example.sharkmentor.ui.components.DraggableMiniMusicPlayerWindow(
+            playbackState = pdfMusicPlayback,
+            selectedSkin = pdfMusicSkin,
+            onSelectSkin = { skin -> com.example.sharkmentor.core.audio.MusicPlayerHub.setSkin(context, skin) },
+            onMinimize = { com.example.sharkmentor.core.audio.MusicPlayerHub.setFloatingMiniOpen(false) },
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+
+    if (showPdfSearchDialog) {
+        AlertDialog(
+            onDismissRequest = { showPdfSearchDialog = false },
+            title = { Text("PDF İçinde Ara", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = pdfSearchQuery,
+                            onValueChange = { pdfSearchQuery = it },
+                            placeholder = { Text("Kelime yaz...") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = {
+                                val q = pdfSearchQuery.trim()
+                                if (q.isBlank() || isSearchingPdf) return@Button
+                                scope.launch {
+                                    isSearchingPdf = true
+                                    val found = kotlinx.coroutines.withContext(Dispatchers.IO) {
+                                        val matches = mutableListOf<Pair<Int, String>>()
+                                        val maxP = pageCount.coerceAtMost(80)
+                                        for (pIdx in 0 until maxP) {
+                                            val pageTxt = pageTextCache[pIdx] ?: runCatching {
+                                                PdfBitmapConverter.extractPdfPageRangeTextFast(
+                                                    context = context.applicationContext,
+                                                    pdfFile = pdfFile.localFile,
+                                                    startPageZeroBased = pIdx,
+                                                    endPageZeroBased = pIdx,
+                                                    maxChars = 6_000
+                                                )
+                                            }.getOrDefault("").also { pageTextCache[pIdx] = it }
+                                            val hitIdx = pageTxt.indexOf(q, ignoreCase = true)
+                                            if (hitIdx >= 0) {
+                                                val s = (hitIdx - 28).coerceAtLeast(0)
+                                                val e = (hitIdx + q.length + 52).coerceAtMost(pageTxt.length)
+                                                matches.add(pIdx to pageTxt.substring(s, e).replace("\n", " ").trim())
+                                            }
+                                        }
+                                        matches
+                                    }
+                                    pdfSearchResults = found
+                                    isSearchingPdf = false
+                                }
+                            },
+                            enabled = !isSearchingPdf && pdfSearchQuery.isNotBlank(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)
+                        ) {
+                            Text(if (isSearchingPdf) "..." else "Ara", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    if (pdfSearchResults.isNotEmpty()) {
+                        Text(
+                            text = "${pdfSearchResults.size} sayfada bulundu (gitmek için dokun):",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = primaryColor,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 220.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            pdfSearchResults.take(25).forEach { (pageIdx, snippet) ->
+                                Surface(
+                                    onClick = {
+                                        showPdfSearchDialog = false
+                                        scope.launch {
+                                            runCatching { listState.scrollToItem(pageIdx) }
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "Sayfa ${pageIdx + 1}: ...$snippet...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else if (!isSearchingPdf && pdfSearchQuery.isNotBlank()) {
+                        Text(
+                            text = "Ara butonuna basarak PDF içinde arayabilirsiniz.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = onSurfaceColor.copy(alpha = 0.65f)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPdfSearchDialog = false }) { Text("Kapat") }
+            }
+        )
+    }
+
     if (showAiSheet && notesAiEnabled) {
         ModalBottomSheet(
             onDismissRequest = {
