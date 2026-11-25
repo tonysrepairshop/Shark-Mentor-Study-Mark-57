@@ -129,7 +129,7 @@ class Mark71FeaturesTest {
 
     @Test
     fun leftMusicScreenVisibilityAndFiveSkinsMatchSpecification() {
-        assertEquals(5, MusicPlayerSkin.entries.size)
+        assertEquals(17, MusicPlayerSkin.entries.size)
         assertEquals(MusicPlayerSkin.DEFAULT, MusicPlayerSkin.fromId("default"))
         assertEquals(MusicPlayerSkin.MODERN_VINYL, MusicPlayerSkin.fromId("modern_vinyl"))
         assertEquals(MusicPlayerSkin.CLASSIC_VINYL, MusicPlayerSkin.fromId("classic_vinyl"))
