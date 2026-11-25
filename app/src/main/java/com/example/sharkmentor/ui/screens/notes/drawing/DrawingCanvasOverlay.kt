@@ -99,7 +99,6 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isTertiaryPressed
@@ -885,7 +884,7 @@ fun DrawingCanvasOverlay(
                                     feedbackMessage = "Kement seçildi"
                                 }
                                 StylusDoubleTapAction.ERASER -> {
-                                    val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.BALLPOINT else prefLastEraser
+                                    val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.PEN else prefLastEraser
                                     controller.selectTool(nextTool)
                                     feedbackMessage = if (nextTool.isEraserTool) "Silgi seçildi" else "Kalem seçildi"
                                 }
@@ -1986,7 +1985,7 @@ fun DrawScope.drawStrokeElement(
         val pFactor = if (pressureSensitivityEnabled && stroke.pressureSensitive) {
             when (stroke.tool) {
                 DrawingTool.BRUSH_PEN -> (0.14f + 2.05f * p0.pressure.coerceIn(0.04f, 1.95f)).coerceIn(0.14f, 2.85f)
-                DrawingTool.BALLPOINT_PEN -> (0.84f + 0.26f * p0.pressure.coerceIn(0.04f, 1.95f)).coerceIn(0.75f, 1.32f)
+                DrawingTool.PEN_PEN -> (0.84f + 0.26f * p0.pressure.coerceIn(0.04f, 1.95f)).coerceIn(0.75f, 1.32f)
                 DrawingTool.PENCIL -> (0.55f + 0.72f * p0.pressure.coerceIn(0.04f, 1.95f)).coerceIn(0.45f, 1.65f)
                 else -> (0.16f + 1.50f * p0.pressure.coerceIn(0.04f, 1.95f)).coerceIn(0.16f, 2.40f)
             }
@@ -2007,7 +2006,7 @@ fun DrawScope.drawStrokeElement(
             stroke.tool == DrawingTool.TECHNICAL_PEN ||
             stroke.tool == DrawingTool.BRUSH_PEN ||
             stroke.tool == DrawingTool.PENCIL ||
-            stroke.tool == DrawingTool.BALLPOINT_PEN)
+            stroke.tool == DrawingTool.PEN_PEN)
 
     if (isPressurePen) {
         var prevAnchorX = pts[0].x
@@ -2015,7 +2014,7 @@ fun DrawScope.drawStrokeElement(
         val segPath = Path()
         val isBrush = stroke.tool == DrawingTool.BRUSH_PEN
         val isPencil = stroke.tool == DrawingTool.PENCIL
-        val isBallpoint = stroke.tool == DrawingTool.BALLPOINT_PEN
+        val isBallpoint = stroke.tool == DrawingTool.PEN_PEN
         val pencilGrainColor = if (isPencil) {
             Color(stroke.colorArgb).copy(alpha = (stroke.alpha * 0.26f).coerceIn(0.06f, 0.34f))
         } else {

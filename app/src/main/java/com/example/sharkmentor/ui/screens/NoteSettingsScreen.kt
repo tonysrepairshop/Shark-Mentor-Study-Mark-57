@@ -470,7 +470,7 @@ fun NoteSettingsScreen(
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else ""Hello" yazarak kalemini test edip senkronize et",
+                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else "'Hello' yazarak kalemini test edip senkronize et",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colorScheme.onSurfaceVariant
                                     )
