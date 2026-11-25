@@ -959,9 +959,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         onSuccess = { sim ->
                             val tag = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry
                                 .buildSimulationShortcutTag(sim.id, sim.title)
-                            "**${sim.title}** simülasyonu hazır (BETA). Aşağıdaki kısayola dokunarak simülasyonu açabilir, beğenirsen sağ üstten **Simülasyonu Kaydet** diyerek Notlar sekmesine ekleyebilirsin.
-
-$tag"
+                            "**${sim.title}** simülasyonu hazır (BETA). Aşağıdaki kısayola dokunarak simülasyonu açabilir, beğenirsen sağ üstten **Simülasyonu Kaydet** diyerek Notlar sekmesine ekleyebilirsin.\n\n$tag"
                         },
                         onFailure = { err ->
                             "Simülasyon şu an oluşturulamadı: ${err.message ?: "Bağlantı veya model hatası"}. Konuyu biraz daha net yazarak `/simulasyon` ile tekrar deneyebilirsin."
