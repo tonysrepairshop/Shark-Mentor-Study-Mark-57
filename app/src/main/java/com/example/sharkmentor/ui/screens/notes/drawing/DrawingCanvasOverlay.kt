@@ -99,7 +99,10 @@ import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
+import androidx.compose.ui.input.pointer.isTertiaryPressed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
@@ -366,6 +369,9 @@ fun DrawingCanvasOverlay(
     val prefAutoShape by NoteDrawingPreferences.autoShapeRecognitionEnabled.collectAsStateWithLifecycle()
     val prefStylusOnly by NoteDrawingPreferences.stylusOnlyModeEnabled.collectAsStateWithLifecycle()
     val prefLastEraser by NoteDrawingPreferences.lastSelectedEraserTool.collectAsStateWithLifecycle()
+    val prefStylusButtonsEnabled by NoteDrawingPreferences.stylusButtonsEnabled.collectAsStateWithLifecycle()
+    val prefStylusHoldAction by NoteDrawingPreferences.stylusHoldAction.collectAsStateWithLifecycle()
+    val prefStylusDoubleTapAction by NoteDrawingPreferences.stylusDoubleTapAction.collectAsStateWithLifecycle()
 
     LaunchedEffect(controller, context) {
         controller.bindPreferencesContext(context)
@@ -506,6 +512,9 @@ fun DrawingCanvasOverlay(
             controller.pressureSensitivityStrength,
             controller.scribbleToEraseEnabled,
             controller.autoShapeRecognitionEnabled,
+            prefStylusButtonsEnabled,
+            prefStylusHoldAction,
+            prefLastEraser,
             onTwoFingerScroll != null
         ) {
             awaitEachGesture {
@@ -557,10 +566,15 @@ fun DrawingCanvasOverlay(
                     down.consume()
                 }
 
-                val effectiveTool = if (activeDown.type == PointerType.Eraser) {
-                    DrawingTool.STROKE_ERASER
-                } else {
-                    activeTool
+                val stylusSideButtonHeld = prefStylusButtonsEnabled &&
+                    activeDown.type == PointerType.Stylus &&
+                    (currentEvent.buttons.isSecondaryPressed || currentEvent.buttons.isTertiaryPressed)
+
+                val effectiveTool = when {
+                    activeDown.type == PointerType.Eraser -> prefLastEraser
+                    stylusSideButtonHeld && prefStylusHoldAction == StylusHoldAction.ERASER -> prefLastEraser
+                    stylusSideButtonHeld && prefStylusHoldAction == StylusHoldAction.LASSO -> DrawingTool.LASSO
+                    else -> activeTool
                 }
 
                 val gestureStartMs = SystemClock.elapsedRealtime()
@@ -851,6 +865,50 @@ fun DrawingCanvasOverlay(
         }
     }
 
+    val stylusDoubleTapModifier = if (prefStylusButtonsEnabled && prefStylusDoubleTapAction != StylusDoubleTapAction.NONE) {
+        Modifier.pointerInput(prefStylusButtonsEnabled, prefStylusDoubleTapAction, prefLastEraser) {
+            var prevBtnPressed = false
+            var lastPressMs = 0L
+            awaitPointerEventScope {
+                while (true) {
+                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                    val isStylusOrHover = ev.changes.any { it.type == PointerType.Stylus || it.type == PointerType.Eraser }
+                    val btnPressed = ev.buttons.isSecondaryPressed || ev.buttons.isTertiaryPressed
+                    if (isStylusOrHover && btnPressed && !prevBtnPressed) {
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastPressMs in 40L..380L) {
+                            lastPressMs = 0L
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            when (prefStylusDoubleTapAction) {
+                                StylusDoubleTapAction.LASSO -> {
+                                    controller.selectTool(DrawingTool.LASSO)
+                                    feedbackMessage = "Kement seçildi"
+                                }
+                                StylusDoubleTapAction.ERASER -> {
+                                    val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.BALLPOINT else prefLastEraser
+                                    controller.selectTool(nextTool)
+                                    feedbackMessage = if (nextTool.isEraserTool) "Silgi seçildi" else "Kalem seçildi"
+                                }
+                                StylusDoubleTapAction.UNDO -> {
+                                    if (controller.canUndo) {
+                                        controller.undo()
+                                        feedbackMessage = "Geri alındı"
+                                    }
+                                }
+                                StylusDoubleTapAction.NONE -> Unit
+                            }
+                        } else {
+                            lastPressMs = now
+                        }
+                    }
+                    prevBtnPressed = btnPressed
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
+
     Box(
         modifier = modifier
             .then(stylusTrackerModifier)
@@ -860,6 +918,7 @@ fun DrawingCanvasOverlay(
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
+                .then(stylusDoubleTapModifier)
                 .then(pointerModifier)
         ) {
             val selectedIds = controller.selectedStrokeIds

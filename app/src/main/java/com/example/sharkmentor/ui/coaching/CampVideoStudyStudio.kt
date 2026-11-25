@@ -1180,7 +1180,7 @@ fun CampVideoStudyStudioContent(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 val miniTabs = buildList {
-                                    add(Triple(0, "AI Asistan", Icons.Default.AutoAwesome))
+                                    add(Triple(0, "SharkAI", Icons.Default.AutoAwesome))
                                     add(Triple(1, "Hızlı Not", Icons.Default.EditNote))
                                     if (safeEpisodes.size > 1) add(Triple(2, "Bölümler", Icons.Default.PlaylistPlay))
                                 }
@@ -1224,7 +1224,7 @@ fun CampVideoStudyStudioContent(
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Text("SharkPlayer AI Kapalı", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                Text("SharkPlayer • SharkAI Kapalı", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                                 OutlinedButton(
                                                     onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
                                                     shape = RoundedCornerShape(10.dp)

@@ -439,7 +439,7 @@ fun NotesScreen(
                 if (showTopBar) {
                     CenterAlignedTopAppBar(
                         expandedHeight = 50.dp,
-                        title = { Text("Notlar", fontWeight = FontWeight.Bold, color = textColor) },
+                        title = { Text("SharkStudio", fontWeight = FontWeight.Bold, color = textColor) },
                         navigationIcon = {
                             if (onBackClick != null) {
                                 IconButton(onClick = onBackClick) {

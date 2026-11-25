@@ -179,4 +179,32 @@ class Mark71FeaturesTest {
             assertTrue(preset.layers.size in 2..com.example.sharkmentor.core.audio.ZenAudioManager.MAX_MIX_LAYERS)
         }
     }
+
+    @Test
+    fun stylusShortcutEnumsParseAndFallbackCleanly() {
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.ERASER,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.fromId("eraser")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.LASSO,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.fromId("lasso")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.ERASER,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.fromId("unknown")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.LASSO,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.fromId("lasso")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.UNDO,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.fromId("undo")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.LASSO,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.fromId(null)
+        )
+    }
 }

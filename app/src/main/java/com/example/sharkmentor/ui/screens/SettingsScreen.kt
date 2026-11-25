@@ -395,7 +395,7 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     // 1. Çalışma & Yapay Zeka
-                    SettingsGroupCard(title = "Çalışma & Yapay Zeka") {
+                    SettingsGroupCard(title = "Çalışma & SharkAI") {
                         SettingRow(
                             icon = Icons.Default.Route,
                             label = "Koçluk & Çalışma Saatleri",
@@ -405,14 +405,14 @@ fun SettingsScreen(
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.AutoAwesome,
-                            label = "Yapay Zeka & SharkPlayer",
+                            label = "SharkAI & SharkPlayer",
                             subtitle = "Model seçimi ve reklam engelleyici",
                             onClick = onOpenAiSettings
                         )
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.EditNote,
-                            label = "Not & Çizim",
+                            label = "SharkStudio Ayarları",
                             subtitle = "Kalem davranışı ve not içi AI",
                             onClick = onOpenNoteSettings
                         )

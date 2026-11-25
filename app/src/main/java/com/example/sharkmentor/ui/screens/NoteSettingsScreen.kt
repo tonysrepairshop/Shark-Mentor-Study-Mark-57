@@ -23,7 +23,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Brush
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -42,7 +45,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,6 +62,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences
+import com.example.sharkmentor.ui.screens.notes.drawing.StylusCalibrationDialog
+import com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction
+import com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -80,6 +88,20 @@ fun NoteSettingsScreen(
     val autoShapeEnabled by NoteDrawingPreferences.autoShapeRecognitionEnabled.collectAsStateWithLifecycle()
     val stylusOnlyEnabled by NoteDrawingPreferences.stylusOnlyModeEnabled.collectAsStateWithLifecycle()
     val showFloatingTimer by NoteDrawingPreferences.showFloatingFocusTimer.collectAsStateWithLifecycle()
+    val stylusButtonsEnabled by NoteDrawingPreferences.stylusButtonsEnabled.collectAsStateWithLifecycle()
+    val stylusHoldAction by NoteDrawingPreferences.stylusHoldAction.collectAsStateWithLifecycle()
+    val stylusDoubleTapAction by NoteDrawingPreferences.stylusDoubleTapAction.collectAsStateWithLifecycle()
+    val stylusCalibrated by NoteDrawingPreferences.stylusCalibrated.collectAsStateWithLifecycle()
+    var showStylusCalibrationDialog by remember { mutableStateOf(false) }
+
+    if (showStylusCalibrationDialog) {
+        com.example.sharkmentor.ui.screens.notes.drawing.StylusCalibrationDialog(
+            onDismiss = { showStylusCalibrationDialog = false },
+            onCalibrated = {
+                android.widget.Toast.makeText(context, "Kalem senkronize edildi", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
 
     val colorScheme = MaterialTheme.colorScheme
     val primaryColor = colorScheme.primary
@@ -96,7 +118,7 @@ fun NoteSettingsScreen(
         topBar = {
             TopAppBar(
                 expandedHeight = 50.dp,
-                title = { Text("Not Özellikleri") },
+                title = { Text("SharkStudio Ayarları") },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Geri")
@@ -114,7 +136,7 @@ fun NoteSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
-                text = "Not & Çizim Yapay Zeka Özellikleri",
+                text = "SharkStudio • SharkAI",
                 style = MaterialTheme.typography.labelMedium,
                 color = primaryColor
             )
@@ -128,7 +150,7 @@ fun NoteSettingsScreen(
                 Box(modifier = Modifier.padding(14.dp)) {
                     NoteFeatureSwitchHeader(
                         icon = Icons.Default.AutoAwesome,
-                        title = "Notlar & PDF AI Asistanı",
+                        title = "SharkStudio & PDF • SharkAI",
                         subtitle = "Not ve PDF üst barındaki AI asistanını açar veya gizler.",
                         checked = notesAiEnabled,
                         onCheckedChange = { userAiPrefs.setNotesAiEnabled(context, it) }
@@ -145,7 +167,7 @@ fun NoteSettingsScreen(
                 Box(modifier = Modifier.padding(14.dp)) {
                     NoteFeatureSwitchHeader(
                         icon = Icons.Default.AutoFixHigh,
-                        title = "Çizim Paneli AI (Kement Çözüm)",
+                        title = "Kement Çözümü • SharkAI",
                         subtitle = "Kementle seçilen soru veya görsellerde AI'ya Sor kısayolunu açar veya gizler.",
                         checked = drawingAiEnabled,
                         onCheckedChange = { userAiPrefs.setDrawingAiEnabled(context, it) }
@@ -312,6 +334,161 @@ fun NoteSettingsScreen(
                 }
             }
 
+            // 3.5 Kalem Yan Tuş Kısayolları & Hello Test/Senkronizasyon
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    NoteFeatureSwitchHeader(
+                        icon = Icons.Default.TouchApp,
+                        title = "Kalem Yan Tuş Kısayolları",
+                        subtitle = "Tablet veya telefon kalemindeki yan tuşa basılı tutma ve çift tıklama kısayollarını yönetir.",
+                        checked = stylusButtonsEnabled,
+                        onCheckedChange = { enabled ->
+                            NoteDrawingPreferences.setStylusButtonsEnabled(context, enabled)
+                        }
+                    )
+
+                    AnimatedVisibility(visible = stylusButtonsEnabled) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                            Text(
+                                text = "Basılı Tutarken",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                StylusHoldAction.entries.forEach { action ->
+                                    val selected = stylusHoldAction == action
+                                    Surface(
+                                        onClick = { NoteDrawingPreferences.setStylusHoldAction(context, action) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (selected) primaryColor else colorScheme.surface,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (selected) primaryColor else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                        )
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = action.label,
+                                                fontSize = 12.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) colorScheme.onPrimary else colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text(
+                                text = "Çift Tıklama",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                StylusDoubleTapAction.entries.forEach { action ->
+                                    val selected = stylusDoubleTapAction == action
+                                    Surface(
+                                        onClick = { NoteDrawingPreferences.setStylusDoubleTapAction(context, action) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (selected) primaryColor else colorScheme.surface,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (selected) primaryColor else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                        )
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = action.label,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) colorScheme.onPrimary else colorScheme.onSurface,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                    Surface(
+                        onClick = { showStylusCalibrationDialog = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = primaryColor.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, primaryColor.copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Draw,
+                                    contentDescription = null,
+                                    tint = primaryColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "Kalem Test & Senkronizasyon (Hello)",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else ""Hello" yazarak kalemini test edip senkronize et",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            if (stylusCalibrated) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "Senkronize",
+                                    tint = primaryColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // 4. Otomatik Şekil Algılama
             Surface(
                 shape = RoundedCornerShape(14.dp),
@@ -363,7 +540,7 @@ fun NoteSettingsScreen(
             Spacer(modifier = Modifier.height(2.dp))
 
             Text(
-                text = "Tüm ayarlar Notlar ve PDF ekranlarında anlık senkronize çalışır.",
+                text = "Tüm ayarlar SharkStudio ve PDF ekranlarında anlık senkronize çalışır.",
                 style = MaterialTheme.typography.bodySmall,
                 color = colorScheme.onSurfaceVariant,
                 lineHeight = 18.sp

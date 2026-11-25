@@ -31,6 +31,31 @@ import kotlin.math.sin
  * Reactive SharedPreferences store for Notes & PDF drawing studio preferences.
  * Edited exclusively from Settings -> "Not Özellikleri" and observed live by DrawingCanvasOverlay.
  */
+enum class StylusHoldAction(val id: String, val label: String) {
+    ERASER("eraser", "Silgi"),
+    LASSO("lasso", "Kement"),
+    NONE("none", "Kapalı");
+
+    companion object {
+        fun fromId(raw: String?): StylusHoldAction =
+            entries.firstOrNull { it.id.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true) }
+                ?: ERASER
+    }
+}
+
+enum class StylusDoubleTapAction(val id: String, val label: String) {
+    LASSO("lasso", "Kement"),
+    ERASER("eraser", "Silgi"),
+    UNDO("undo", "Geri Al"),
+    NONE("none", "Kapalı");
+
+    companion object {
+        fun fromId(raw: String?): StylusDoubleTapAction =
+            entries.firstOrNull { it.id.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true) }
+                ?: LASSO
+    }
+}
+
 object NoteDrawingPreferences {
     private const val PREFS_NAME = "shark_drawing_studio_prefs"
     private const val KEY_PRESSURE_SENSITIVITY = "pressure_sensitivity_enabled"
@@ -44,6 +69,11 @@ object NoteDrawingPreferences {
     private const val KEY_FLOATING_TIMER_SCALE = "floating_focus_timer_scale"
     private const val KEY_FLOATING_TIMER_X_RATIO = "floating_focus_timer_x_ratio"
     private const val KEY_FLOATING_TIMER_Y_RATIO = "floating_focus_timer_y_ratio"
+    private const val KEY_STYLUS_BUTTONS_ENABLED = "stylus_buttons_enabled"
+    private const val KEY_STYLUS_HOLD_ACTION = "stylus_hold_action"
+    private const val KEY_STYLUS_DOUBLE_TAP_ACTION = "stylus_double_tap_action"
+    private const val KEY_STYLUS_CALIBRATED = "stylus_calibrated"
+    private const val KEY_STYLUS_CALIBRATED_PRESSURE = "stylus_calibrated_pressure"
 
     @Volatile
     private var loaded = false
@@ -81,6 +111,21 @@ object NoteDrawingPreferences {
     private val _floatingFocusTimerYRatio = MutableStateFlow(0.06f)
     val floatingFocusTimerYRatio: StateFlow<Float> = _floatingFocusTimerYRatio.asStateFlow()
 
+    private val _stylusButtonsEnabled = MutableStateFlow(true)
+    val stylusButtonsEnabled: StateFlow<Boolean> = _stylusButtonsEnabled.asStateFlow()
+
+    private val _stylusHoldAction = MutableStateFlow(StylusHoldAction.ERASER)
+    val stylusHoldAction: StateFlow<StylusHoldAction> = _stylusHoldAction.asStateFlow()
+
+    private val _stylusDoubleTapAction = MutableStateFlow(StylusDoubleTapAction.LASSO)
+    val stylusDoubleTapAction: StateFlow<StylusDoubleTapAction> = _stylusDoubleTapAction.asStateFlow()
+
+    private val _stylusCalibrated = MutableStateFlow(false)
+    val stylusCalibrated: StateFlow<Boolean> = _stylusCalibrated.asStateFlow()
+
+    private val _stylusCalibratedPressure = MutableStateFlow(0.55f)
+    val stylusCalibratedPressure: StateFlow<Float> = _stylusCalibratedPressure.asStateFlow()
+
     fun ensureLoaded(context: Context) {
         if (loaded) return
         synchronized(this) {
@@ -102,6 +147,11 @@ object NoteDrawingPreferences {
                 _floatingFocusTimerScale.value = prefs.getFloat(KEY_FLOATING_TIMER_SCALE, 1.0f).coerceIn(0.8f, 1.4f)
                 _floatingFocusTimerXRatio.value = prefs.getFloat(KEY_FLOATING_TIMER_X_RATIO, 0.68f).coerceIn(0.02f, 0.95f)
                 _floatingFocusTimerYRatio.value = prefs.getFloat(KEY_FLOATING_TIMER_Y_RATIO, 0.06f).coerceIn(0.02f, 0.90f)
+                _stylusButtonsEnabled.value = prefs.getBoolean(KEY_STYLUS_BUTTONS_ENABLED, true)
+                _stylusHoldAction.value = StylusHoldAction.fromId(prefs.getString(KEY_STYLUS_HOLD_ACTION, StylusHoldAction.ERASER.id))
+                _stylusDoubleTapAction.value = StylusDoubleTapAction.fromId(prefs.getString(KEY_STYLUS_DOUBLE_TAP_ACTION, StylusDoubleTapAction.LASSO.id))
+                _stylusCalibrated.value = prefs.getBoolean(KEY_STYLUS_CALIBRATED, false)
+                _stylusCalibratedPressure.value = prefs.getFloat(KEY_STYLUS_CALIBRATED_PRESSURE, 0.55f).coerceIn(0.15f, 1.2f)
             }
             loaded = true
         }
@@ -159,6 +209,57 @@ object NoteDrawingPreferences {
             context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putBoolean(KEY_STYLUS_ONLY_MODE, enabled)
+                .apply()
+        }
+    }
+
+    fun setStylusButtonsEnabled(context: Context, enabled: Boolean) {
+        ensureLoaded(context)
+        _stylusButtonsEnabled.value = enabled
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_STYLUS_BUTTONS_ENABLED, enabled)
+                .apply()
+        }
+    }
+
+    fun setStylusHoldAction(context: Context, action: StylusHoldAction) {
+        ensureLoaded(context)
+        _stylusHoldAction.value = action
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_STYLUS_HOLD_ACTION, action.id)
+                .apply()
+        }
+    }
+
+    fun setStylusDoubleTapAction(context: Context, action: StylusDoubleTapAction) {
+        ensureLoaded(context)
+        _stylusDoubleTapAction.value = action
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_STYLUS_DOUBLE_TAP_ACTION, action.id)
+                .apply()
+        }
+    }
+
+    fun saveStylusCalibration(context: Context, avgPressure: Float) {
+        ensureLoaded(context)
+        val clampedPressure = avgPressure.coerceIn(0.15f, 1.2f)
+        // Gently tune pressure sensitivity strength from the user's natural "Hello" handwriting pressure
+        val tunedStrength = (1.15f + (0.55f - clampedPressure) * 0.65f).coerceIn(0.75f, 1.55f)
+        _stylusCalibrated.value = true
+        _stylusCalibratedPressure.value = clampedPressure
+        _pressureSensitivityStrength.value = tunedStrength
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_STYLUS_CALIBRATED, true)
+                .putFloat(KEY_STYLUS_CALIBRATED_PRESSURE, clampedPressure)
+                .putFloat(KEY_PRESSURE_STRENGTH, tunedStrength)
                 .apply()
         }
     }

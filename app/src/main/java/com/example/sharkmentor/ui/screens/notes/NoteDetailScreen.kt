@@ -1391,7 +1391,7 @@ fun NoteDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = "Not AI Asistanı",
+                            contentDescription = "SharkAI",
                             tint = primaryColor
                         )
                     }
@@ -3718,9 +3718,9 @@ fun NoteDetailScreen(
     if (showAiSheet && notesAiEnabled) {
         val hasMultiplePages = pdfPagePaths.size > 1 || pageFieldValues.size > 1
         val aiHeaderTitle = when {
-            pdfPagePaths.isNotEmpty() -> "Not Asistanı • PDF S.${activePdfPageIndex + 1}"
-            pageFieldValues.size > 1 -> "Not Asistanı • S.${activePageIndex + 1}"
-            else -> "Not Asistanı"
+            pdfPagePaths.isNotEmpty() -> "SharkAI • PDF S.${activePdfPageIndex + 1}"
+            pageFieldValues.size > 1 -> "SharkAI • S.${activePageIndex + 1}"
+            else -> "SharkAI"
         }
 
         ModalBottomSheet(

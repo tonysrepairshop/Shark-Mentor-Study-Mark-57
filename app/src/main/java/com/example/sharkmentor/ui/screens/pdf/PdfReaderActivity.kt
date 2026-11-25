@@ -1626,7 +1626,7 @@ fun PdfReaderScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = "PDF AI Asistanı",
+                            contentDescription = "SharkAI",
                             tint = primaryColor,
                             modifier = Modifier.size(18.dp)
                         )
@@ -2263,7 +2263,7 @@ fun PdfReaderScreen(
                         tint = primaryColor
                     )
                     Text(
-                        text = "PDF Asistanı • S.${currentPageIndex + 1}/$totalPages",
+                        text = "SharkAI • PDF S.${currentPageIndex + 1}/$totalPages",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = onSurfaceColor

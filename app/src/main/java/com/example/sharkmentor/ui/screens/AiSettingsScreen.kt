@@ -229,7 +229,7 @@ fun AiSettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Yapay Zeka & API",
+                        text = "SharkAI & API",
                         fontWeight = FontWeight.Bold
                     )
                 },
@@ -335,7 +335,7 @@ fun AiSettingsScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                         AiModuleToggleRow(
-                            title = "Video İçi AI Asistanı",
+                            title = "SharkPlayer İçi SharkAI",
                             subtitle = "İzlenen ders ve dakikaya göre soru sorma",
                             checked = videoStudioAiEnabled,
                             onCheckedChange = { userAiPrefs.setVideoStudioAiEnabled(context, it) }
