@@ -75,6 +75,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -2153,11 +2154,11 @@ fun PdfReaderScreen(
                             onClick = {
                                 val q = pdfSearchQuery.trim()
                                 if (q.isBlank() || isSearchingPdf) return@Button
-                                scope.launch {
+                                coroutineScope.launch {
                                     isSearchingPdf = true
                                     val found = kotlinx.coroutines.withContext(Dispatchers.IO) {
                                         val matches = mutableListOf<Pair<Int, String>>()
-                                        val maxP = pageCount.coerceAtMost(80)
+                                        val maxP = totalPages.coerceAtMost(80)
                                         for (pIdx in 0 until maxP) {
                                             val pageTxt = pageTextCache[pIdx] ?: runCatching {
                                                 PdfBitmapConverter.extractPdfPageRangeTextFast(
@@ -2205,7 +2206,7 @@ fun PdfReaderScreen(
                                 Surface(
                                     onClick = {
                                         showPdfSearchDialog = false
-                                        scope.launch {
+                                        coroutineScope.launch {
                                             runCatching { listState.scrollToItem(pageIdx) }
                                         }
                                     },
