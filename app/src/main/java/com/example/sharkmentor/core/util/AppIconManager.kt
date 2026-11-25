@@ -24,7 +24,7 @@ enum class SharkAppIcon(
         aliasClass = ".OriginalAlias",
         iconRes = R.mipmap.ic_launcher_original,
         previewDrawableRes = R.drawable.ic_app_icon_default,
-        notificationSmallIconRes = R.drawable.ic_notification_original
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     ),
     MAKO(
         key = "mako",
@@ -32,7 +32,7 @@ enum class SharkAppIcon(
         aliasClass = ".MakoAlias",
         iconRes = R.mipmap.ic_launcher_mako,
         previewDrawableRes = R.drawable.ic_app_icon_happy,
-        notificationSmallIconRes = R.drawable.ic_notification_spiny
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     ),
     HAMMERHEAD(
         key = "hammerhead",
@@ -40,7 +40,7 @@ enum class SharkAppIcon(
         aliasClass = ".HammerheadAlias",
         iconRes = R.mipmap.ic_launcher_hammerhead,
         previewDrawableRes = R.drawable.ic_app_icon_ecstatic,
-        notificationSmallIconRes = R.drawable.ic_notification_hammerhead
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     ),
     KAPLAN(
         key = "kaplan",
@@ -48,7 +48,7 @@ enum class SharkAppIcon(
         aliasClass = ".KaplanAlias",
         iconRes = R.mipmap.ic_launcher_kaplan,
         previewDrawableRes = R.drawable.ic_app_icon_proud,
-        notificationSmallIconRes = R.drawable.ic_notification_great_white
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     ),
     GREAT_WHITE(
         key = "great_white",
@@ -56,7 +56,7 @@ enum class SharkAppIcon(
         aliasClass = ".GreatWhiteAlias",
         iconRes = R.mipmap.ic_launcher_greatwhite,
         previewDrawableRes = R.drawable.ic_app_icon_love,
-        notificationSmallIconRes = R.drawable.ic_notification_great_white
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     ),
     MEGALODON(
         key = "megalodon",
@@ -64,7 +64,7 @@ enum class SharkAppIcon(
         aliasClass = ".MegalodonAlias",
         iconRes = R.mipmap.ic_launcher_megalodon,
         previewDrawableRes = R.drawable.ic_app_icon_furious,
-        notificationSmallIconRes = R.drawable.ic_notification_megalodon
+        notificationSmallIconRes = R.drawable.ic_notification_shark
     );
 
     companion object {

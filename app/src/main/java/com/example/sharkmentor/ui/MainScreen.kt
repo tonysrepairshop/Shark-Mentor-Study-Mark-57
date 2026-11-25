@@ -375,6 +375,7 @@ fun MainScreen(
 
                     // Restorable background video studio (when tapping the lock-screen/shade notification)
                     val videoRestoreRequested by CampVideoPlaybackController.restoreRequested.collectAsStateWithLifecycle()
+                    val isVideoInPipMode by CampVideoPlaybackController.isInPipMode.collectAsStateWithLifecycle()
                     val activePreviewSimulation by com.example.sharkmentor.core.simulation.SimulationLabEngine.activePreviewSimulation.collectAsStateWithLifecycle()
 
                     val shouldShowBottomBar = (currentRoute in primaryTabRoutes) &&
@@ -722,6 +723,29 @@ fun MainScreen(
                             com.example.sharkmentor.core.simulation.SimulationLabEngine.closeSimulationPreview()
                         }
                     )
+                }
+
+                // True Activity-Window PiP Surface: during PiP, host the live WebView directly in MainActivity's window!
+                if (isVideoInPipMode) {
+                    val liveWv = remember { CampVideoPlaybackController.currentWebView() }
+                    if (liveWv != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(androidx.compose.ui.graphics.Color.Black)
+                        ) {
+                            androidx.compose.ui.viewinterop.AndroidView(
+                                factory = {
+                                    (liveWv.parent as? android.view.ViewGroup)?.removeView(liveWv)
+                                    liveWv.allowBackgroundPlayback = true
+                                    liveWv.onResume()
+                                    liveWv.resumeTimers()
+                                    liveWv
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
                 }
 
                 if (videoRestoreRequested) {

@@ -39,12 +39,18 @@ fun sanitizeAndValidateSimulationHtml(rawResponse: String): String? {
     val docStart = html.indexOf("<!DOCTYPE", ignoreCase = true)
         .takeIf { it >= 0 }
         ?: html.indexOf("<html", ignoreCase = true).takeIf { it >= 0 }
-        ?: return null
-    val docEnd = html.lastIndexOf("</html>", ignoreCase = true)
-    html = if (docEnd > docStart) {
-        html.substring(docStart, docEnd + 7)
+    if (docStart != null) {
+        val docEnd = html.lastIndexOf("</html>", ignoreCase = true)
+        html = if (docEnd > docStart) {
+            html.substring(docStart, docEnd + 7)
+        } else {
+            html.substring(docStart) + "\n</body></html>"
+        }
+    } else if (html.contains("<canvas", ignoreCase = true) || html.contains("<svg", ignoreCase = true)) {
+        // Auto-wrap valid HTML5 visual fragments that omitted <!DOCTYPE html>
+        html = """<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;padding:12px;background:#0b1220;color:#e2e8f0;font-family:system-ui,sans-serif;}canvas,svg{max-width:100%;display:block;margin:0 auto;}</style></head><body>$html</body></html>"""
     } else {
-        html.substring(docStart) + "\n</html>"
+        return null
     }
 
     // Strip external CDN scripts/links so offline & sandboxed WebView never stalls or breaks
@@ -59,7 +65,8 @@ fun sanitizeAndValidateSimulationHtml(rawResponse: String): String? {
 
     val hasVisual = html.contains("<canvas", ignoreCase = true) || html.contains("<svg", ignoreCase = true)
     val hasScript = html.contains("<script", ignoreCase = true)
-    if (!hasVisual || !hasScript) return null
+    if (!hasVisual) return null
+    if (!hasScript && !html.contains("<svg", ignoreCase = true)) return null
 
     val errorGuard = """
         <script>
@@ -255,20 +262,39 @@ Bu konuyu öğrencinin dokunarak ve parametreleri değiştirerek sezgisel şekil
             MultiProviderAiClient.executeUnifiedTextPrompt(
                 context = context.applicationContext,
                 systemPrompt = systemPrompt,
-                userPrompt = userPrompt,
+                userPrompt = "$userPrompt\nKodu özlü ve kompakt tut (~90-140 satır), mutlaka eksiksiz </html> ile bitir.",
                 temperature = 0.25f,
-                maxTokens = 4096,
+                maxTokens = 8192,
                 responseJson = false,
-                timeoutMs = 55_000L
+                timeoutMs = 60_000L
             )
         }.getOrElse { err ->
             return@withContext Result.failure(err)
         }
 
-        val validatedHtml = sanitizeAndValidateSimulationHtml(raw)
-            ?: return@withContext Result.failure(
-                IllegalStateException("Yapay zeka geçerli bir görsel simülasyon üretemedi. Lütfen konuyu biraz daha net yazıp tekrar deneyin.")
+        var validatedHtml = sanitizeAndValidateSimulationHtml(raw)
+        if (validatedHtml == null) {
+            // Compact second attempt in case the first response truncated or returned prose
+            val retryRaw = runCatching {
+                MultiProviderAiClient.executeUnifiedTextPrompt(
+                    context = context.applicationContext,
+                    systemPrompt = "Sadece tek dosyalık kısa ve çalışan bir <!DOCTYPE html> + <canvas> + <script> simülasyonu döndür. Hiç açıklama yazma, harici link kullanma.",
+                    userPrompt = "Konu: $cleanTopic ($subjectHint). Türkçe etiketli, 2 kaydırıcılı (range input), koyu arka planlı (#0b1220) kısa interaktif HTML5 Canvas simülasyonu yaz.",
+                    temperature = 0.3f,
+                    maxTokens = 6144,
+                    responseJson = false,
+                    timeoutMs = 50_000L
+                )
+            }.getOrDefault("")
+            validatedHtml = sanitizeAndValidateSimulationHtml(retryRaw)
+        }
+
+        if (validatedHtml == null) {
+            val diag = if (raw.isBlank()) "Model boş yanıt döndürdü" else "Model HTML/Canvas üretmedi (${raw.length} karakter)"
+            return@withContext Result.failure(
+                IllegalStateException("Simülasyon oluşturulamadı ($diag). Lütfen farklı bir model veya daha kısa konu başlığı ile tekrar deneyin.")
             )
+        }
 
         val id = "sim_" + sha256Short("${cleanTopic.lowercase(Locale("tr", "TR"))}_${System.currentTimeMillis()}")
         val sim = InteractiveSimulation(

@@ -35,6 +35,28 @@ enum class FlashcardSourceType {
     ERROR_BANK
 }
 
+enum class FlashcardDensity(
+    val label: String,
+    val promptGuidance: String,
+    val maxTokens: Int
+) {
+    LOW(
+        label = "Az",
+        promptGuidance = "Yalnızca en kritik temel kavramlardan 6 ila 10 adet (kaynak çok kısaysa daha az; asla zorlama soru ekleme) yüksek kaliteli soru-cevap kartı üret.",
+        maxTokens = 2600
+    ),
+    STANDARD(
+        label = "Standart",
+        promptGuidance = "Kaynağın bilgi yoğunluğuna göre dengeli biçimde yaklaşık 15 ila 22 adet (kaynak kısaysa mantıklı olan kadar; asla tekrar veya zorlama soru ekleme) yüksek kaliteli soru-cevap kartı üret.",
+        maxTokens = 4800
+    ),
+    HIGH(
+        label = "Çok",
+        promptGuidance = "Kaynaktaki tüm önemli kavram, formül, kural, karşılaştırma ve istisnaları kapsayacak şekilde mantıklı olabildiğince çok (zengin içeriklerde 30 ila 50+ adet, ancak kısa kaynaklarda asla zorlama veya tekrar soru üretmeden) yüksek kaliteli soru-cevap kartı üret.",
+        maxTokens = 8192
+    )
+}
+
 @Immutable
 data class SmartFlashcard(
     val id: String,
@@ -393,7 +415,8 @@ object SmartFlashcardManager {
         selection: SelectedFlashcardSources,
         availableNotes: List<NoteEntity>,
         availablePdfs: List<ImportedPdfDocument>,
-        forceRegenerate: Boolean = false
+        forceRegenerate: Boolean = false,
+        density: FlashcardDensity = FlashcardDensity.STANDARD
     ): Result<SmartFlashcardDeck> = withContext(Dispatchers.IO) {
         ensureLoaded(context)
         if (_savedDecks.value.size >= MAX_SAVED_DECKS) {
@@ -406,7 +429,8 @@ object SmartFlashcardManager {
             selection = selection,
             availableNotes = availableNotes,
             availablePdfs = availablePdfs,
-            forceRegenerate = forceRegenerate
+            forceRegenerate = forceRegenerate,
+            density = density
         )
         if (cards.isEmpty()) {
             return@withContext Result.failure(
@@ -438,7 +462,8 @@ object SmartFlashcardManager {
         selection: SelectedFlashcardSources,
         availableNotes: List<NoteEntity>,
         availablePdfs: List<ImportedPdfDocument>,
-        forceRegenerate: Boolean = false
+        forceRegenerate: Boolean = false,
+        density: FlashcardDensity = FlashcardDensity.STANDARD
     ): List<SmartFlashcard> = withContext(Dispatchers.IO) {
         ensureLoaded(context)
         updateSelectedSources(context, selection)
@@ -477,7 +502,8 @@ object SmartFlashcardManager {
                 sourceType = FlashcardSourceType.NOTE,
                 sourceId = note.id,
                 sourceTitle = note.title.ifBlank { "Not" },
-                rawContent = fullSourceText
+                rawContent = fullSourceText,
+                density = density
             ).map { fresh -> mergeWithPreviousStats(fresh, existingById[fresh.id]) }
 
             freshCards.forEach { existingById[it.id] = it }
@@ -509,7 +535,8 @@ object SmartFlashcardManager {
                 sourceType = FlashcardSourceType.PDF,
                 sourceId = pdf.id,
                 sourceTitle = titleClean,
-                rawContent = if (extractedText.isNotBlank()) "$titleClean\n\n$extractedText" else titleClean
+                rawContent = if (extractedText.isNotBlank()) "$titleClean\n\n$extractedText" else titleClean,
+                density = density
             ).map { fresh -> mergeWithPreviousStats(fresh, existingById[fresh.id]) }
 
             freshCards.forEach { existingById[it.id] = it }
@@ -596,12 +623,13 @@ object SmartFlashcardManager {
         sourceType: FlashcardSourceType,
         sourceId: String,
         sourceTitle: String,
-        rawContent: String
+        rawContent: String,
+        density: FlashcardDensity = FlashcardDensity.STANDARD
     ): List<SmartFlashcard> {
         if (rawContent.length >= 30) {
             val systemPrompt = """
                 Sen YKS ve üniversite sınavına hazırlanan öğrenciler için Anki ve NotebookLM kalitesinde aktif hatırlama (active recall) bilgi kartları üreten uzman bir eğitmensin.
-                Verilen ders notu veya PDF içeriğinden sınavda gerçekten sorulabilecek en kritik 7 ila 10 adet soru-cevap kartı üret.
+                ${density.promptGuidance}
 
                 KESİN KURALLAR:
                 1. Her kartın "front" alanı MUTLAKA net, tek bir bilgiyi yoklayan gerçek bir soru cümlesi olsun ve soru işareti (?) ile bitsin (örnek: "Oksijenli solunumda Krebs döngüsü ökaryot hücrenin hangi bölümünde gerçekleşir ve net kaç ATP üretilir?").
@@ -618,9 +646,9 @@ object SmartFlashcardManager {
                     systemPrompt = systemPrompt,
                     userPrompt = "Kaynak Başlığı: $sourceTitle\n\nDers İçeriği:\n$rawContent",
                     temperature = 0.25f,
-                    maxTokens = 2400,
+                    maxTokens = density.maxTokens,
                     responseJson = true,
-                    timeoutMs = 40_000L
+                    timeoutMs = 55_000L
                 )
             }.getOrDefault("")
 

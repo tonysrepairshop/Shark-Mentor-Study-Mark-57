@@ -243,7 +243,8 @@ fun CampVideoStudyStudioDialog(
         CampVideoPlaybackController.setStudioOpen(true)
         onDispose {
             CampVideoPlaybackController.setStudioOpen(false)
-            if (!isMinimizingToBackground) {
+            val stillInPip = CampVideoPlaybackController.isInPipMode.value
+            if (!isMinimizingToBackground && !stillInPip) {
                 CampVideoPlaybackController.stopAndRelease(context)
             }
         }
@@ -605,7 +606,7 @@ fun CampVideoStudyStudioDialog(
         )
     }
 
-    Dialog(
+    if (!isInPipMode) Dialog(
         onDismissRequest = {
             if (isInFullscreen) {
                 exitFullscreen()

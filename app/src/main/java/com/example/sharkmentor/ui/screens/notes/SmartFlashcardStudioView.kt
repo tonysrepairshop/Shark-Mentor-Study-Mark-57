@@ -78,6 +78,7 @@ import com.example.sharkmentor.core.flashcard.PodcastSegment
 import com.example.sharkmentor.core.flashcard.SelectedFlashcardSources
 import com.example.sharkmentor.core.flashcard.SmartFlashcard
 import com.example.sharkmentor.core.flashcard.SmartFlashcardManager
+import com.example.sharkmentor.core.flashcard.FlashcardDensity
 import com.example.sharkmentor.core.flashcard.SmartFlashcardDeck
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.AlertDialog
@@ -181,7 +182,7 @@ fun SmartFlashcardStudioView(
         }
     }
 
-    fun launchDeckBuild(selection: SelectedFlashcardSources, forceRegenerate: Boolean, customName: String = "") {
+    fun launchDeckBuild(selection: SelectedFlashcardSources, forceRegenerate: Boolean, customName: String = "", density: FlashcardDensity = FlashcardDensity.STANDARD) {
         if (isGenerating) return
         if (!sessionFinished && sessionOutcomes.isNotEmpty()) {
             SmartFlashcardManager.flushSessionOutcomesInBackground(
@@ -199,7 +200,8 @@ fun SmartFlashcardStudioView(
                 selection = selection,
                 availableNotes = availableNotes,
                 availablePdfs = availablePdfs,
-                forceRegenerate = forceRegenerate
+                forceRegenerate = forceRegenerate,
+                density = density
             )
             result.onSuccess { created ->
                 activeDeck = orderDeckByPriority(created.cards, topicStats)
@@ -269,11 +271,11 @@ fun SmartFlashcardStudioView(
             availablePdfs = availablePdfs,
             availableErrorSubjects = errorBankSubjects,
             onDismiss = { showSourceSheet = false },
-            onConfirm = { newSel, forceAi ->
+            onConfirm = { newSel, forceAi, chosenDensity ->
                 showSourceSheet = false
                 val chosenName = pendingDeckName
                 pendingDeckName = ""
-                launchDeckBuild(newSel, forceAi, customName = chosenName)
+                launchDeckBuild(newSel, forceAi, customName = chosenName, density = chosenDensity)
             }
         )
     }
@@ -865,7 +867,7 @@ private fun FlashcardSourcePickerSheet(
     availablePdfs: List<ImportedPdfDocument>,
     availableErrorSubjects: List<String>,
     onDismiss: () -> Unit,
-    onConfirm: (SelectedFlashcardSources, Boolean) -> Unit
+    onConfirm: (SelectedFlashcardSources, Boolean, FlashcardDensity) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -873,6 +875,7 @@ private fun FlashcardSourcePickerSheet(
     var selectedNotes by remember { mutableStateOf(initialSelection.noteIds) }
     var selectedPdfs by remember { mutableStateOf(initialSelection.pdfIds) }
     var selectedSubjects by remember { mutableStateOf(initialSelection.errorSubjects) }
+    var selectedDensity by remember { mutableStateOf(FlashcardDensity.STANDARD) }
 
     val totalSelected = selectedNotes.size + selectedPdfs.size + selectedSubjects.size
 
@@ -976,6 +979,49 @@ private fun FlashcardSourcePickerSheet(
 
             HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
 
+            // Smart Question Density Picker (Az / Standart / Çok)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Soru Yoğunluğu",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FlashcardDensity.entries.forEach { d ->
+                        val active = selectedDensity == d
+                        Surface(
+                            onClick = { selectedDensity = d },
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (active) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(
+                                1.dp,
+                                if (active) colorScheme.primary else colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = d.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) colorScheme.onPrimary else colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -990,7 +1036,8 @@ private fun FlashcardSourcePickerSheet(
                                     pdfIds = selectedPdfs,
                                     errorSubjects = selectedSubjects
                                 ),
-                                true
+                                true,
+                                selectedDensity
                             )
                         },
                         enabled = totalSelected > 0
@@ -1008,7 +1055,8 @@ private fun FlashcardSourcePickerSheet(
                                 pdfIds = selectedPdfs,
                                 errorSubjects = selectedSubjects
                             ),
-                            false
+                            false,
+                            selectedDensity
                         )
                     },
                     enabled = totalSelected > 0,

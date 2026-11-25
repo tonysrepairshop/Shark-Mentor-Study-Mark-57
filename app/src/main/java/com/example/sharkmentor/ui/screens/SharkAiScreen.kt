@@ -1142,10 +1142,78 @@ fun SharkAiScreen(
                 }
             }
 
-            // Antigravity-style `/` Slash Sub-Runner Autocomplete Menu (100% Theme-Synced & Low-End Smooth)
-            val slashSuggestions = remember(inputText) {
-                com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.filterSuggestions(inputText)
+            // High-Contrast Active Slash Module Pill (clickable to switch modules or clear!)
+            var forceOpenSlashPicker by remember { mutableStateOf(false) }
+            val activeSlashInvocation = remember(inputText) {
+                com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.parseLeadingCommand(inputText)
             }
+            val slashSuggestions = remember(inputText, forceOpenSlashPicker) {
+                if (forceOpenSlashPicker) {
+                    com.example.sharkmentor.ui.aichat.SharkSlashCommand.entries
+                } else {
+                    com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.filterSuggestions(inputText)
+                }
+            }
+            AnimatedVisibility(
+                visible = activeSlashInvocation != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                activeSlashInvocation?.let { inv ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = { forceOpenSlashPicker = !forceOpenSlashPicker },
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.tertiary,
+                            contentColor = MaterialTheme.colorScheme.onTertiary,
+                            shadowElevation = 2.dp
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(start = 10.dp, end = 6.dp, top = 5.dp, bottom = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = inv.command.icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Text(
+                                    text = "${inv.command.command} • ${inv.command.title}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                IconButton(
+                                    onClick = {
+                                        forceOpenSlashPicker = false
+                                        viewModel.onInputTextChanged(inv.argumentText)
+                                    },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Modülü Kaldır",
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            text = "Değiştirmek için dokun",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Antigravity-style `/` Slash Sub-Runner Autocomplete Menu (100% Theme-Synced & Low-End Smooth)
             AnimatedVisibility(
                 visible = slashSuggestions.isNotEmpty(),
                 enter = fadeIn(animationSpec = androidx.compose.animation.core.tween(110)) +
@@ -1196,7 +1264,14 @@ fun SharkAiScreen(
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         } else {
-                                            viewModel.onInputTextChanged("${cmd.command} ")
+                                            forceOpenSlashPicker = false
+                                            val preservedArg = activeSlashInvocation?.argumentText?.trim().orEmpty()
+                                            val nextText = if (preservedArg.isNotBlank()) {
+                                                "${cmd.command} $preservedArg"
+                                            } else {
+                                                "${cmd.command} "
+                                            }
+                                            viewModel.onInputTextChanged(nextText)
                                         }
                                     }
                                     .alpha(if (isLocked) 0.58f else 1f)
