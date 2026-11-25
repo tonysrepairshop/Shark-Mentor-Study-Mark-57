@@ -239,18 +239,6 @@ fun CampVideoStudyStudioDialog(
 
     val isInPipMode by CampVideoPlaybackController.isInPipMode.collectAsStateWithLifecycle()
 
-    // Exit YouTube native custom fullscreen cleanly when entering PiP so the video surface returns into the WebView
-    LaunchedEffect(isInPipMode) {
-        if (isInPipMode) {
-            if (customFullscreenView != null || customFullscreenCallback != null) {
-                runCatching { customFullscreenCallback?.onCustomViewHidden() }
-                customFullscreenView = null
-                customFullscreenCallback = null
-            }
-            manualFullscreen = false
-        }
-    }
-
     DisposableEffect(Unit) {
         CampVideoPlaybackController.setStudioOpen(true)
         onDispose {
@@ -271,6 +259,19 @@ fun CampVideoStudyStudioDialog(
     var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var manualFullscreen by remember { mutableStateOf(false) }
     val isInFullscreen = customFullscreenView != null || manualFullscreen || isInPipMode
+
+    // Exit YouTube native custom fullscreen cleanly when entering PiP so the video surface returns into the WebView
+    LaunchedEffect(isInPipMode) {
+        if (isInPipMode) {
+            if (customFullscreenView != null || customFullscreenCallback != null) {
+                runCatching { customFullscreenCallback?.onCustomViewHidden() }
+                customFullscreenView = null
+                customFullscreenCallback = null
+            }
+            manualFullscreen = false
+        }
+    }
+
 
     // Direct WebView handle for programmatic pause on Posture Reminder & AI Popup Open
     var activeWebViewRef by remember { mutableStateOf<WebView?>(null) }
