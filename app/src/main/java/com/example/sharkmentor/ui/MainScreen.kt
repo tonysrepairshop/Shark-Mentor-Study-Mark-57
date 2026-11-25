@@ -921,7 +921,7 @@ private fun SharkMentorTopBar(
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
                                             imageVector = Icons.Default.MusicNote,
-                                            contentDescription = "Müzik Oynatıcı",
+                                            contentDescription = "SharkMusic",
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }

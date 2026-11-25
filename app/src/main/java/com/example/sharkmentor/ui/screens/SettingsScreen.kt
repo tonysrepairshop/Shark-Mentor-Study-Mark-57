@@ -405,7 +405,7 @@ fun SettingsScreen(
                         SettingsCardDivider()
                         SettingRow(
                             icon = Icons.Default.AutoAwesome,
-                            label = "Yapay Zeka & Video Stüdyosu",
+                            label = "Yapay Zeka & SharkPlayer",
                             subtitle = "Model seçimi ve reklam engelleyici",
                             onClick = onOpenAiSettings
                         )
@@ -962,7 +962,7 @@ fun SettingsScreen(
                             }
 
                             Text(
-                                text = "Müzik Oynatıcı Teması",
+                                text = "SharkMusic Teması",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

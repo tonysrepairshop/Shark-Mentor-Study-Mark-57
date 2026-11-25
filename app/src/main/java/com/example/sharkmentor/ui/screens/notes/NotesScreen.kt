@@ -646,7 +646,7 @@ fun NotesScreen(
                                                     color = primaryColor.copy(alpha = 0.14f)
                                                 ) {
                                                     Text(
-                                                        text = "SİMÜLASYON",
+                                                        text = "SHARKAI CORELAB",
                                                         fontSize = 10.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         color = primaryColor,

@@ -119,6 +119,14 @@ class ZenAudioService : Service() {
                 }
             }
         }
+
+        serviceScope.launch {
+            ZenAudioManager.activeMixLayers.collectLatest {
+                if (ZenAudioManager.currentSound.value != ZenSound.NONE && isForegroundStarted) {
+                    updateNotification()
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -204,7 +212,7 @@ class ZenAudioService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "SharkMentor Odak Sesleri",
+                "SharkMix Odak Sesleri",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Aktif odak ve ambiyans seslerini kontrol etmenizi sağlar"
@@ -215,8 +223,13 @@ class ZenAudioService : Service() {
     }
 
     private fun buildNotification(sound: ZenSound, isPlaying: Boolean): Notification {
-        val title = sound.displayName
-        val statusText = if (isPlaying) "Odak sesi çalıyor • SharkMentor" else "Duraklatıldı • SharkMentor"
+        val title = ZenAudioManager.getActiveDisplayTitle().ifBlank { sound.displayName }
+        val summary = ZenAudioManager.getActiveLayersSummary()
+        val statusText = if (isPlaying) {
+            if (summary.isNotBlank()) "$summary • SharkMusic" else "SharkMix çalıyor • SharkMusic"
+        } else {
+            "Duraklatıldı • SharkMix"
+        }
 
         val openPi = PendingIntent.getActivity(
             this, REQUEST_OPEN,
@@ -236,7 +249,7 @@ class ZenAudioService : Service() {
             .setColor(ContextCompat.getColor(this, R.color.shark_blue_primary))
             .setContentTitle(title)
             .setContentText(statusText)
-            .setSubText("Zihin Tazeleyici & Odak")
+            .setSubText("SharkMix • SharkMusic")
             .setContentIntent(openPi)
             .setOngoing(isPlaying)
             .setOnlyAlertOnce(true)

@@ -129,7 +129,7 @@ class Mark71FeaturesTest {
 
     @Test
     fun leftMusicScreenVisibilityAndFiveSkinsMatchSpecification() {
-        assertEquals(17, MusicPlayerSkin.entries.size)
+        assertEquals(5, MusicPlayerSkin.entries.size)
         assertEquals(MusicPlayerSkin.DEFAULT, MusicPlayerSkin.fromId("default"))
         assertEquals(MusicPlayerSkin.MODERN_VINYL, MusicPlayerSkin.fromId("modern_vinyl"))
         assertEquals(MusicPlayerSkin.CLASSIC_VINYL, MusicPlayerSkin.fromId("classic_vinyl"))
@@ -153,5 +153,30 @@ class Mark71FeaturesTest {
         assertTrue(shouldShowLeftMusicScreen(isFeatureEnabled = true, playbackState = activeSpotify))
         assertEquals("00:56", formatMusicDurationLabel(56_000L))
         assertEquals("03:30", formatMusicDurationLabel(210_000L))
+    }
+
+    @Test
+    fun sharkMusicThemeSyncPacksAndSharkMixPresetsAreValid() {
+        // Removed custom skins fall back cleanly to MODERN_VINYL
+        assertEquals(MusicPlayerSkin.MODERN_VINYL, MusicPlayerSkin.fromId("ocean"))
+        assertEquals(MusicPlayerSkin.MODERN_VINYL, MusicPlayerSkin.fromId("christmas"))
+
+        // Every one of the 13 app palettes has 3 distinct sync packs + pack 0 returns null (Original)
+        com.example.sharkmentor.core.data.ThemePalette.entries.forEach { palette ->
+            assertEquals(null, com.example.sharkmentor.ui.components.resolvePlayerSyncPalette(palette, 0))
+            assertEquals(null, com.example.sharkmentor.ui.components.resolvePlayerSyncPalette(palette, 4))
+            for (pack in 1..3) {
+                val resolved = com.example.sharkmentor.ui.components.resolvePlayerSyncPalette(palette, pack)
+                assertTrue(resolved != null)
+                assertEquals(pack, resolved!!.packIndex)
+                assertEquals(3, resolved.cardGradient.size)
+            }
+        }
+
+        // SharkMix presets stay within MAX_MIX_LAYERS (3)
+        assertTrue(com.example.sharkmentor.core.audio.SHARK_MIX_PRESETS.size >= 5)
+        com.example.sharkmentor.core.audio.SHARK_MIX_PRESETS.forEach { preset ->
+            assertTrue(preset.layers.size in 2..com.example.sharkmentor.core.audio.ZenAudioManager.MAX_MIX_LAYERS)
+        }
     }
 }

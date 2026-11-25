@@ -85,6 +85,7 @@ fun sanitizeAndValidateSimulationHtml(rawResponse: String): String? {
           });
         })();
         </script>
+        <div id="shark-corelab-badge" style="position:fixed;right:10px;bottom:8px;z-index:9998;pointer-events:none;font:600 10px/1.2 system-ui,-apple-system,sans-serif;letter-spacing:0.4px;color:rgba(226,232,240,0.78);background:rgba(15,23,42,0.58);border:1px solid rgba(148,163,184,0.28);backdrop-filter:blur(6px);padding:4px 9px;border-radius:999px;">SharkAI CoreLab</div>
     """.trimIndent()
 
     val bodyClose = html.lastIndexOf("</body>", ignoreCase = true)

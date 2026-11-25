@@ -1377,7 +1377,7 @@ fun NoteDetailScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.MusicNote,
-                            contentDescription = "Müzik Oynatıcı",
+                            contentDescription = "SharkMusic",
                             tint = if (musicMiniOpen || musicPlayback.isPlaying) primaryColor else onSurfaceColor
                         )
                     }

@@ -29,19 +29,7 @@ enum class MusicPlayerSkin(val id: String, val displayTitle: String) {
     MODERN_VINYL("modern_vinyl", "Modern Vinyl"),
     CLASSIC_VINYL("classic_vinyl", "Classic Vinyl"),
     CD("cd", "CD"),
-    CASSETTE("cassette", "Cassette"),
-    OCEAN("ocean", "Ocean"),
-    COFFEE("coffee", "Coffee"),
-    CHARCOAL("charcoal", "Charcoal"),
-    BLUEBERRY("blueberry", "Blueberry"),
-    AUTUMN("autumn", "Autumn"),
-    SAKURA("sakura", "Sakura"),
-    PAPER("paper", "Paper"),
-    OBSIDIAN("obsidian", "Obsidian"),
-    FOREST("forest", "Forest"),
-    STORM("storm", "Storm"),
-    DREAM("dream", "Dream"),
-    CHRISTMAS("christmas", "Christmas");
+    CASSETTE("cassette", "Cassette");
 
     companion object {
         fun fromId(raw: String?): MusicPlayerSkin =
@@ -127,7 +115,9 @@ object MusicPlayerHub {
     private const val PREFS_NAME = "shark_music_player_prefs"
     private const val KEY_ENABLED = "music_player_enabled"
     private const val KEY_SKIN = "music_player_skin"
+    private const val KEY_THEME_SYNC_PACK = "music_player_theme_sync_pack"
     private const val KEY_SPOTIFY_LINKED = "spotify_shortcut_linked"
+    const val THEME_SYNC_PACK_COUNT = 3
     private const val KEY_YTM_LINKED = "ytm_shortcut_linked"
 
     private val hubScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -164,6 +154,10 @@ object MusicPlayerHub {
 
     private val _selectedSkin = MutableStateFlow(MusicPlayerSkin.MODERN_VINYL)
     val selectedSkin: StateFlow<MusicPlayerSkin> = _selectedSkin.asStateFlow()
+
+    // 0 = Original player skin colors, 1..3 = App Theme Sync Packs 1..3
+    private val _themeSyncPackIndex = MutableStateFlow(0)
+    val themeSyncPackIndex: StateFlow<Int> = _themeSyncPackIndex.asStateFlow()
 
     private val _mediaAccessGranted = MutableStateFlow(false)
     val mediaAccessGranted: StateFlow<Boolean> = _mediaAccessGranted.asStateFlow()
@@ -206,6 +200,7 @@ object MusicPlayerHub {
                     val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     _isEnabled.value = prefs.getBoolean(KEY_ENABLED, true)
                     _selectedSkin.value = MusicPlayerSkin.fromId(prefs.getString(KEY_SKIN, MusicPlayerSkin.MODERN_VINYL.id))
+                    _themeSyncPackIndex.value = prefs.getInt(KEY_THEME_SYNC_PACK, 0).coerceIn(0, THEME_SYNC_PACK_COUNT)
                     _spotifyConnected.value = prefs.getBoolean(KEY_SPOTIFY_LINKED, isPackageInstalled(appCtx, PKG_SPOTIFY))
                     _ytMusicConnected.value = prefs.getBoolean(KEY_YTM_LINKED, isPackageInstalled(appCtx, PKG_YOUTUBE_MUSIC))
                     initialized = true
@@ -217,6 +212,11 @@ object MusicPlayerHub {
                     }
                     hubScope.launch {
                         ZenAudioManager.isPlaying.collectLatest {
+                            recomputeMergedState()
+                        }
+                    }
+                    hubScope.launch {
+                        ZenAudioManager.activeMixLayers.collectLatest {
                             recomputeMergedState()
                         }
                     }
@@ -264,6 +264,21 @@ object MusicPlayerHub {
         context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putString(KEY_SKIN, skin.id).apply()
         _selectedSkin.value = skin
+    }
+
+    fun setThemeSyncPack(context: Context, packIndex: Int) {
+        ensureInitialized(context)
+        val clamped = packIndex.coerceIn(0, THEME_SYNC_PACK_COUNT)
+        context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(KEY_THEME_SYNC_PACK, clamped).apply()
+        _themeSyncPackIndex.value = clamped
+    }
+
+    fun cycleThemeSyncPack(context: Context): Int {
+        ensureInitialized(context)
+        val next = (_themeSyncPackIndex.value + 1) % (THEME_SYNC_PACK_COUNT + 1)
+        setThemeSyncPack(context, next)
+        return next
     }
 
     fun checkNotificationListenerEnabled(context: Context): Boolean {
@@ -433,7 +448,7 @@ object MusicPlayerHub {
                     ?.takeIf { it.isNotBlank() }
                     ?: meta?.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
                     ?.takeIf { it.isNotBlank() }
-                    ?: "Müzik"
+                    ?: "SharkMusic"
                 val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST)
                     ?.takeIf { it.isNotBlank() }
                     ?: meta?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
@@ -473,15 +488,16 @@ object MusicPlayerHub {
             }
 
             zenActive -> {
+                val layerCount = ZenAudioManager.activeMixLayers.value.size
                 _playbackState.value = MusicPlaybackState(
                     hasActiveSession = true,
                     isPlaying = zenPlaying,
                     sourceKind = MusicSourceKind.ZEN_AUDIO,
                     sourcePackage = appContextRef?.packageName.orEmpty(),
-                    sourceLabel = "Odak Sesi",
-                    title = zenSound.displayName,
-                    artist = "SharkMentor Ambient",
-                    subtitleLine = "Kesintisiz Odak Atmosferi",
+                    sourceLabel = "SharkMix",
+                    title = ZenAudioManager.getActiveDisplayTitle(),
+                    artist = ZenAudioManager.getActiveLayersSummary().ifBlank { "SharkMix Ortam Sesi" },
+                    subtitleLine = if (layerCount > 1) "SharkMix • $layerCount Katman Aktif" else "SharkMix • Kesintisiz Ortam Sesi",
                     artwork = null,
                     positionMs = 0L,
                     durationMs = 0L,
@@ -537,11 +553,15 @@ object MusicPlayerHub {
                 runCatching { primaryExternalController?.transportControls?.skipToNext() }
             }
             MusicSourceKind.ZEN_AUDIO -> {
-                val playable = ZenSound.entries.filter { it != ZenSound.NONE }
-                if (playable.isNotEmpty()) {
-                    val idx = playable.indexOf(ZenAudioManager.currentSound.value).coerceAtLeast(0)
-                    val next = playable[(idx + 1) % playable.size]
-                    ZenAudioManager.playSound(context, next)
+                if (ZenAudioManager.activePresetId.value != null || ZenAudioManager.activeMixLayers.value.size > 1) {
+                    ZenAudioManager.cyclePreset(context, forward = true)
+                } else {
+                    val playable = ZenSound.entries.filter { it != ZenSound.NONE }
+                    if (playable.isNotEmpty()) {
+                        val idx = playable.indexOf(ZenAudioManager.currentSound.value).coerceAtLeast(0)
+                        val next = playable[(idx + 1) % playable.size]
+                        ZenAudioManager.playSound(context, next)
+                    }
                 }
             }
             MusicSourceKind.NONE -> Unit
@@ -555,11 +575,15 @@ object MusicPlayerHub {
                 runCatching { primaryExternalController?.transportControls?.skipToPrevious() }
             }
             MusicSourceKind.ZEN_AUDIO -> {
-                val playable = ZenSound.entries.filter { it != ZenSound.NONE }
-                if (playable.isNotEmpty()) {
-                    val idx = playable.indexOf(ZenAudioManager.currentSound.value).coerceAtLeast(0)
-                    val prev = playable[(idx - 1 + playable.size) % playable.size]
-                    ZenAudioManager.playSound(context, prev)
+                if (ZenAudioManager.activePresetId.value != null || ZenAudioManager.activeMixLayers.value.size > 1) {
+                    ZenAudioManager.cyclePreset(context, forward = false)
+                } else {
+                    val playable = ZenSound.entries.filter { it != ZenSound.NONE }
+                    if (playable.isNotEmpty()) {
+                        val idx = playable.indexOf(ZenAudioManager.currentSound.value).coerceAtLeast(0)
+                        val prev = playable[(idx - 1 + playable.size) % playable.size]
+                        ZenAudioManager.playSound(context, prev)
+                    }
                 }
             }
             MusicSourceKind.NONE -> Unit

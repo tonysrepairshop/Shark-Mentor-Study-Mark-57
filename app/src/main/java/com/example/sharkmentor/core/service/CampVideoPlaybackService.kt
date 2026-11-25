@@ -208,7 +208,7 @@ object CampVideoPlaybackController {
             isActive = true,
             isPlaying = isPlaying,
             title = title.ifBlank { prev.title.ifBlank { "Ders Videosu" } },
-            subtitle = subtitle.ifBlank { prev.subtitle.ifBlank { "Kamp Video Stüdyosu" } },
+            subtitle = subtitle.ifBlank { prev.subtitle.ifBlank { "SharkPlayer" } },
             positionSeconds = positionSeconds.coerceAtLeast(0),
             durationSeconds = durationSeconds.coerceAtLeast(0),
             activeUrl = url.ifBlank { prev.activeUrl }
@@ -704,7 +704,7 @@ class CampVideoPlaybackService : Service() {
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIconRes)
             .setContentTitle(st.title.ifBlank { "Ders Videosu" })
-            .setContentText(st.subtitle.ifBlank { "Kamp Video Stüdyosu" })
+            .setContentText(st.subtitle.ifBlank { "SharkPlayer" })
             .setContentIntent(openPending)
             .setDeleteIntent(stopPending)
             .setVisibility(Notification.VISIBILITY_PUBLIC)

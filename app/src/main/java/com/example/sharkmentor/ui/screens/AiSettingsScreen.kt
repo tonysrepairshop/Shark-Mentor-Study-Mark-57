@@ -329,7 +329,7 @@ fun AiSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = "Video Stüdyosu",
+                            text = "SharkPlayer • Video Stüdyosu",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
@@ -343,7 +343,7 @@ fun AiSettingsScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                         AiModuleToggleRow(
                             title = "Reklam Engelleyici",
-                            subtitle = "Video Stüdyosu'nda reklamları engeller",
+                            subtitle = "SharkPlayer'da reklamları engeller",
                             checked = videoAdBlockerEnabled,
                             onCheckedChange = { userAiPrefs.setVideoAdBlockerEnabled(context, it) }
                         )

@@ -253,7 +253,7 @@ fun CampVideoStudyStudioContent(
         CampVideoPlaybackController.startOrUpdateSession(
             context = context,
             title = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
-            subtitle = campTitle.ifBlank { subject.ifBlank { "Kamp Video Stüdyosu" } },
+            subtitle = campTitle.ifBlank { subject.ifBlank { "SharkPlayer" } },
             url = activeEpisode.buildInAppEmbedUrl(adBlockerEnabled = adBlockerEnabled, autoplay = true),
             isPlaying = true
         )
@@ -1224,7 +1224,7 @@ fun CampVideoStudyStudioContent(
                                                 horizontalAlignment = Alignment.CenterHorizontally,
                                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                                             ) {
-                                                Text("Video Stüdyosu AI Kapalı", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+                                                Text("SharkPlayer AI Kapalı", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
                                                 OutlinedButton(
                                                     onClick = { UserAiPreferences.setVideoStudioAiEnabled(context, true) },
                                                     shape = RoundedCornerShape(10.dp)

@@ -1611,7 +1611,7 @@ fun PdfReaderScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Default.MusicNote,
-                            contentDescription = "Müzik Oynatıcı",
+                            contentDescription = "SharkMusic",
                             tint = if (pdfMusicMiniOpen || pdfMusicPlayback.isPlaying) primaryColor else onSurfaceColor,
                             modifier = Modifier.size(18.dp)
                         )

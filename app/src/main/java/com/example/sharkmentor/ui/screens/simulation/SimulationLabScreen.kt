@@ -146,7 +146,7 @@ fun SimulationViewerDialog(
                             }
                         }
                         Text(
-                            text = "${currentSim.subject} • İnteraktif Simülasyon",
+                            text = "${currentSim.subject} • SharkAI CoreLab",
                             style = MaterialTheme.typography.labelSmall,
                             color = colorScheme.onSurfaceVariant,
                             maxLines = 1,
