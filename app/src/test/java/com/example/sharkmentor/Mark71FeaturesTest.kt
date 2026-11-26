@@ -241,4 +241,19 @@ class Mark71FeaturesTest {
         assertEquals(260f, extended.points.last().x, 0.5f)
         assertEquals(100f, extended.points.last().y, 0.5f)
     }
+
+    @Test
+    fun detailedVisualSlashAndSvgExtractorWorkCleanly() {
+        val parsed = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.parseLeadingCommand("/detayli ABC üçgeni")
+        assertTrue(parsed != null)
+        assertEquals(com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI, parsed!!.command)
+        assertEquals("ABC üçgeni", parsed.argumentText)
+
+        val raw = "```svg\n<svg viewBox=\"0 0 360 220\"><text>x^2 + \\pi</text></svg>\n```\nAdım 1: Çözüm"
+        val (svg, cleanText) = com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText(raw)
+        assertTrue(svg != null)
+        assertTrue(svg!!.contains("x²"))
+        assertTrue(svg.contains("π"))
+        assertEquals("Adım 1: Çözüm", cleanText)
+    }
 }

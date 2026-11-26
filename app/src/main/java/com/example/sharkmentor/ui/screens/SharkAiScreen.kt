@@ -143,6 +143,10 @@ import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.PulsingDotsIndicator
 import com.example.sharkmentor.ui.components.RichChatText
 import com.example.sharkmentor.ui.components.RichSolutionContent
+import com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText
+import com.example.sharkmentor.ui.components.DetailedVisualDiagramCard
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import com.example.sharkmentor.ui.viewmodel.SharkAiHandoffManager
 import com.example.sharkmentor.ui.viewmodel.SharkAiViewModel
 import com.google.firebase.auth.FirebaseAuth
@@ -853,12 +857,23 @@ fun SharkAiScreen(
                                                         }
                                                     }
                                                 } else {
-                                                    RichSolutionContent(
-                                                        text = cleanBubbleText,
-                                                        textColor = MaterialTheme.colorScheme.onSurface,
-                                                        fontSize = 15.sp,
-                                                        lineHeight = 23.sp
-                                                    )
+                                                    val (svgDiagram, bodyWithoutSvg) = remember(cleanBubbleText) {
+                                                        extractSvgDiagramAndCleanText(cleanBubbleText)
+                                                    }
+                                                    if (svgDiagram != null) {
+                                                        DetailedVisualDiagramCard(
+                                                            svgMarkup = svgDiagram,
+                                                            modifier = Modifier.padding(bottom = 10.dp)
+                                                        )
+                                                    }
+                                                    if (bodyWithoutSvg.isNotBlank()) {
+                                                        RichSolutionContent(
+                                                            text = bodyWithoutSvg,
+                                                            textColor = MaterialTheme.colorScheme.onSurface,
+                                                            fontSize = 15.sp,
+                                                            lineHeight = 23.sp
+                                                        )
+                                                    }
                                                 }
 
                                                 if (simShortcut != null) {
@@ -1394,10 +1409,26 @@ fun SharkAiScreen(
                         .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Row 1: Clean multi-line prompt field with `/` discovery hint
+                    // Row 1: Clean multi-line prompt field with `/` discovery hint & auto end-of-line cursor on slash pick
+                    var inputFieldValue by remember {
+                        mutableStateOf(TextFieldValue(text = inputText, selection = TextRange(inputText.length)))
+                    }
+                    LaunchedEffect(inputText) {
+                        if (inputFieldValue.text != inputText) {
+                            inputFieldValue = TextFieldValue(
+                                text = inputText,
+                                selection = TextRange(inputText.length)
+                            )
+                        }
+                    }
                     BasicTextField(
-                        value = inputText,
-                        onValueChange = { viewModel.onInputTextChanged(it) },
+                        value = inputFieldValue,
+                        onValueChange = { newVal ->
+                            inputFieldValue = newVal
+                            if (newVal.text != inputText) {
+                                viewModel.onInputTextChanged(newVal.text)
+                            }
+                        },
                         maxLines = 5,
                         modifier = Modifier
                             .fillMaxWidth()

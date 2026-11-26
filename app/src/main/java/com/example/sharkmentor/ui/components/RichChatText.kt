@@ -294,7 +294,7 @@ fun RichSolutionContent(
             }
         }
         if (showWatermark && text.isNotBlank()) {
-            SharkCoreLabWatermark("SharkStudio CoreLab")
+            SharkCoreLabWatermark("SharkMentor CoreLab")
         }
     }
 }

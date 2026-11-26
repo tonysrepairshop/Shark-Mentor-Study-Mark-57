@@ -43,6 +43,7 @@ import com.example.sharkmentor.data.repository.NetPredictionRepositoryImpl
 import com.example.sharkmentor.data.repository.PlanRepository
 import com.example.sharkmentor.data.repository.PlanRepositoryImpl
 import com.example.sharkmentor.data.repository.SharkAiCapability
+import com.example.sharkmentor.core.util.SharkStudioBackgroundHelper
 import com.example.sharkmentor.data.repository.SharkAiEngine
 import com.example.sharkmentor.data.sync.InstitutionScheduleSyncListener
 import com.example.sharkmentor.domain.model.prediction.NetWizardUiState
@@ -864,6 +865,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         }
 
         val parsedSlash = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.parseLeadingCommand(rawInput)
+        val isDetailedVisualSolve = parsedSlash?.command == com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI
         val hasExplicitOverride = engineOverride != null || capabilityOverride != null
 
         // 1. Handle leading `/` slash sub-runner command (Antigravity-style!)
@@ -1136,7 +1138,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val originatingSessionId = _activeChatSessionId.value
 
         activeAiJob?.cancel()
-        activeAiJob = viewModelScope.launch(Dispatchers.IO) {
+        activeAiJob = SharkStudioBackgroundHelper.backgroundScope.launch {
             try {
                 val appCtx = getApplication<Application>()
                 val (memorySnapshot, concrete, shortTargets, longTargets, allResources, allTopics, schedules, planAudit) = coroutineScope {
@@ -1432,10 +1434,19 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 // Hybrid Multi-Provider Routing:
                 // - Multimodal/PDF/Images route through Vision pipeline.
                 // - Text-only honors UserAiPreferences.selectedAiProvider across all 6 providers and AUTO.
+                val solverFormatDirective = if (isDetailedVisualSolve) {
+                    "\n\n[SHARKAI DETAYLI GÖRSEL ÇÖZÜM MODU - BETA]\n" +
+                    "1. Önce sorunun geometri şeklini (üçgen, çember, açı, yükseklik, uzunluk etiketleri) veya fonksiyon/matematik grafiğini (eksenler, kökler, tepe noktası, eğri) net, temiz ve yüksek kontrastlı bir ```svg ... ``` bloğu (viewBox=\"0 0 360 220\") içinde çiz. Etiketlerde sadece temiz Unicode semboller (π, Δ, θ, √, °, x², x³) kullan.\n" +
+                    "2. Hemen ardından şekil üzerindeki harflere ve noktalara atıf yaparak Adım 1:, Adım 2:, Adım 3: şeklinde anlaşılır çözümü yaz ve son satırda **Sonuç:** ile net cevabı ver."
+                } else {
+                    "\n\n[SHARKAI MATEMATİK & ANLAŞILABİLİRLİK FORMATI]\n" +
+                    "Çözümü mutlaka Adım 1:, Adım 2: şeklinde numaralandır, formülleri ve sembolleri (π, Δ, √, ², ³, °) temiz yaz ve son satırda **Sonuç:** ile net cevabı vurgula."
+                }
+                
                 val routerResult = if (attachmentUri != null) {
                     val visionContext = when (resolvedEngine) {
                         SharkAiEngine.SOLVER_ENGINE ->
-                            "${AiRouterRepository.SOLVER_ENGINE_SYSTEM_PROMPT}\n$compressedSystemPrompt"
+                            "${AiRouterRepository.SOLVER_ENGINE_SYSTEM_PROMPT}$solverFormatDirective\n$compressedSystemPrompt"
                         SharkAiEngine.TWIN_QUESTION_ENGINE ->
                             "${AiRouterRepository.TWIN_QUESTION_SYSTEM_PROMPT}\n$compressedSystemPrompt"
                         SharkAiEngine.PLANNER_OR_ORGANIZER ->
@@ -1453,7 +1464,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 } else {
                     val textInstruction = when (resolvedEngine) {
                         SharkAiEngine.SOLVER_ENGINE ->
-                            "${AiRouterRepository.SOLVER_ENGINE_SYSTEM_PROMPT}\n$compressedSystemPrompt"
+                            "${AiRouterRepository.SOLVER_ENGINE_SYSTEM_PROMPT}$solverFormatDirective\n$compressedSystemPrompt"
                         SharkAiEngine.TWIN_QUESTION_ENGINE ->
                             "${AiRouterRepository.TWIN_QUESTION_SYSTEM_PROMPT}\n$compressedSystemPrompt"
                         SharkAiEngine.PLANNER_OR_ORGANIZER ->
@@ -1522,6 +1533,14 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                         resolvedAttachmentName = resolvedAttachmentName,
                         userPrompt = effectivePrompt,
                         aiResponseText = routerResult.text
+                    )
+                }
+                if (isExplicitQuestionMode && routerResult.text.isNotBlank()) {
+                    SharkStudioBackgroundHelper.notifyTaskCompleted(
+                        context = getApplication(),
+                        notificationId = 3014,
+                        title = if (isDetailedVisualSolve) "SharkAI Detaylı Çözüm Hazır" else "SharkAI Soru Çözümü Hazır",
+                        body = if (isDetailedVisualSolve) "Görsel diyagram ve adım adım çözüm tamamlandı." else "Adım adım matematik/soru çözümü tamamlandı."
                     )
                 }
             } catch (ce: CancellationException) {

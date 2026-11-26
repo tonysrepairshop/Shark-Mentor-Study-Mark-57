@@ -1037,71 +1037,143 @@ private fun SharkMentorBranding(
 ) {
     val onSurface = MaterialTheme.colorScheme.onSurface
     val isLightSurface = MaterialTheme.colorScheme.surface.luminance() > 0.5f
-    val aiBlue = if (isLightSurface) Color(0xFF0284C7) else Color(0xFF38BDF8)
     val studioRed = if (isLightSurface) Color(0xFFDC2626) else Color(0xFFF87171)
-    val brandText = when (currentRoute) {
-        Screen.Shark.route -> buildAnnotatedString {
-            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
-                append("Shark")
-            }
-            withStyle(
-                SpanStyle(
-                    color = aiBlue,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.ExtraBold,
-                    shadow = Shadow(
-                        color = aiBlue.copy(alpha = if (isLightSurface) 0.35f else 0.72f),
-                        offset = Offset(0f, 0f),
-                        blurRadius = 10f
-                    )
-                )
-            ) {
-                append("AI")
-            }
-        }
-        Screen.Notes.route -> buildAnnotatedString {
-            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
-                append("Shark")
-            }
-            withStyle(
-                SpanStyle(
-                    color = studioRed,
-                    fontFamily = FontFamily.Cursive,
-                    fontStyle = FontStyle.Italic,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 19.sp
-                )
-            ) {
-                append("Studio")
-            }
-        }
-        else -> buildAnnotatedString {
-            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
-                append("SharkMentor")
-            }
-        }
-    }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(
-            modifier = Modifier.width(IntrinsicSize.Max),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = brandText,
-                style = MaterialTheme.typography.titleMedium.copy(lineHeight = 18.sp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+    when (currentRoute) {
+        Screen.Shark.route -> {
+            // Aurora Borealis flowing gradient + 3D extruded depth on "AI" (no STUDY subtitle!)
+            val auroraTransition = rememberInfiniteTransition(label = "aurora_ai_brand")
+            val auroraShift by auroraTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 180f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = 4200, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "aurora_shift"
             )
-            Text(
-                text = if (SpecialMemberConfig.isEmreBey()) "Emrw" else if (isCampus) "C A M P U S" else "S T U D Y",
-                fontSize = 9.sp,
-                letterSpacing = 3.sp, lineHeight = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+            val auroraColors = if (isLightSurface) {
+                listOf(
+                    Color(0xFF0284C7),
+                    Color(0xFF059669),
+                    Color(0xFF7C3AED),
+                    Color(0xFF0EA5E9),
+                    Color(0xFFDB2777)
+                )
+            } else {
+                listOf(
+                    Color(0xFF38BDF8),
+                    Color(0xFF34D399),
+                    Color(0xFFA855F7),
+                    Color(0xFF22D3EE),
+                    Color(0xFFF472B6)
+                )
+            }
+            val auroraBrush = Brush.linearGradient(
+                colors = auroraColors,
+                start = Offset(auroraShift - 60f, 0f),
+                end = Offset(auroraShift + 110f, 44f)
             )
+            val depthFar = if (isLightSurface) Color(0xFF1E3A8A).copy(alpha = 0.42f) else Color(0xFF312E81).copy(alpha = 0.85f)
+            val depthNear = if (isLightSurface) Color(0xFF0E7490).copy(alpha = 0.55f) else Color(0xFF0891B2).copy(alpha = 0.72f)
+            val aiBaseStyle = MaterialTheme.typography.titleMedium.copy(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Black,
+                fontSize = 18.sp,
+                letterSpacing = 0.8.sp,
+                lineHeight = 19.sp
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Shark",
+                    style = MaterialTheme.typography.titleMedium.copy(lineHeight = 19.sp),
+                    fontWeight = FontWeight.Bold,
+                    color = onSurface,
+                    maxLines = 1
+                )
+                Box(contentAlignment = Alignment.CenterStart) {
+                    // 3D Extruded Back Layer 2
+                    Text(
+                        text = "AI",
+                        style = aiBaseStyle,
+                        color = depthFar,
+                        modifier = Modifier.offset(x = 1.8.dp, y = 1.8.dp)
+                    )
+                    // 3D Extruded Mid Layer 1
+                    Text(
+                        text = "AI",
+                        style = aiBaseStyle,
+                        color = depthNear,
+                        modifier = Modifier.offset(x = 0.9.dp, y = 0.9.dp)
+                    )
+                    // Foreground Aurora Borealis Gradient Layer
+                    Text(
+                        text = "AI",
+                        style = aiBaseStyle.copy(
+                            brush = auroraBrush,
+                            shadow = Shadow(
+                                color = auroraColors.first().copy(alpha = if (isLightSurface) 0.28f else 0.65f),
+                                offset = Offset(0f, 0f),
+                                blurRadius = 8f
+                            )
+                        )
+                    )
+                }
+            }
+        }
+
+        Screen.Notes.route -> {
+            // SharkStudio wordmark (no STUDY subtitle!)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = buildAnnotatedString {
+                        withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
+                            append("Shark")
+                        }
+                        withStyle(
+                            SpanStyle(
+                                color = studioRed,
+                                fontFamily = FontFamily.Cursive,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 20.sp
+                            )
+                        ) {
+                            append("Studio")
+                        }
+                    },
+                    style = MaterialTheme.typography.titleMedium.copy(lineHeight = 20.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        else -> {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(
+                    modifier = Modifier.width(IntrinsicSize.Max),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "SharkMentor",
+                        style = MaterialTheme.typography.titleMedium.copy(lineHeight = 17.sp),
+                        fontWeight = FontWeight.Bold,
+                        color = onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = if (SpecialMemberConfig.isEmreBey()) "Emrw" else if (isCampus) "C A M P U S" else "S T U D Y",
+                        fontSize = 9.sp,
+                        letterSpacing = 3.sp,
+                        lineHeight = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                    )
+                }
+            }
         }
     }
 }

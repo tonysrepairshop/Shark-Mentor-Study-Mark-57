@@ -1357,16 +1357,14 @@ fun NoteDetailScreen(
                         },
                         style = MaterialTheme.typography.titleMedium
                     )
-                    Text(
-                        text = if (pageFieldValues.size > 1) {
-                            "SAYFA ${safeActivePageIndex + 1} / ${pageFieldValues.size}"
-                        } else {
-                            "S T U D Y"
-                        },
-                        fontSize = 9.sp,
-                        letterSpacing = if (pageFieldValues.size > 1) 1.5.sp else 3.sp,
-                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                    )
+                    if (pageFieldValues.size > 1) {
+                        Text(
+                            text = "SAYFA ${safeActivePageIndex + 1} / ${pageFieldValues.size}",
+                            fontSize = 9.sp,
+                            letterSpacing = 1.5.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    }
                 }
             },
             navigationIcon = {

@@ -4,6 +4,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.DateRange
@@ -60,6 +61,16 @@ enum class SharkSlashCommand(
         persona = AiPersona.SHARK_COACH,
         engine = SharkAiEngine.SOLVER_ENGINE,
         aliases = listOf("/coz", "/çöz", "/sorucoz")
+    ),
+    DETAYLI(
+        command = "/detayli",
+        title = "Detaylı Çözüm (BETA)",
+        subtitle = "Geometri şekli & fonksiyon grafiği çizerek adım adım açıkla",
+        examplePrompt = "f(x) = x² - 4x + 3 parabolünün grafiğini çizip tepe noktasını ve köklerini adım adım bul",
+        icon = Icons.Default.AutoFixHigh,
+        persona = AiPersona.SHARK_COACH,
+        engine = SharkAiEngine.SOLVER_ENGINE,
+        aliases = listOf("/detay", "/detaylı", "/geometri", "/grafik")
     ),
     BENZER(
         command = "/benzer",
