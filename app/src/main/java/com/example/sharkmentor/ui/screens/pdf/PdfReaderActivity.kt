@@ -1471,7 +1471,7 @@ fun PdfReaderScreen(
                 withContext(Dispatchers.Main) {
                     if (requestId == aiRequestGen) {
                         isAiLoading = false
-                        if (aiResponseText.isNotBlank()) {
+                        if (!aiResult.isNullOrBlank()) {
                             SharkStudioBackgroundHelper.notifyTaskCompleted(
                                 context = context,
                                 notificationId = 3012,
