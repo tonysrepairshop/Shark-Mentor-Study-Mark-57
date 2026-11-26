@@ -207,4 +207,38 @@ class Mark71FeaturesTest {
             com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction.fromId(null)
         )
     }
+
+    @Test
+    fun stylusSingleTapAndAutoShapeLiveResizeWorkCleanly() {
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusSingleTapAction.PEN,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusSingleTapAction.fromId("pen")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusSingleTapAction.PEN,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusSingleTapAction.fromId("unknown")
+        )
+        assertEquals(
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.PEN,
+            com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction.fromId("pen")
+        )
+
+        val baseLine = com.example.sharkmentor.ui.screens.notes.drawing.RecognizedShape(
+            shapeKind = com.example.sharkmentor.ui.screens.notes.drawing.ShapeKind.LINE,
+            points = listOf(
+                com.example.sharkmentor.ui.screens.notes.drawing.DrawingPoint(10f, 100f, 1f),
+                com.example.sharkmentor.ui.screens.notes.drawing.DrawingPoint(110f, 100f, 1f)
+            ),
+            labelTr = "Düz Çizgi"
+        )
+        val extended = com.example.sharkmentor.ui.screens.notes.drawing.AutoShapeRecognizer.resizeRecognizedShape(
+            baseShape = baseLine,
+            anchorX = 110f,
+            anchorY = 100f,
+            currentX = 260f,
+            currentY = 102f
+        )
+        assertEquals(260f, extended.points.last().x, 0.5f)
+        assertEquals(100f, extended.points.last().y, 0.5f)
+    }
 }

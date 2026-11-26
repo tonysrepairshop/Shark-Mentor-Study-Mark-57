@@ -466,7 +466,7 @@ fun LassoAiSolveSheet(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = "SharkAI • Kement Çözümü",
+                            text = "SharkAI Flash",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface,

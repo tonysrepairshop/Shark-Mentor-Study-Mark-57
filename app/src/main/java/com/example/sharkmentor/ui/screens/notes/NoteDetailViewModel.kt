@@ -15,6 +15,7 @@ import com.example.sharkmentor.core.ai.NoteDocumentAiHelper
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import com.example.sharkmentor.core.util.NoteStyleParser
 import com.example.sharkmentor.core.util.PaperPattern
+import com.example.sharkmentor.core.util.SharkStudioBackgroundHelper
 import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.NoteEntity
 import com.example.sharkmentor.data.repository.NoteRepository
@@ -161,7 +162,7 @@ KESİN DAVRANIŞ KURALLARI:
     }
 
     fun cancelAiAnalysis() {
-        aiAnalysisJob?.cancel()
+        // Keep SharkAI Not Asistanı running in background until completion
         aiAnalysisJob = null
         _isAiLoading.value = false
     }
@@ -490,7 +491,7 @@ KESİN DAVRANIŞ KURALLARI:
         _aiSavedNewNoteId.value = null
         _aiResult.value = ""
 
-        aiAnalysisJob = viewModelScope.launch(Dispatchers.IO) {
+        aiAnalysisJob = SharkStudioBackgroundHelper.backgroundScope.launch {
             try {
                 val selectedProvider = UserAiPreferences.getOrNull(appContext)?.getSelectedProvider()
                     ?: AiProviderChoice.AUTO
@@ -747,6 +748,16 @@ KESİN DAVRANIŞ KURALLARI:
                 }
             } finally {
                 _isAiLoading.value = false
+                if (!_aiResult.value.isNullOrBlank()) {
+                    appContext?.let { ctx ->
+                        SharkStudioBackgroundHelper.notifyTaskCompleted(
+                            context = ctx,
+                            notificationId = 3013,
+                            title = "SharkAI Not Asistanı Hazır",
+                            body = "Not analizi ve yanıtı tamamlandı."
+                        )
+                    }
+                }
             }
         }
     }

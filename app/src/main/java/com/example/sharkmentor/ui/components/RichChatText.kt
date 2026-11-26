@@ -130,7 +130,8 @@ fun RichSolutionContent(
     answerContainerColor: Color = MaterialTheme.colorScheme.primaryContainer,
     answerContentColor: Color = MaterialTheme.colorScheme.onPrimaryContainer,
     fontSize: TextUnit = 14.5.sp,
-    lineHeight: TextUnit = 22.sp
+    lineHeight: TextUnit = 22.sp,
+    showWatermark: Boolean = true
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val secondaryAccent = colorScheme.tertiary
@@ -390,6 +391,10 @@ private fun buildParagraphAnnotatedString(
             appendInlineMarkdown(line, baseColor, accentColor, codeBgColor)
         }
         if (idx < lines.lastIndex) append("\n")
+    
+        if (showWatermark && text.isNotBlank()) {
+            SharkCoreLabWatermark("SharkStudio CoreLab")
+        }
     }
 }
 

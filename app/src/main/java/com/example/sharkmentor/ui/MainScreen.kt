@@ -78,6 +78,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.LayoutDirection
@@ -385,6 +393,7 @@ fun MainScreen(
                             topBar = {
                                 if (shouldShowTopBar) {
                                     SharkMentorTopBar(
+                                        currentRoute = currentDestination?.route,
                                         countdown = countdownText,
                                         isCampus = uiState.isCampus,
                                         topBarSettings = topBarSettings,
@@ -853,6 +862,7 @@ fun MainScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SharkMentorTopBar(
+    currentRoute: String? = null,
     countdown: String,
     topBarSettings: TopBarSettings,
     isAnyFocusRunning: Boolean = false,
@@ -891,7 +901,7 @@ private fun SharkMentorTopBar(
                     .padding(end = 4.dp)
             ) {
                 // App Logo is always fixed on the left
-                SharkMentorBranding(countdown = countdown, isCampus = isCampus)
+                SharkMentorBranding(currentRoute = currentRoute, countdown = countdown, isCampus = isCampus)
                 topBarSettings.moduleOrder.forEach { module ->
                     if (module == TopBarModule.BRANDING || !topBarSettings.isModuleVisible(module)) return@forEach
                     when (module) {
@@ -1019,8 +1029,58 @@ private fun SharkMentorTopBar(
 }
 
 @Composable
-private fun SharkMentorBranding(countdown: String, isCampus: Boolean) {
-    // Task 6.2: Left-aligned block with IntrinsicSize.Max and centered S T U D Y subtitle underneath
+private fun SharkMentorBranding(
+    currentRoute: String? = null,
+    countdown: String,
+    isCampus: Boolean
+) {
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val isLightSurface = MaterialTheme.colorScheme.surface.luminance() > 0.5f
+    val aiBlue = if (isLightSurface) Color(0xFF0284C7) else Color(0xFF38BDF8)
+    val studioRed = if (isLightSurface) Color(0xFFDC2626) else Color(0xFFF87171)
+    val brandText = when (currentRoute) {
+        Screen.Shark.route -> buildAnnotatedString {
+            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
+                append("Shark")
+            }
+            withStyle(
+                SpanStyle(
+                    color = aiBlue,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.ExtraBold,
+                    shadow = Shadow(
+                        color = aiBlue.copy(alpha = if (isLightSurface) 0.35f else 0.72f),
+                        offset = Offset(0f, 0f),
+                        blurRadius = 10f
+                    )
+                )
+            ) {
+                append("AI")
+            }
+        }
+        Screen.Notes.route -> buildAnnotatedString {
+            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
+                append("Shark")
+            }
+            withStyle(
+                SpanStyle(
+                    color = studioRed,
+                    fontFamily = FontFamily.Cursive,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 19.sp
+                )
+            ) {
+                append("Studio")
+            }
+        }
+        else -> buildAnnotatedString {
+            withStyle(SpanStyle(color = onSurface, fontWeight = FontWeight.Bold)) {
+                append("SharkMentor")
+            }
+        }
+    }
+
     Row(
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1030,12 +1090,10 @@ private fun SharkMentorBranding(countdown: String, isCampus: Boolean) {
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = "SharkMentor",
-                style = MaterialTheme.typography.titleMedium.copy(lineHeight = 17.sp),
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                text = brandText,
+                style = MaterialTheme.typography.titleMedium.copy(lineHeight = 18.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = if (SpecialMemberConfig.isEmreBey()) "Emrw" else if (isCampus) "C A M P U S" else "S T U D Y",

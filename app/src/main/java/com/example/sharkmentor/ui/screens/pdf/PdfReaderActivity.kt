@@ -157,6 +157,7 @@ import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.NoteEntity
 import com.example.sharkmentor.data.repository.NoteRepositoryImpl
 import com.example.sharkmentor.ui.components.FloatingFocusTimerOverlay
+import com.example.sharkmentor.core.util.SharkStudioBackgroundHelper
 import com.example.sharkmentor.ui.components.RichSolutionContent
 import com.example.sharkmentor.ui.components.formatMathAsPlainText
 import com.example.sharkmentor.ui.screens.notes.NoteDetailScreen
@@ -1176,7 +1177,7 @@ fun PdfReaderScreen(
         aiSavedAsNote = false
 
         val mainHandler = Handler(Looper.getMainLooper())
-        aiJob = coroutineScope.launch(Dispatchers.IO) {
+        aiJob = SharkStudioBackgroundHelper.backgroundScope.launch {
             val ownedBitmaps = mutableListOf<Bitmap>()
             try {
                 UserAiPreferences.initialize(context.applicationContext)
@@ -1470,6 +1471,14 @@ fun PdfReaderScreen(
                 withContext(Dispatchers.Main) {
                     if (requestId == aiRequestGen) {
                         isAiLoading = false
+                        if (aiResponseText.isNotBlank()) {
+                            SharkStudioBackgroundHelper.notifyTaskCompleted(
+                                context = context,
+                                notificationId = 3012,
+                                title = "SharkAI PDF Asistanı Hazır",
+                                body = "PDF sayfa ${currentPageIndex + 1} yanıtı tamamlandı."
+                            )
+                        }
                     }
                 }
             }

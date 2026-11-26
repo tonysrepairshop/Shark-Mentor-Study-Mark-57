@@ -34,6 +34,7 @@ import kotlin.math.sin
 enum class StylusHoldAction(val id: String, val label: String) {
     ERASER("eraser", "Silgi"),
     LASSO("lasso", "Kement"),
+    PEN("pen", "Kalem"),
     NONE("none", "Kapalı");
 
     companion object {
@@ -43,9 +44,24 @@ enum class StylusHoldAction(val id: String, val label: String) {
     }
 }
 
+enum class StylusSingleTapAction(val id: String, val label: String) {
+    PEN("pen", "Kalem"),
+    ERASER("eraser", "Silgi"),
+    LASSO("lasso", "Kement"),
+    UNDO("undo", "Geri Al"),
+    NONE("none", "Kapalı");
+
+    companion object {
+        fun fromId(raw: String?): StylusSingleTapAction =
+            entries.firstOrNull { it.id.equals(raw, ignoreCase = true) || it.name.equals(raw, ignoreCase = true) }
+                ?: PEN
+    }
+}
+
 enum class StylusDoubleTapAction(val id: String, val label: String) {
     LASSO("lasso", "Kement"),
     ERASER("eraser", "Silgi"),
+    PEN("pen", "Kalem"),
     UNDO("undo", "Geri Al"),
     NONE("none", "Kapalı");
 
@@ -71,6 +87,7 @@ object NoteDrawingPreferences {
     private const val KEY_FLOATING_TIMER_Y_RATIO = "floating_focus_timer_y_ratio"
     private const val KEY_STYLUS_BUTTONS_ENABLED = "stylus_buttons_enabled"
     private const val KEY_STYLUS_HOLD_ACTION = "stylus_hold_action"
+    private const val KEY_STYLUS_SINGLE_TAP_ACTION = "stylus_single_tap_action"
     private const val KEY_STYLUS_DOUBLE_TAP_ACTION = "stylus_double_tap_action"
     private const val KEY_STYLUS_CALIBRATED = "stylus_calibrated"
     private const val KEY_STYLUS_CALIBRATED_PRESSURE = "stylus_calibrated_pressure"
@@ -117,6 +134,9 @@ object NoteDrawingPreferences {
     private val _stylusHoldAction = MutableStateFlow(StylusHoldAction.ERASER)
     val stylusHoldAction: StateFlow<StylusHoldAction> = _stylusHoldAction.asStateFlow()
 
+    private val _stylusSingleTapAction = MutableStateFlow(StylusSingleTapAction.PEN)
+    val stylusSingleTapAction: StateFlow<StylusSingleTapAction> = _stylusSingleTapAction.asStateFlow()
+
     private val _stylusDoubleTapAction = MutableStateFlow(StylusDoubleTapAction.LASSO)
     val stylusDoubleTapAction: StateFlow<StylusDoubleTapAction> = _stylusDoubleTapAction.asStateFlow()
 
@@ -149,6 +169,7 @@ object NoteDrawingPreferences {
                 _floatingFocusTimerYRatio.value = prefs.getFloat(KEY_FLOATING_TIMER_Y_RATIO, 0.06f).coerceIn(0.02f, 0.90f)
                 _stylusButtonsEnabled.value = prefs.getBoolean(KEY_STYLUS_BUTTONS_ENABLED, true)
                 _stylusHoldAction.value = StylusHoldAction.fromId(prefs.getString(KEY_STYLUS_HOLD_ACTION, StylusHoldAction.ERASER.id))
+                _stylusSingleTapAction.value = StylusSingleTapAction.fromId(prefs.getString(KEY_STYLUS_SINGLE_TAP_ACTION, StylusSingleTapAction.PEN.id))
                 _stylusDoubleTapAction.value = StylusDoubleTapAction.fromId(prefs.getString(KEY_STYLUS_DOUBLE_TAP_ACTION, StylusDoubleTapAction.LASSO.id))
                 _stylusCalibrated.value = prefs.getBoolean(KEY_STYLUS_CALIBRATED, false)
                 _stylusCalibratedPressure.value = prefs.getFloat(KEY_STYLUS_CALIBRATED_PRESSURE, 0.55f).coerceIn(0.15f, 1.2f)
@@ -231,6 +252,17 @@ object NoteDrawingPreferences {
             context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
                 .putString(KEY_STYLUS_HOLD_ACTION, action.id)
+                .apply()
+        }
+    }
+
+    fun setStylusSingleTapAction(context: Context, action: StylusSingleTapAction) {
+        ensureLoaded(context)
+        _stylusSingleTapAction.value = action
+        runCatching {
+            context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_STYLUS_SINGLE_TAP_ACTION, action.id)
                 .apply()
         }
     }

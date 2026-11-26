@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">S.M. Study</string>
+    <string name="app_name">SM Study</string>
     <!-- Navigation Tabs -->
     <string name="tab_home">Ana Sayfa</string>
     <string name="tab_plans">Planlarım</string>

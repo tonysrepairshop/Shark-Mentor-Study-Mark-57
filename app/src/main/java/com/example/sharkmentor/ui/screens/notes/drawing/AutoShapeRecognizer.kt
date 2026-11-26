@@ -59,6 +59,9 @@ object AutoShapeRecognizer {
         // 1. Straight Line Check
         tryRecognizeLine(rawPoints, totalLength)?.let { return it }
 
+        // 1.5 Arrow Check (straight shaft + short angled tip at the end)
+        tryRecognizeArrow(rawPoints, totalLength)?.let { return it }
+
         // 2. Closed-Shape Gate (Circle/Ellipse, Triangle, Rectangle/Square)
         val first = rawPoints.first()
         val last = rawPoints.last()
@@ -527,5 +530,92 @@ object AutoShapeRecognizer {
         val projX = a.x + t * dx
         val projY = a.y + t * dy
         return hypot(point.x - projX, point.y - projY)
+    }
+
+    private fun tryRecognizeArrow(
+        points: List<DrawingPoint>,
+        totalLength: Float
+    ): RecognizedShape? {
+        if (points.size < 10) return null
+        val start = points.first()
+        // Find the point farthest from start -> likely the arrow tip!
+        var tipIdx = 0
+        var maxDist = 0f
+        for (i in 1 until points.size) {
+            val d = start.distanceTo(points[i])
+            if (d > maxDist) {
+                maxDist = d
+                tipIdx = i
+            }
+        }
+        // Arrow tip should be past 55% of the stroke and leave a small arrowhead tail after it
+        if (tipIdx < (points.size * 0.55f).toInt() || tipIdx >= points.lastIndex - 1) return null
+        if (maxDist < MIN_LINE_CHORD_PX) return null
+
+        val tip = points[tipIdx]
+        var shaftLen = 0f
+        for (i in 1..tipIdx) shaftLen += points[i - 1].distanceTo(points[i])
+        if (shaftLen / maxDist > 1.16f) return null
+
+        val headLen = (totalLength - shaftLen).coerceAtLeast(0f)
+        if (headLen < 16f || headLen > maxDist * 0.65f) return null
+
+        val snappedTip = snapEndpointAngle(start, tip)
+        return RecognizedShape(
+            shapeKind = ShapeKind.ARROW,
+            points = listOf(
+                DrawingPoint(start.x, start.y, 1.0f),
+                DrawingPoint(snappedTip.x, snappedTip.y, 1.0f)
+            ),
+            labelTr = "Ok"
+        )
+    }
+
+    /**
+     * Live-resizes or extends a locked recognized shape while the user keeps dragging
+     * without lifting the stylus/finger after hold-to-snap.
+     */
+    fun resizeRecognizedShape(
+        baseShape: RecognizedShape,
+        anchorX: Float,
+        anchorY: Float,
+        currentX: Float,
+        currentY: Float
+    ): RecognizedShape {
+        val pts = baseShape.points
+        if (pts.size < 2) return baseShape
+        return when (baseShape.shapeKind) {
+            ShapeKind.LINE, ShapeKind.ARROW -> {
+                val start = pts.first()
+                val rawEnd = DrawingPoint(currentX, currentY, 1.0f)
+                val snappedEnd = snapEndpointAngle(start, rawEnd)
+                baseShape.copy(points = listOf(start, snappedEnd))
+            }
+            else -> {
+                var minX = Float.MAX_VALUE
+                var minY = Float.MAX_VALUE
+                var maxX = -Float.MAX_VALUE
+                var maxY = -Float.MAX_VALUE
+                for (p in pts) {
+                    if (p.x < minX) minX = p.x
+                    if (p.y < minY) minY = p.y
+                    if (p.x > maxX) maxX = p.x
+                    if (p.y > maxY) maxY = p.y
+                }
+                val cx = (minX + maxX) * 0.5f
+                val cy = (minY + maxY) * 0.5f
+                val baseDist = hypot(anchorX - cx, anchorY - cy).coerceAtLeast(24f)
+                val curDist = hypot(currentX - cx, currentY - cy).coerceAtLeast(16f)
+                val scale = (curDist / baseDist).coerceIn(0.28f, 3.5f)
+                val scaled = pts.map { p ->
+                    DrawingPoint(
+                        x = cx + (p.x - cx) * scale,
+                        y = cy + (p.y - cy) * scale,
+                        pressure = p.pressure
+                    )
+                }
+                baseShape.copy(points = scaled)
+            }
+        }
     }
 }

@@ -84,6 +84,40 @@ fun sanitizeAndValidateSimulationHtml(rawResponse: String): String? {
             box.textContent = 'Simülasyon çalışma uyarısı: ' + (e.message || 'Yenile düğmesini deneyin.');
           });
         })();
+        (function(){
+          function fmtSci(str){
+            if(typeof str !== 'string') return str;
+            return str
+              .replace(/\\pi\b/g,'π').replace(/\\Delta\b/g,'Δ').replace(/\\delta\b/g,'δ')
+              .replace(/\\theta\b/g,'θ').replace(/\\omega\b/g,'ω').replace(/\\Omega\b/g,'Ω')
+              .replace(/\\alpha\b/g,'α').replace(/\\beta\b/g,'β').replace(/\\gamma\b/g,'γ')
+              .replace(/\\lambda\b/g,'λ').replace(/\\mu\b/g,'μ').replace(/\\sigma\b/g,'σ')
+              .replace(/\\times\b/g,'×').replace(/\\cdot\b/g,'·').replace(/\\sqrt\b/g,'√')
+              .replace(/\\infty\b/g,'∞').replace(/\\degree\b|\\deg\b/g,'°').replace(/\\pm\b/g,'±')
+              .replace(/\\le\b|\\leq\b/g,'≤').replace(/\\ge\b|\\geq\b/g,'≥').replace(/\\neq\b/g,'≠')
+              .replace(/\\rightarrow\b|\\to\b/g,'→')
+              .replace(/H_2O/g,'H₂O').replace(/CO_2/g,'CO₂').replace(/O_2/g,'O₂').replace(/N_2/g,'N₂')
+              .replace(/H_2SO_4/g,'H₂SO₄').replace(/NH_3/g,'NH₃').replace(/CH_4/g,'CH₄')
+              .replace(/\^2\b/g,'²').replace(/\^3\b/g,'³').replace(/\^-1\b/g,'⁻¹').replace(/\^-2\b/g,'⁻²');
+          }
+          var origFill = CanvasRenderingContext2D && CanvasRenderingContext2D.prototype.fillText;
+          if(origFill){
+            CanvasRenderingContext2D.prototype.fillText = function(t,x,y,m){
+              return m !== undefined ? origFill.call(this, fmtSci(String(t)), x, y, m) : origFill.call(this, fmtSci(String(t)), x, y);
+            };
+          }
+          function walk(node){
+            if(!node) return;
+            if(node.nodeType === 3 && node.nodeValue){
+              var v = fmtSci(node.nodeValue);
+              if(v !== node.nodeValue) node.nodeValue = v;
+            } else if(node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE'){
+              for(var i=0;i<node.childNodes.length;i++) walk(node.childNodes[i]);
+            }
+          }
+          document.addEventListener('DOMContentLoaded', function(){ walk(document.body); });
+          setTimeout(function(){ walk(document.body); }, 180);
+        })();
         </script>
         <div id="shark-corelab-badge" style="position:fixed;right:10px;bottom:8px;z-index:9998;pointer-events:none;font:600 10px/1.2 system-ui,-apple-system,sans-serif;letter-spacing:0.4px;color:rgba(226,232,240,0.78);background:rgba(15,23,42,0.58);border:1px solid rgba(148,163,184,0.28);backdrop-filter:blur(6px);padding:4px 9px;border-radius:999px;">SharkAI CoreLab</div>
     """.trimIndent()

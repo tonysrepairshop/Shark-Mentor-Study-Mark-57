@@ -65,6 +65,7 @@ import com.example.sharkmentor.ui.screens.notes.drawing.NoteDrawingPreferences
 import com.example.sharkmentor.ui.screens.notes.drawing.StylusCalibrationDialog
 import com.example.sharkmentor.ui.screens.notes.drawing.StylusDoubleTapAction
 import com.example.sharkmentor.ui.screens.notes.drawing.StylusHoldAction
+import com.example.sharkmentor.ui.screens.notes.drawing.StylusSingleTapAction
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -90,6 +91,7 @@ fun NoteSettingsScreen(
     val showFloatingTimer by NoteDrawingPreferences.showFloatingFocusTimer.collectAsStateWithLifecycle()
     val stylusButtonsEnabled by NoteDrawingPreferences.stylusButtonsEnabled.collectAsStateWithLifecycle()
     val stylusHoldAction by NoteDrawingPreferences.stylusHoldAction.collectAsStateWithLifecycle()
+    val stylusSingleTapAction by NoteDrawingPreferences.stylusSingleTapAction.collectAsStateWithLifecycle()
     val stylusDoubleTapAction by NoteDrawingPreferences.stylusDoubleTapAction.collectAsStateWithLifecycle()
     val stylusCalibrated by NoteDrawingPreferences.stylusCalibrated.collectAsStateWithLifecycle()
     var showStylusCalibrationDialog by remember { mutableStateOf(false) }
@@ -397,6 +399,44 @@ fun NoteSettingsScreen(
                             }
 
                             Text(
+                                text = "Tek Tıklama",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                StylusSingleTapAction.entries.forEach { action ->
+                                    val selected = stylusSingleTapAction == action
+                                    Surface(
+                                        onClick = { NoteDrawingPreferences.setStylusSingleTapAction(context, action) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (selected) primaryColor else colorScheme.surface,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (selected) primaryColor else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                        )
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = action.label,
+                                                fontSize = 10.5.sp,
+                                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (selected) colorScheme.onPrimary else colorScheme.onSurface,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text(
                                 text = "Çift Tıklama",
                                 style = MaterialTheme.typography.labelSmall,
                                 fontWeight = FontWeight.SemiBold,
@@ -500,7 +540,7 @@ fun NoteSettingsScreen(
                     NoteFeatureSwitchHeader(
                         icon = Icons.Default.AutoFixHigh,
                         title = "Otomatik Şekil Algılama",
-                        subtitle = "Çizilen çizgi, üçgen, dikdörtgen ve daireleri düzgünleştirir.",
+                        subtitle = "Çizimin sonunda kalemi kısa süre sabit tutunca düz çizgi, ok, üçgen, dikdörtgen veya daireye dönüştürür; bırakmadan sürükleyerek boyutlandırabilirsin.",
                         checked = autoShapeEnabled,
                         onCheckedChange = { enabled ->
                             NoteDrawingPreferences.setAutoShapeRecognitionEnabled(context, enabled)

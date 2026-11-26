@@ -107,11 +107,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -481,6 +486,7 @@ fun CampVideoStudyStudioContent(
             val fullPrompt = """
                 [AKTİF İZLENEN DERS VİDEOSU]
                 • Kamp / Liste: $campTitle
+• Format: Soru veya formül çözerken mutlaka Adım 1, Adım 2 şeklinde numaralandır, matematik/fen sembollerini temiz yaz ve son satırda **Sonuç:** ile net cevabı ver.
                 • Ders: $subject
                 • Bölüm / Konu: ${activeEpisode.dayNumber}. Ders - ${activeEpisode.topicTitle}
                 • Video Başlığı: ${liveVideoTitleRef.get().orEmpty().ifBlank { activeEpisode.topicTitle }}
@@ -758,16 +764,41 @@ fun CampVideoStudyStudioContent(
                                     }
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Column(modifier = Modifier.weight(1f)) {
+                                        val isLightVidSurface = colorScheme.surface.luminance() > 0.5f
+                                        val playerNavy = if (isLightVidSurface) Color(0xFF1E3A8A) else Color(0xFF60A5FA)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = buildAnnotatedString {
+                                                    withStyle(SpanStyle(color = colorScheme.onSurface, fontWeight = FontWeight.Bold)) {
+                                                        append("Shark")
+                                                    }
+                                                    withStyle(
+                                                        SpanStyle(
+                                                            color = playerNavy,
+                                                            fontFamily = FontFamily.SansSerif,
+                                                            fontWeight = FontWeight.ExtraBold,
+                                                            letterSpacing = 0.4.sp
+                                                        )
+                                                    ) {
+                                                        append("Player")
+                                                    }
+                                                },
+                                                style = MaterialTheme.typography.titleSmall,
+                                                maxLines = 1
+                                            )
+                                            Text(
+                                                text = "• ${activeEpisode.dayNumber}. Ders",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
                                         Text(
-                                            text = "${activeEpisode.dayNumber}. Ders • ${activeEpisode.topicTitle}",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = campTitle,
+                                            text = "${activeEpisode.topicTitle} • $campTitle",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = colorScheme.primary,
                                             maxLines = 1,

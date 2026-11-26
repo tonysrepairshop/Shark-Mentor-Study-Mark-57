@@ -8,6 +8,7 @@ import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.FolderSpecial
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Assignment
@@ -52,7 +53,7 @@ sealed class Screen(
     /** Focus analytics and productivity metrics. */
     data object Shark : Screen(
         route  = "analytics",
-        label  = "Shark",
+        label  = "SharkAI",
         icon   = Icons.Default.AutoGraph, // or Psychology if preferred
     )
 
@@ -129,8 +130,8 @@ sealed class Screen(
 
     data object Notes : Screen(
         route = "notes_screen",
-        label = "Notlar",
-        icon = Icons.Default.StickyNote2,
+        label = "SharkStudio",
+        icon = Icons.Default.Draw,
     )
 
     data object PaceKeep : Screen(

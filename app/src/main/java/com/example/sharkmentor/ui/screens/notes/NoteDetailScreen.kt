@@ -185,6 +185,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1338,10 +1339,23 @@ fun NoteDetailScreen(
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text(
-                        text = "SharkMentor",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = onSurfaceColor
+                        text = androidx.compose.ui.text.buildAnnotatedString {
+                            withStyle(androidx.compose.ui.text.SpanStyle(color = onSurfaceColor, fontWeight = FontWeight.Bold)) {
+                                append("Shark")
+                            }
+                            withStyle(
+                                androidx.compose.ui.text.SpanStyle(
+                                    color = if (MaterialTheme.colorScheme.surface.luminance() > 0.5f) Color(0xFFDC2626) else Color(0xFFF87171),
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Cursive,
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 19.sp
+                                )
+                            ) {
+                                append("Studio")
+                            }
+                        },
+                        style = MaterialTheme.typography.titleMedium
                     )
                     Text(
                         text = if (pageFieldValues.size > 1) {
@@ -3718,9 +3732,9 @@ fun NoteDetailScreen(
     if (showAiSheet && notesAiEnabled) {
         val hasMultiplePages = pdfPagePaths.size > 1 || pageFieldValues.size > 1
         val aiHeaderTitle = when {
-            pdfPagePaths.isNotEmpty() -> "SharkAI • PDF S.${activePdfPageIndex + 1}"
-            pageFieldValues.size > 1 -> "SharkAI • S.${activePageIndex + 1}"
-            else -> "SharkAI"
+            pdfPagePaths.isNotEmpty() -> "SharkAI Not Asistanı • PDF S.${activePdfPageIndex + 1}"
+            pageFieldValues.size > 1 -> "SharkAI Not Asistanı • S.${activePageIndex + 1}"
+            else -> "SharkAI Not Asistanı"
         }
 
         ModalBottomSheet(

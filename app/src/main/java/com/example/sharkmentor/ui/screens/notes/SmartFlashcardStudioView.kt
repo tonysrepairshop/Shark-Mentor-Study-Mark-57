@@ -78,6 +78,10 @@ import com.example.sharkmentor.core.flashcard.PodcastSegment
 import com.example.sharkmentor.core.flashcard.SelectedFlashcardSources
 import com.example.sharkmentor.core.flashcard.SmartFlashcard
 import com.example.sharkmentor.core.flashcard.SmartFlashcardManager
+import com.example.sharkmentor.core.util.SharkStudioBackgroundHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.example.sharkmentor.ui.components.SharkCoreLabWatermark
 import com.example.sharkmentor.core.flashcard.FlashcardDensity
 import com.example.sharkmentor.core.flashcard.SmartFlashcardDeck
 import androidx.compose.material3.OutlinedTextField
@@ -190,12 +194,13 @@ fun SmartFlashcardStudioView(
                 sessionResults = sessionOutcomes.values.toMap()
             )
         }
-        scope.launch {
-            isGenerating = true
-            sessionOutcomes.clear()
-            sessionFinished = false
+        val appCtx = context.applicationContext
+        isGenerating = true
+        sessionOutcomes.clear()
+        sessionFinished = false
+        SharkStudioBackgroundHelper.backgroundScope.launch {
             val result = SmartFlashcardManager.createNamedDeck(
-                context = context,
+                context = appCtx,
                 customName = customName,
                 selection = selection,
                 availableNotes = availableNotes,
@@ -204,17 +209,27 @@ fun SmartFlashcardStudioView(
                 density = density
             )
             result.onSuccess { created ->
-                activeDeck = orderDeckByPriority(created.cards, topicStats)
-            }.onFailure { err ->
-                Toast.makeText(
-                    context,
-                    err.message ?: "Flashcard serisi oluşturulamadı.",
-                    Toast.LENGTH_LONG
-                ).show()
+                SharkStudioBackgroundHelper.notifyTaskCompleted(
+                    context = appCtx,
+                    notificationId = 3010,
+                    title = "SharkStudio Flash Kartlar Hazır",
+                    body = "${created.name} (${created.cards.size} kart) oluşturuldu."
+                )
             }
-            currentIndex = 0
-            isBackVisible = false
-            isGenerating = false
+            withContext(Dispatchers.Main) {
+                result.onSuccess { created ->
+                    activeDeck = orderDeckByPriority(created.cards, topicStats)
+                }.onFailure { err ->
+                    Toast.makeText(
+                        context,
+                        err.message ?: "Flashcard serisi oluşturulamadı.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                currentIndex = 0
+                isBackVisible = false
+                isGenerating = false
+            }
         }
     }
 
@@ -754,6 +769,7 @@ fun SmartFlashcardStudioView(
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier.fillMaxWidth()
                                 )
+                                SharkCoreLabWatermark("SharkStudio CoreLab")
                             }
                         }
 
@@ -1170,20 +1186,31 @@ private fun PodcastBetaBottomSheet(
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     fun loadPodcast(forceRefresh: Boolean) {
-        scope.launch {
-            ttsHolder[0]?.stop()
-            isPlaying = false
-            isGeneratingPodcast = true
+        val appCtx = context.applicationContext
+        ttsHolder[0]?.stop()
+        isPlaying = false
+        isGeneratingPodcast = true
+        SharkStudioBackgroundHelper.backgroundScope.launch {
             val built = NotePodcastEngine.loadOrGeneratePodcast(
-                context = context,
+                context = appCtx,
                 selection = selection,
                 availableNotes = availableNotes,
                 availablePdfs = availablePdfs,
                 forceRefresh = forceRefresh
             )
-            episode = built
-            activeTrackIdx = 0
-            isGeneratingPodcast = false
+            if (forceRefresh && built.segments.isNotEmpty()) {
+                SharkStudioBackgroundHelper.notifyTaskCompleted(
+                    context = appCtx,
+                    notificationId = 3011,
+                    title = "SharkStudio Podcast Hazır",
+                    body = "${built.episodeTitle} dinlemeye hazır."
+                )
+            }
+            withContext(Dispatchers.Main) {
+                episode = built
+                activeTrackIdx = 0
+                isGeneratingPodcast = false
+            }
         }
     }
 
@@ -1312,6 +1339,12 @@ private fun PodcastBetaBottomSheet(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    Text(
+                        text = "SharkStudio CoreLab",
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.primary.copy(alpha = 0.75f)
+                    )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     IconButton(
