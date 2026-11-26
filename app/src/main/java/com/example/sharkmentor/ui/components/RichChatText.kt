@@ -293,6 +293,9 @@ fun RichSolutionContent(
                 }
             }
         }
+        if (showWatermark && text.isNotBlank()) {
+            SharkCoreLabWatermark("SharkStudio CoreLab")
+        }
     }
 }
 
@@ -391,11 +394,7 @@ private fun buildParagraphAnnotatedString(
             appendInlineMarkdown(line, baseColor, accentColor, codeBgColor)
         }
         if (idx < lines.lastIndex) append("\n")
-    
-        if (showWatermark && text.isNotBlank()) {
-            SharkCoreLabWatermark("SharkStudio CoreLab")
-        }
-    }
+}
 }
 
 private fun buildInlineAnnotatedString(

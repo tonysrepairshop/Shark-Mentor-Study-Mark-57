@@ -95,9 +95,7 @@ import com.example.sharkmentor.core.flashcard.orderDeckByPriority
 import com.example.sharkmentor.core.util.ImportedPdfDocument
 import com.example.sharkmentor.data.local.SharkMentorDatabase
 import com.example.sharkmentor.data.local.entity.NoteEntity
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)

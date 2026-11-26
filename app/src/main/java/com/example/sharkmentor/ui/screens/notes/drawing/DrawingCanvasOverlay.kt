@@ -460,29 +460,7 @@ fun DrawingCanvasOverlay(
                 var movedTooFar = false
                 var multiTouchScroll = false
                 while (true) {
-                    val event = if (canHoldSnap && snappedBaseShape == null && inProgressPoints.size >= 6) {
-                        withTimeoutOrNull(140L) { awaitPointerEvent() }
-                    } else {
-                        awaitPointerEvent()
-                    }
-                    if (event == null) {
-                        // Pointer stayed still: check if hold-to-snap threshold (~420ms) reached
-                        val nowHoldMs = SystemClock.elapsedRealtime()
-                        if (canHoldSnap && snappedBaseShape == null && (nowHoldMs - holdAnchorMs) >= 420L) {
-                            val recognized = AutoShapeRecognizer.recognize(inProgressPoints.toList())
-                            if (recognized != null) {
-                                snappedBaseShape = recognized
-                                snappedLiveShape = recognized
-                                snapAnchorPos = lastPointerPos
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                feedbackMessage = "${recognized.labelTr} kilitlendi • Sürükleyerek boyutlandır"
-                            } else {
-                                // Prevent repeated futile checks while resting motionless
-                                holdAnchorMs = nowHoldMs + 10_000L
-                            }
-                        }
-                        continue
-                    }
+                    val event = awaitPointerEvent()
                     val pressed = event.changes.filter { it.pressed }
                     if (pressed.size >= 2) {
                         multiTouchScroll = true
@@ -663,7 +641,29 @@ fun DrawingCanvasOverlay(
                 }
 
                 while (true) {
-                    val event = awaitPointerEvent()
+                    val event = if (canHoldSnap && snappedBaseShape == null && inProgressPoints.size >= 6) {
+                        withTimeoutOrNull(140L) { awaitPointerEvent() }
+                    } else {
+                        awaitPointerEvent()
+                    }
+                    if (event == null) {
+                        // Pointer stayed still: check if hold-to-snap threshold (~420ms) reached
+                        val nowHoldMs = SystemClock.elapsedRealtime()
+                        if (canHoldSnap && snappedBaseShape == null && (nowHoldMs - holdAnchorMs) >= 420L) {
+                            val recognized = AutoShapeRecognizer.recognize(inProgressPoints.toList())
+                            if (recognized != null) {
+                                snappedBaseShape = recognized
+                                snappedLiveShape = recognized
+                                snapAnchorPos = lastPointerPos
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                feedbackMessage = "${recognized.labelTr} kilitlendi • Sürükleyerek boyutlandır"
+                            } else {
+                                // Prevent repeated futile checks while resting motionless
+                                holdAnchorMs = nowHoldMs + 10_000L
+                            }
+                        }
+                        continue
+                    }
                     val pressedChanges = event.changes.filter { it.pressed }
                     val pressedCount = pressedChanges.size
 
