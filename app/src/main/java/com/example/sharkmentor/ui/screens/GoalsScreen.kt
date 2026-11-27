@@ -47,10 +47,21 @@ import com.example.sharkmentor.core.coaching.BookCoachingAssignment
 import com.example.sharkmentor.core.coaching.BookCoachingRole
 import com.example.sharkmentor.core.coaching.BookCoachingRoleManager
 import com.example.sharkmentor.core.coaching.CoachingEngine
+import com.example.sharkmentor.core.coaching.LibraryFilterEngine
+import com.example.sharkmentor.core.coaching.LibraryFilterState
+import com.example.sharkmentor.core.coaching.LibrarySortMode
+import com.example.sharkmentor.core.coaching.LibraryStatusFilter
 import com.example.sharkmentor.core.coaching.TopicStudyActionKind
 import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
 import com.example.sharkmentor.ui.coaching.ResourceCampConfigDialog
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.AutoGraph
@@ -60,13 +71,13 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.ui.text.style.TextOverflow
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun GoalsScreen(
     modifier: Modifier = Modifier,
@@ -82,32 +93,39 @@ fun GoalsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val folders = uiState.groupedTopics
     val resources = uiState.resources
-    var librarySearchQuery by remember { mutableStateOf("") }
-    var libraryStatusFilter by remember { mutableStateOf("Tümü") } // Tümü, Devam Eden, Tamamlanan
-    var librarySortMode by remember { mutableStateOf("Varsayılan") } // Varsayılan, İlerleme %, İsim A-Z
-    val filteredResources = remember(resources, librarySearchQuery, libraryStatusFilter, librarySortMode) {
-        val q = librarySearchQuery.trim()
-        val base = resources.filter { r ->
-            val matchesQuery = q.isEmpty() ||
-                r.title.contains(q, ignoreCase = true) ||
-                r.subject.contains(q, ignoreCase = true)
-            val isCompleted = r.totalUnits > 0 && r.completedUnits >= r.totalUnits
-            val matchesStatus = when (libraryStatusFilter) {
-                "Devam Eden" -> !isCompleted
-                "Tamamlanan" -> isCompleted
-                else -> true
-            }
-            matchesQuery && matchesStatus
-        }
-        when (librarySortMode) {
-            "İlerleme %" -> base.sortedByDescending { r ->
-                if (r.totalUnits > 0) r.completedUnits.toFloat() / r.totalUnits.toFloat() else 0f
-            }
-            "İsim A-Z" -> base.sortedBy { it.title.lowercase() }
-            else -> base
+    val context = LocalContext.current
+    val allBookAssignments by BookCoachingRoleManager.assignmentsByResourceId.collectAsStateWithLifecycle()
+    var libraryFilterState by remember { mutableStateOf(LibraryFilterState()) }
+    var isLibraryFilterPanelOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(resources, allBookAssignments) {
+        val pruned = LibraryFilterEngine.pruneStaleSelections(
+            state = libraryFilterState,
+            resources = resources,
+            assignments = allBookAssignments
+        )
+        if (pruned != libraryFilterState) {
+            libraryFilterState = pruned
         }
     }
-    val context = LocalContext.current
+
+    val availableLibrarySubjects = remember(resources, allBookAssignments) {
+        LibraryFilterEngine.availableSubjects(resources, allBookAssignments)
+    }
+    val availableLibraryRoles = remember(resources, allBookAssignments, libraryFilterState.selectedSubjects) {
+        LibraryFilterEngine.availableRoles(
+            resources = resources,
+            assignments = allBookAssignments,
+            selectedSubjects = libraryFilterState.selectedSubjects
+        )
+    }
+    val filteredResources = remember(resources, allBookAssignments, libraryFilterState) {
+        LibraryFilterEngine.filterAndSort(
+            resources = resources,
+            assignments = allBookAssignments,
+            state = libraryFilterState
+        )
+    }
     val isScanning = uiState.isScanning
     val scanError = uiState.scanError
     val lastScannedUri = uiState.lastScannedUri
@@ -404,86 +422,302 @@ fun GoalsScreen(
             }
             if (resources.isNotEmpty()) {
                 item(key = "library_search_filter_sort_bar") {
+                    val activeCount = libraryFilterState.activeFilterCount
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
-                            value = librarySearchQuery,
-                            onValueChange = { librarySearchQuery = it },
-                            placeholder = { Text("Kitap veya ders ara...", fontSize = 13.sp) },
-                            leadingIcon = {
-                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                            },
-                            trailingIcon = {
-                                if (librarySearchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { librarySearchQuery = "" }) {
-                                        Icon(Icons.Default.Close, contentDescription = "Temizle", modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                listOf("Tümü", "Devam Eden", "Tamamlanan").forEach { statusOpt ->
-                                    val selected = libraryStatusFilter == statusOpt
-                                    Surface(
-                                        onClick = { libraryStatusFilter = statusOpt },
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
-                                        border = BorderStroke(
-                                            1.dp,
-                                            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                        )
+                            OutlinedTextField(
+                                value = libraryFilterState.query,
+                                onValueChange = { q -> libraryFilterState = libraryFilterState.copy(query = q) },
+                                placeholder = { Text("Kitap, ders veya tür ara...", fontSize = 13.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = {
+                                    if (libraryFilterState.query.isNotEmpty()) {
+                                        IconButton(onClick = { libraryFilterState = libraryFilterState.copy(query = "") }) {
+                                            Icon(Icons.Default.Close, contentDescription = "Temizle", modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+
+                            Surface(
+                                onClick = { isLibraryFilterPanelOpen = !isLibraryFilterPanelOpen },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isLibraryFilterPanelOpen || activeCount > 0) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerLow
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isLibraryFilterPanelOpen || activeCount > 0) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+                                    }
+                                ),
+                                modifier = Modifier.height(54.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    val fg = if (isLibraryFilterPanelOpen || activeCount > 0) {
+                                        MaterialTheme.colorScheme.onPrimary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    }
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = "Filtrele",
+                                        tint = fg,
+                                        modifier = Modifier.size(17.dp)
+                                    )
+                                    Text(
+                                        text = if (activeCount > 0) "Filtrele ($activeCount)" else "Filtrele",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = fg,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+
+                        // Compact active filter indicator strip when panel is collapsed
+                        if (!isLibraryFilterPanelOpen && activeCount > 0) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${filteredResources.size} / ${resources.size} kitap gösteriliyor",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = "Filtreleri Sıfırla",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            libraryFilterState = LibraryFilterState(query = libraryFilterState.query)
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+
+                        // Collapsible Dynamic Multi-Select Filter Panel
+                        AnimatedVisibility(
+                            visible = isLibraryFilterPanelOpen,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    // Header + Reset
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = statusOpt,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                            text = "Kitap Filtreleri (${filteredResources.size}/${resources.size})",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
                                         )
+                                        if (libraryFilterState.hasAnyFilterOrSort) {
+                                            Text(
+                                                text = "Sıfırla",
+                                                fontSize = 11.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable { libraryFilterState = LibraryFilterState() }
+                                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    // 1. Durum (Tümü / Devam Eden / Tamamlanan)
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Durum",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            LibraryStatusFilter.entries.forEach { statusOpt ->
+                                                val selected = libraryFilterState.status == statusOpt
+                                                LibraryFilterPillChip(
+                                                    label = statusOpt.label,
+                                                    selected = selected,
+                                                    onClick = {
+                                                        libraryFilterState = libraryFilterState.copy(status = statusOpt)
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // 2. Dinamik Dersler (Multi-select — ONLY subjects actually present in student's library!)
+                                    if (availableLibrarySubjects.isNotEmpty()) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text(
+                                                text = "Dersler (Kütüphanendekiler)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            FlowRow(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                availableLibrarySubjects.forEach { subject ->
+                                                    val selected = subject in libraryFilterState.selectedSubjects
+                                                    LibraryFilterPillChip(
+                                                        label = subject,
+                                                        selected = selected,
+                                                        onClick = {
+                                                            val next = if (selected) {
+                                                                libraryFilterState.selectedSubjects - subject
+                                                            } else {
+                                                                libraryFilterState.selectedSubjects + subject
+                                                            }
+                                                            libraryFilterState = libraryFilterState.copy(selectedSubjects = next)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 3. Dinamik Kitap Türü (Multi-select — ONLY BookCoachingRole types present!)
+                                    if (availableLibraryRoles.isNotEmpty()) {
+                                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            Text(
+                                                text = "Kitap Türü",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            FlowRow(
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                availableLibraryRoles.forEach { role ->
+                                                    val selected = role in libraryFilterState.selectedRoles
+                                                    val roleLabel = when (role) {
+                                                        BookCoachingRole.CONCEPT_VIDEO -> "Konu Anlatım / Video"
+                                                        BookCoachingRole.PRIMARY_PRACTICE -> "İlerleme / Soru"
+                                                        BookCoachingRole.REVISION_BOOK -> "Tekrar Kitabı"
+                                                        BookCoachingRole.MOCK_EXAM -> "Deneme"
+                                                        BookCoachingRole.PASSIVE -> "Pasif"
+                                                    }
+                                                    LibraryFilterPillChip(
+                                                        label = roleLabel,
+                                                        selected = selected,
+                                                        onClick = {
+                                                            val next = if (selected) {
+                                                                libraryFilterState.selectedRoles - role
+                                                            } else {
+                                                                libraryFilterState.selectedRoles + role
+                                                            }
+                                                            libraryFilterState = libraryFilterState.copy(selectedRoles = next)
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    // 4. Sıralama
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text(
+                                            text = "Sıralama",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        FlowRow(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            LibrarySortMode.entries.forEach { mode ->
+                                                val selected = libraryFilterState.sortMode == mode
+                                                LibraryFilterPillChip(
+                                                    label = mode.label,
+                                                    selected = selected,
+                                                    onClick = {
+                                                        libraryFilterState = libraryFilterState.copy(sortMode = mode)
+                                                    }
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
-                            Surface(
-                                onClick = {
-                                    librarySortMode = when (librarySortMode) {
-                                        "Varsayılan" -> "İlerleme %"
-                                        "İlerleme %" -> "İsim A-Z"
-                                        else -> "Varsayılan"
-                                    }
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                        }
+                    }
+                }
+
+                if (filteredResources.isEmpty()) {
+                    item(key = "library_empty_filtered_state") {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 6.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SwapVert,
-                                        contentDescription = "Sırala",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = librarySortMode,
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                Text(
+                                    text = "Seçili filtrelere uyan kitap bulunamadı.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(onClick = { libraryFilterState = LibraryFilterState() }) {
+                                    Text("Filtreleri Temizle", fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -1549,3 +1783,29 @@ fun AddEditResourceDialog(
         }
     )
 }
+
+@Composable
+private fun LibraryFilterPillChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(10.dp),
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+        )
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.5.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+        )
+    }
+}
+

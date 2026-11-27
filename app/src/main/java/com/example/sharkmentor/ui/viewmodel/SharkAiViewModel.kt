@@ -234,6 +234,9 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     private val _lockedEngine = MutableStateFlow<SharkAiEngine?>(initialSessionSnapshot.lockedEngine)
     val lockedEngine: StateFlow<SharkAiEngine?> = _lockedEngine.asStateFlow()
 
+    private val _isDetailedVisualLocked = MutableStateFlow(false)
+    val isDetailedVisualLocked: StateFlow<Boolean> = _isDetailedVisualLocked.asStateFlow()
+
     private val _isRefreshingNetProjection = MutableStateFlow(false)
     val isRefreshingNetProjection: StateFlow<Boolean> = _isRefreshingNetProjection.asStateFlow()
 
@@ -416,6 +419,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         _activeChatSessionId.value = snapshot.activeSessionId
         _inputText.value = snapshot.draftInputText
         _lockedEngine.value = snapshot.lockedEngine
+        _isDetailedVisualLocked.value = false
         _activeCapability.value = when (snapshot.lockedEngine) {
             SharkAiEngine.SOLVER_ENGINE -> SharkAiCapability.PROBLEM_SOLVER
             SharkAiEngine.TWIN_QUESTION_ENGINE -> SharkAiCapability.TWIN_QUESTION
@@ -581,6 +585,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         _attachmentPreview.value = null
         _activeCapability.value = null
         _lockedEngine.value = null
+        _isDetailedVisualLocked.value = false
         val snapshot = SharkAiChatSessionStore.saveDraftState(getApplication(), _inputText.value, null)
         _chatSessions.value = snapshot.sessions
         refreshAutoDetectedEngine()
@@ -589,12 +594,14 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
     fun setActiveCapability(capability: SharkAiCapability?) {
         _activeCapability.value = capability
         _lockedEngine.value = SharkAiEngine.fromCapability(capability)
+        _isDetailedVisualLocked.value = false
         val snapshot = SharkAiChatSessionStore.saveDraftState(getApplication(), _inputText.value, _lockedEngine.value)
         _chatSessions.value = snapshot.sessions
     }
 
-    fun setLockedEngine(engine: SharkAiEngine?) {
+    fun setLockedEngine(engine: SharkAiEngine?, detailedVisual: Boolean = false) {
         _lockedEngine.value = engine
+        _isDetailedVisualLocked.value = detailedVisual && engine == SharkAiEngine.SOLVER_ENGINE
         _activeCapability.value = when (engine) {
             SharkAiEngine.SOLVER_ENGINE -> SharkAiCapability.PROBLEM_SOLVER
             SharkAiEngine.TWIN_QUESTION_ENGINE -> SharkAiCapability.TWIN_QUESTION
@@ -617,6 +624,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         _attachmentPreview.value = null
         _activeCapability.value = null
         _lockedEngine.value = null
+        _isDetailedVisualLocked.value = false
         _inputText.value = ""
         val snapshot = SharkAiChatSessionStore.createNewSession(getApplication())
         applySessionSnapshot(snapshot)
@@ -865,8 +873,10 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         }
 
         val parsedSlash = com.example.sharkmentor.ui.aichat.SharkSlashCommandRegistry.parseLeadingCommand(rawInput)
-        val isDetailedVisualSolve = parsedSlash?.command == com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI
-        val hasExplicitOverride = engineOverride != null || capabilityOverride != null
+        val isDetailedVisualSolve =
+            parsedSlash?.command == com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI ||
+                (_isDetailedVisualLocked.value && (parsedSlash == null || parsedSlash.command == com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI))
+        val hasExplicitOverride = engineOverride != null || capabilityOverride != null || _isDetailedVisualLocked.value
 
         // 1. Handle leading `/` slash sub-runner command (Antigravity-style!)
         if (parsedSlash != null) {
@@ -903,10 +913,13 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 return
             }
 
-            // If user entered ONLY the slash command (e.g. "/zen" or "/plan") without arguments, activate & lock it cleanly
+            // If user entered ONLY the slash command (e.g. "/zen", "/detayli", "/plan") without arguments, activate & lock it cleanly
             if (parsedSlash.argumentText.isBlank() && attachmentUri == null) {
                 _inputText.value = ""
-                setLockedEngine(cmd.engine.takeUnless { it == SharkAiEngine.CONVERSATIONAL_PEER })
+                setLockedEngine(
+                    engine = cmd.engine.takeUnless { it == SharkAiEngine.CONVERSATIONAL_PEER },
+                    detailedVisual = cmd == com.example.sharkmentor.ui.aichat.SharkSlashCommand.DETAYLI
+                )
                 _uiState.value = _uiState.value.copy(
                     currentPersona = cmd.persona,
                     messages = _uiState.value.messages + AiChatMessage(
@@ -1031,6 +1044,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         _attachmentPreview.value = null
         _activeCapability.value = null
         _lockedEngine.value = null
+        _isDetailedVisualLocked.value = false
         SharkAiChatSessionStore.saveDraftState(getApplication(), "", null)
 
         val nextMessages = if (appendUserMessage) {
@@ -1401,9 +1415,13 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 } else ""
 
                 val isConversationalPeer = resolvedEngine == SharkAiEngine.CONVERSATIONAL_PEER
+                val isJarvisActive = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedUnlocked(getApplication())
+                val jarvisPersonaBlock = com.example.sharkmentor.core.ai.SharkTokenQuotaManager
+                    .buildJarvisPersonaDirective(isJarvisActive)
+                    .let { if (it.isNotBlank()) "\n$it\n" else "" }
                 val compressedSystemPrompt = """
                     ${getSystemPromptForPersona(currentPersona, includeActionInstructions = isConversationalPeer, includeMandatoryRules = isConversationalPeer)}
-
+                    $jarvisPersonaBlock
                     [SİSTEMİK KİMLİK: SharkMentor Otonom Hub - Motor: ${resolvedEngine.displayName} - Mod: ${currentPersona.title}]
                     [ÖĞRENCİ, KÜTÜPHANE VE HEDEF BAĞLAMI]:
                     $userStatsAndLibrarySnapshot$dossierAndAuditBlock
@@ -1412,7 +1430,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     Talimat: Öğrencinin mevcut kütüphane kitaplarına, ders ve konu eşleşmelerine, hedeflerine, tamamlanan/eksik kalan plan görevlerine ve geçmiş kararlarına sadık kal. Mevcut bir kitabın ilerlemesi söylendiğinde yeni kitap açma, UPDATE_RESOURCE_PROGRESS ile doğru `resourceId`, tam kitap adı ve dersini kullan. Kullanıcı toplam sayfa/test sayısını belirtmediyse asla `totalUnits` uydurma (`0` bırak).
                 """.trimIndent()
 
-                val effectivePrompt = if (attachmentUri != null && text.isBlank()) {
+                val basePrompt = if (attachmentUri != null && text.isBlank()) {
                     when (resolvedEngine) {
                         SharkAiEngine.TWIN_QUESTION_ENGINE ->
                             "Eklenen dosyadaki ($resolvedAttachmentName) sorunun kazanımını ve çözüm algoritmasını birebir koruyarak ÖSYM tarzı özgün bir ikiz soru (A-E şıklı) üret ve çözümünü ekle."
@@ -1424,6 +1442,11 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 } else {
                     text
                 }
+                val effectivePrompt = if (isDetailedVisualSolve) {
+                    "$basePrompt\n\n[DETAYLI GÖRSEL ÇÖZÜM ZORUNLULUĞU: Soru fonksiyon grafiği, parabol, doğru, analitik koordinat, türev/integral/limit, trigonometri, geometri şekli, fizik diyagramı veya küme şeması içeriyorsa yanıtının EN BAŞINA geçerli, temiz ve yüksek kontrastlı bir ```svg <svg viewBox=\"0 0 380 240\" xmlns=\"http://www.w3.org/2000/svg\">...</svg> ``` bloğu çiz; ardından Adım 1:, Adım 2: şeklinde çöz ve **Sonuç:** ile bitir.]"
+                } else {
+                    basePrompt
+                }
 
                 var lastUiEmitMs = 0L
                 var lastEmittedUiText = ""
@@ -1431,14 +1454,16 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     if (_activeChatSessionId.value != originatingSessionId) {
                         return@streamCallback
                     }
-                    // Strip in-progress or completed action tags and markdown json code blocks
-                    val cleanPartial = partialText
-                        .replace(STREAM_ACTION_BLOCK_REGEX, "")
-                        .replace(STREAM_ACTION_TAIL_REGEX, "")
-                        .replace(JSON_FENCE_COMPLETE_REGEX, "")
-                        .replace(JSON_FENCE_OPEN_REGEX, "")
-                        .replace(CODE_FENCE_COMPLETE_REGEX, "")
-                        .trim()
+                    // Strip in-progress or completed action tags and markdown json code blocks, and mask in-progress SVG XML
+                    val cleanPartial = com.example.sharkmentor.ui.components.maskInProgressSvgForStreaming(
+                        partialText
+                            .replace(STREAM_ACTION_BLOCK_REGEX, "")
+                            .replace(STREAM_ACTION_TAIL_REGEX, "")
+                            .replace(JSON_FENCE_COMPLETE_REGEX, "")
+                            .replace(JSON_FENCE_OPEN_REGEX, "")
+                            .replace(CODE_FENCE_COMPLETE_REGEX, "")
+                            .trim()
+                    )
 
                     val displayText = if (cleanPartial.isEmpty() && (partialText.contains("\"schedule\"") || partialText.contains("CREATE_WEEKLY_PLAN"))) {
                         "Haftalık çalışma planın hazırlanıyor..."
@@ -1480,9 +1505,11 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 // - Multimodal/PDF/Images route through Vision pipeline.
                 // - Text-only honors UserAiPreferences.selectedAiProvider across all 6 providers and AUTO.
                 val solverFormatDirective = if (isDetailedVisualSolve) {
-                    "\n\n[SHARKAI DETAYLI GÖRSEL ÇÖZÜM MODU - BETA]\n" +
-                    "1. Eğer soru geometri şekli (üçgen, çember, çokgen, açı/uzunluk), fonksiyon/analitik grafiği, fizik vektör/devre diyagramı veya küme şeması içeriyorsa ÖNCE net, yüksek kontrastlı bir ```svg ... ``` bloğu (viewBox=\"0 0 360 220\") çiz ve etiketlerde temiz Unicode semboller (π, Δ, θ, √, °, x², x³) kullan. Saf cebir/sayma sorularında zorlama şekil çizme.\n" +
-                    "2. Ardından (varsa çizdiğin şekil üzerindeki noktalara atıf yaparak) Adım 1:, Adım 2:, Adım 3: şeklinde eksiksiz ve sade çözümü yaz, son satırda **Sonuç:** ile net cevabı ver. Asla 'Bekle!' veya 'Durun!' gibi sesli düşünme metni yazma."
+                    "\n\n[SHARKAI DETAYLI GÖRSEL ÇÖZÜM MODU - ZORUNLU SVG ŞABLONU]\n" +
+                    "1. Fonksiyon (f(x), parabol, doğru, logaritma, üssel, parçalı, trigonometrik), analitik koordinat, türev/integral/limit, geometri (üçgen, çember, çokgen, açı/uzunluk), fizik (kuvvet/vektör/devre/optik/hareket grafiği) veya küme/kimya şeması içeren HER soruda yanıtın EN BAŞINA MUTLAKA tek bir ```svg ... ``` bloğu ekle.\n" +
+                    "2. SVG standardı: `<svg viewBox=\"0 0 380 240\" xmlns=\"http://www.w3.org/2000/svg\">` kullan; koordinat eksenlerini `<line>` + ok uçlarıyla çiz, eğri/doğruyu `<path>` veya `<polyline>` ile orantılı çiz, kritik noktaları (kökler, tepe noktası, kesişim, köşeler) `<circle>` ve okunaklı `<text>` koordinat etiketleriyle işaretle; yüksek kontrastlı renkler (#0F172A, #2563EB, #DC2626, #059669) ve temiz Unicode semboller (π, Δ, θ, √, °, x², x³) kullan.\n" +
+                    "3. Sadece tamamen sözel veya basit aritmetik sorularda gereksiz kutu çizme.\n" +
+                    "4. Görselin hemen ardından şekil üzerindeki noktalara atıf yaparak Adım 1:, Adım 2:, Adım 3: şeklinde eksiksiz çözümü yaz ve son satırda **Sonuç:** ile net cevabı ver. Asla 'Bekle!' veya 'Durun!' gibi sesli düşünme metni yazma."
                 } else {
                     "\n\n[SHARKAI MATEMATİK & ANLAŞILABİLİRLİK FORMATI]\n" +
                     "Çözümü mutlaka Adım 1:, Adım 2: şeklinde numaralandır, formülleri ve sembolleri (π, Δ, √, ², ³, °) temiz yaz ve son satırda **Sonuç:** ile net cevabı vurgula."
@@ -1530,8 +1557,67 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     return@launch
                 }
 
+                // Guaranteed 2nd-pass SVG visual diagram generator for `/detayli` when the primary model
+                // answered a visualizable STEM question (function graph, geometry, physics, etc.) without SVG.
+                var finalResponseText = routerResult.text
+                if (isDetailedVisualSolve &&
+                    com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText(finalResponseText).first == null &&
+                    com.example.sharkmentor.ui.components.requiresVisualDiagramForDetailedSolve(
+                        userPrompt = basePrompt,
+                        solutionText = finalResponseText,
+                        hasImageAttachment = attachmentUri != null
+                    )
+                ) {
+                    val currentList = _uiState.value.messages
+                    val existingIdx = currentList.indexOfFirst { it.id == streamingMsgId }
+                    val progressMsg = AiChatMessage(
+                        id = streamingMsgId,
+                        sender = "ai",
+                        text = "${finalResponseText.trim()}\n\n📐 Grafik ve görsel diyagram çiziliyor...",
+                        personaTag = currentPersona.id
+                    )
+                    _uiState.value = _uiState.value.copy(
+                        messages = if (existingIdx >= 0) {
+                            currentList.toMutableList().apply { set(existingIdx, progressMsg) }
+                        } else {
+                            currentList + progressMsg
+                        },
+                        isLoading = false
+                    )
+
+                    val svgPassText = runCatching {
+                        val svgPrompt = buildString {
+                            appendLine("Aşağıdaki soru ve çözümü için YALNIZCA geçerli, yüksek kontrastlı ve eksiksiz bir ```svg ... ``` bloğu üret.")
+                            appendLine("SORU: ${basePrompt.take(750)}")
+                            appendLine("ÇÖZÜM: ${finalResponseText.take(1500)}")
+                            appendLine("KURALLAR:")
+                            appendLine("1. `<svg viewBox=\"0 0 380 240\" xmlns=\"http://www.w3.org/2000/svg\">` kullan.")
+                            appendLine("2. Fonksiyon, parabol, doğru, limit/türev/integral veya analitik soru ise x ve y koordinat eksenlerini ok uçlarıyla çiz, kökleri, tepe noktasını, eksen kesişimlerini, teğeti veya asimptotları orantılı nokta ve etiketlerle göster.")
+                            appendLine("3. Geometri, fizik veya kimya ise şekli, kenar/açı değerlerini, kuvvet/vektör oklarını veya devre elemanlarını net renklerle (#0F172A, #2563EB, #DC2626, #059669) etiketle.")
+                            appendLine("4. Etiketlerde temiz Unicode semboller (π, Δ, θ, √, °, ², ³) kullan; ham LaTeX yazma.")
+                            appendLine("5. Sadece ```svg ... ``` bloğunu döndür, başka metin yazma.")
+                        }
+                        aiRouterRepository.executeTextStream(
+                            activeEngine = SharkAiEngine.SOLVER_ENGINE,
+                            prompt = svgPrompt,
+                            systemInstruction = "Sen hassas matematik, fonksiyon grafiği ve fen SVG diyagram çizim motorusun. Çıktın yalnızca tek bir geçerli ```svg <svg viewBox=\"0 0 380 240\" xmlns=\"http://www.w3.org/2000/svg\">...</svg> ``` bloğundan oluşmalıdır.",
+                            chatHistory = emptyList(),
+                            onPartialText = {}
+                        ).getOrNull()?.text.orEmpty()
+                    }.getOrNull().orEmpty()
+
+                    val extractedSvg = com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText(svgPassText).first
+                    if (!extractedSvg.isNullOrBlank()) {
+                        finalResponseText = "```svg\n$extractedSvg\n```\n\n$finalResponseText"
+                    }
+                }
+
+                if (_activeChatSessionId.value != originatingSessionId) {
+                    return@launch
+                }
+
                 handleAiResponse(
-                    rawResponse = routerResult.text,
+                    rawResponse = finalResponseText,
                     toolPlanFolderId = routerResult.createdPlanFolderId,
                     streamingMessageId = streamingMsgId
                 )
@@ -1547,13 +1633,13 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     }
                     if (coachingActive && dossierReady &&
                         com.example.sharkmentor.core.coaching.StudentDossierManager.isMockExamAnalysisExchange(
-                            userMessage = effectivePrompt,
-                            aiResponse = routerResult.text,
+                            userMessage = basePrompt,
+                            aiResponse = finalResponseText,
                             hasAttachment = attachmentUri != null
                         )
                     ) {
                         val (mockNets, mockAnalysis) = com.example.sharkmentor.core.coaching.StudentDossierManager
-                            .extractCompactMockExamSummary(effectivePrompt, routerResult.text)
+                            .extractCompactMockExamSummary(basePrompt, finalResponseText)
                         _pendingDossierAction.value = PendingDossierAction(
                             type = PendingDossierActionType.UPDATE_MOCK_EXAM,
                             title = "Öğrenci Dosyası Güncellensin mi?",
@@ -1576,8 +1662,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     autoSaveQuestionToErrorBank(
                         attachmentUri = attachmentUri,
                         resolvedAttachmentName = resolvedAttachmentName,
-                        userPrompt = effectivePrompt,
-                        aiResponseText = routerResult.text
+                        userPrompt = basePrompt,
+                        aiResponseText = finalResponseText
                     )
                 }
                 if (isExplicitQuestionMode && routerResult.text.isNotBlank()) {

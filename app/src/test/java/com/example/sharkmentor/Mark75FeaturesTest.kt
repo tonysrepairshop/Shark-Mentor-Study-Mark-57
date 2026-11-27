@@ -252,4 +252,167 @@ class Mark75FeaturesTest {
         assertTrue(blueberryLight.surfaceVariant.blue > blueberryLight.surfaceVariant.red)
         assertTrue(blueberryLight.surfaceContainer.blue > blueberryLight.surfaceContainer.green)
     }
+
+    @Test
+    fun libraryFilterEngineOnlyExposesStudentSubjectsAndMultiSelectFiltersAccurately() {
+        val books = listOf(
+            com.example.sharkmentor.data.local.entity.ResourceEntity(
+                id = 1L, title = "Palme Biyoloji", subject = "Biyoloji", totalUnits = 100, completedUnits = 100
+            ),
+            com.example.sharkmentor.data.local.entity.ResourceEntity(
+                id = 2L, title = "Aydın Kimya Konu", subject = "Kimya", totalUnits = 80, completedUnits = 20
+            ),
+            com.example.sharkmentor.data.local.entity.ResourceEntity(
+                id = 3L, title = "Orbital Kimya Tekrar", subject = "Kimya", totalUnits = 60, completedUnits = 45
+            )
+        )
+        val assignments = mapOf(
+            1L to com.example.sharkmentor.core.coaching.BookCoachingAssignment(
+                resourceId = 1L, subject = "Biyoloji", role = com.example.sharkmentor.core.coaching.BookCoachingRole.PRIMARY_PRACTICE
+            ),
+            2L to com.example.sharkmentor.core.coaching.BookCoachingAssignment(
+                resourceId = 2L, subject = "Kimya", role = com.example.sharkmentor.core.coaching.BookCoachingRole.CONCEPT_VIDEO
+            ),
+            3L to com.example.sharkmentor.core.coaching.BookCoachingAssignment(
+                resourceId = 3L, subject = "Kimya", role = com.example.sharkmentor.core.coaching.BookCoachingRole.REVISION_BOOK
+            )
+        )
+
+        // Only Biyoloji and Kimya exist -> Matematik MUST NEVER appear
+        val subjects = com.example.sharkmentor.core.coaching.LibraryFilterEngine.availableSubjects(books, assignments)
+        assertEquals(listOf("Biyoloji", "Kimya"), subjects)
+        assertFalse(subjects.any { it.equals("Matematik", ignoreCase = true) })
+
+        // Dynamic roles scoped to Kimya -> only CONCEPT_VIDEO and REVISION_BOOK (not PRIMARY_PRACTICE)
+        val kimyaRoles = com.example.sharkmentor.core.coaching.LibraryFilterEngine.availableRoles(
+            resources = books,
+            assignments = assignments,
+            selectedSubjects = setOf("Kimya")
+        )
+        assertEquals(
+            listOf(
+                com.example.sharkmentor.core.coaching.BookCoachingRole.CONCEPT_VIDEO,
+                com.example.sharkmentor.core.coaching.BookCoachingRole.REVISION_BOOK
+            ),
+            kimyaRoles
+        )
+
+        // Filter by Book Type = REVISION_BOOK -> only Orbital Kimya Tekrar
+        val revisionOnly = com.example.sharkmentor.core.coaching.LibraryFilterEngine.filterAndSort(
+            resources = books,
+            assignments = assignments,
+            state = com.example.sharkmentor.core.coaching.LibraryFilterState(
+                selectedRoles = setOf(com.example.sharkmentor.core.coaching.BookCoachingRole.REVISION_BOOK)
+            )
+        )
+        assertEquals(listOf(3L), revisionOnly.map { it.id })
+
+        // Filter by Status = IN_PROGRESS + Sort PROGRESS_DESC -> Orbital (75%) before Aydın (25%)
+        val inProgressSorted = com.example.sharkmentor.core.coaching.LibraryFilterEngine.filterAndSort(
+            resources = books,
+            assignments = assignments,
+            state = com.example.sharkmentor.core.coaching.LibraryFilterState(
+                status = com.example.sharkmentor.core.coaching.LibraryStatusFilter.IN_PROGRESS,
+                sortMode = com.example.sharkmentor.core.coaching.LibrarySortMode.PROGRESS_DESC
+            )
+        )
+        assertEquals(listOf(3L, 2L), inProgressSorted.map { it.id })
+
+        // Stale selection pruning when Biyoloji book is removed
+        val pruned = com.example.sharkmentor.core.coaching.LibraryFilterEngine.pruneStaleSelections(
+            state = com.example.sharkmentor.core.coaching.LibraryFilterState(
+                selectedSubjects = setOf("Biyoloji", "Kimya"),
+                selectedRoles = setOf(
+                    com.example.sharkmentor.core.coaching.BookCoachingRole.PRIMARY_PRACTICE,
+                    com.example.sharkmentor.core.coaching.BookCoachingRole.CONCEPT_VIDEO
+                )
+            ),
+            resources = books.filter { it.id != 1L },
+            assignments = assignments
+        )
+        assertEquals(setOf("Kimya"), pruned.selectedSubjects)
+        assertEquals(setOf(com.example.sharkmentor.core.coaching.BookCoachingRole.CONCEPT_VIDEO), pruned.selectedRoles)
+    }
+
+    @Test
+    fun detailedVisualSolveDetectsFunctionGraphsMasksStreamingSvgAndEnsuresViewBox() {
+        assertTrue(
+            com.example.sharkmentor.ui.components.requiresVisualDiagramForDetailedSolve(
+                userPrompt = "f(x) = x^2 - 4x + 3 fonksiyonunun grafiğini ve tepe noktasını bul",
+                solutionText = "Adım 1: Tepe noktası (2, -1) ve kökler 1 ile 3'tür.",
+                hasImageAttachment = false
+            )
+        )
+        assertFalse(
+            com.example.sharkmentor.ui.components.requiresVisualDiagramForDetailedSolve(
+                userPrompt = "Osmanlı Devleti hangi yılda kuruldu?",
+                solutionText = "Osmanlı Devleti 1299 yılında kuruldu.",
+                hasImageAttachment = false
+            )
+        )
+
+        // Streaming mask replaces incomplete SVG code with clean indicator
+        val masked = com.example.sharkmentor.ui.components.maskInProgressSvgForStreaming(
+            "```svg\n<svg viewBox=\"0 0 380 240\"><line x1=\"0\" "
+        )
+        assertTrue(masked.contains("Grafik ve görsel diyagram çiziliyor"))
+        assertFalse(masked.contains("<line"))
+
+        // Completed SVG without viewBox gets normalized with default viewBox
+        val (svg, cleanText) = com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText(
+            "```svg\n<svg><circle cx=\"50\" cy=\"50\" r=\"20\"/></svg>\n```\nAdım 1: Çember çizildi."
+        )
+        assertTrue(svg != null && svg.contains("viewBox=\"0 0 380 240\""))
+        assertEquals("Adım 1: Çember çizildi.", cleanText)
+    }
+
+    @Test
+    fun jarvisPersonaDirectiveAndLaunchBriefingEngineRespondToTimeWeatherAndErrors() {
+        val activeDirective = SharkTokenQuotaManager.buildJarvisPersonaDirective(true)
+        assertTrue(activeDirective.contains("J.A.R.V.I.S."))
+        assertTrue(activeDirective.contains("efendim"))
+        assertEquals("", SharkTokenQuotaManager.buildJarvisPersonaDirective(false))
+
+        assertEquals("Günaydın efendim.", com.example.sharkmentor.ui.components.JarvisBriefingEngine.buildGreeting(8))
+        assertEquals("İyi günler efendim.", com.example.sharkmentor.ui.components.JarvisBriefingEngine.buildGreeting(14))
+        assertEquals("İyi akşamlar efendim.", com.example.sharkmentor.ui.components.JarvisBriefingEngine.buildGreeting(20))
+        assertEquals("İyi geceler efendim.", com.example.sharkmentor.ui.components.JarvisBriefingEngine.buildGreeting(1))
+
+        val withDueErrors = com.example.sharkmentor.ui.components.JarvisBriefingEngine.buildBriefing(
+            hour = 9,
+            dueErrorQuestions = 6,
+            weatherTempC = 12.0,
+            weatherCode = 61
+        )
+        assertEquals(3, withDueErrors.actions.size)
+        assertEquals("error_bank", withDueErrors.actions.first().route)
+        assertTrue(withDueErrors.recommendation.contains("6"))
+        assertTrue(withDueErrors.recommendation.contains("yağış"))
+    }
+
+    @Test
+    fun controlPanelSettingsNormalizesReordersAndTogglesModulesCleanly() {
+        val normalized = com.example.sharkmentor.data.controlpanel.ControlPanelModule.normalizeOrder(
+            listOf(
+                com.example.sharkmentor.data.controlpanel.ControlPanelModule.THEME_STRIP,
+                com.example.sharkmentor.data.controlpanel.ControlPanelModule.THEME_STRIP
+            )
+        )
+        assertEquals(com.example.sharkmentor.data.controlpanel.ControlPanelModule.DEFAULT_ORDER.size, normalized.size)
+        assertEquals(com.example.sharkmentor.data.controlpanel.ControlPanelModule.THEME_STRIP, normalized.first())
+
+        var settings = com.example.sharkmentor.data.controlpanel.ControlPanelSettings()
+        settings = settings.moveUp(com.example.sharkmentor.data.controlpanel.ControlPanelModule.STUDY_MACROS)
+        assertEquals(
+            com.example.sharkmentor.data.controlpanel.ControlPanelModule.STUDY_MACROS,
+            settings.moduleOrder.first()
+        )
+        settings = settings.toggleVisibility(com.example.sharkmentor.data.controlpanel.ControlPanelModule.STUDY_MACROS)
+        assertFalse(settings.isModuleVisible(com.example.sharkmentor.data.controlpanel.ControlPanelModule.STUDY_MACROS))
+        assertEquals(
+            com.example.sharkmentor.data.controlpanel.ControlPanelModule.DAILY_SUMMARY,
+            settings.visibleModulesInOrder().first()
+        )
+    }
 }
+

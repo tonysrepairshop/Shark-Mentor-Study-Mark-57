@@ -43,6 +43,78 @@ import java.io.FileOutputStream
 
 private val SVG_FENCE_REGEX = Regex("```(?:svg|xml|html)?\\s*(<svg[\\s\\S]*?</svg>)\\s*```", RegexOption.IGNORE_CASE)
 private val RAW_SVG_REGEX = Regex("(<svg\\b[\\s\\S]*?</svg>)", RegexOption.IGNORE_CASE)
+private val OPEN_SVG_FENCE_REGEX = Regex("```(?:svg|xml|html)?\\s*<svg[\\s\\S]*$", RegexOption.IGNORE_CASE)
+private val OPEN_RAW_SVG_REGEX = Regex("<svg\\b[\\s\\S]*$", RegexOption.IGNORE_CASE)
+
+private val VISUAL_SOLVE_KEYWORDS = listOf(
+    "fonksiyon", "grafik", "parabol", "doğru", "dogru", "eğim", "egim", "teğet", "teget",
+    "türev", "turev", "integral", "limit", "süreklilik", "sureklilik", "asimptot",
+    "trigonometri", "sin(", "cos(", "tan(", "cot(", "sinx", "cosx", "birim çember", "birim cember",
+    "üçgen", "ucgen", "çember", "cember", "daire", "açı", "aci", "çokgen", "cokgen",
+    "dikdörtgen", "dikdortgen", "yamuk", "eşkenar", "eskenar", "ikizkenar", "paralelkenar",
+    "prizma", "silindir", "koni", "küre", "kure", "piramit", "alan", "çevre", "cevre", "hacim",
+    "analitik", "koordinat", "eksen", "apsis", "ordinat", "nokta", "kesişim", "kesisim", "tepe noktası",
+    "vektör", "vektor", "kuvvet", "devre", "direnç", "direnc", "akım", "akim", "dalga",
+    "optik", "mercek", "ayna", "hareket", "hız-zaman", "konum-zaman", "ivme", "atış", "atis",
+    "küme", "kume", "venn", "molekül", "molekul", "lewis", "diyagram", "şekil", "sekil",
+    "f(x)", "g(x)", "h(x)", "y =", "y=", "x²", "x^2", "x³", "x^3"
+)
+
+/**
+ * Determines whether a `/detayli` question/solution warrants a visual SVG diagram or graph
+ * (functions, geometry, analytic coordinates, calculus, trigonometry, physics/chemistry diagrams),
+ * while avoiding forced drawings on pure verbal or simple arithmetic questions.
+ */
+fun requiresVisualDiagramForDetailedSolve(
+    userPrompt: String,
+    solutionText: String,
+    hasImageAttachment: Boolean
+): Boolean {
+    val combined = "${userPrompt}\n${solutionText}".lowercase(java.util.Locale("tr", "TR"))
+    if (VISUAL_SOLVE_KEYWORDS.any { combined.contains(it) }) return true
+    if (hasImageAttachment) {
+        // Attached problem images in solver mode almost always benefit from a diagram if math/physics notation appears
+        val hasStemNotation = combined.contains("=") ||
+            combined.contains("°") ||
+            combined.contains("cm") ||
+            combined.contains("√") ||
+            combined.contains("π") ||
+            combined.contains("Δ")
+        if (hasStemNotation) return true
+    }
+    return false
+}
+
+/**
+ * Masks an incomplete/in-progress `<svg` XML block during token streaming so raw SVG code never flashes in chat.
+ */
+fun maskInProgressSvgForStreaming(rawPartial: String): String {
+    if (rawPartial.isBlank()) return rawPartial
+    if (SVG_FENCE_REGEX.containsMatchIn(rawPartial) || RAW_SVG_REGEX.containsMatchIn(rawPartial)) {
+        // Completed SVG block present — keep intact so UI renders DetailedVisualDiagramCard cleanly
+        return rawPartial
+    }
+    if (OPEN_SVG_FENCE_REGEX.containsMatchIn(rawPartial)) {
+        val cleaned = rawPartial.replace(OPEN_SVG_FENCE_REGEX, "").trim()
+        return if (cleaned.isEmpty()) "📐 Grafik ve görsel diyagram çiziliyor..." else "$cleaned\n\n📐 Grafik ve görsel diyagram çiziliyor..."
+    }
+    if (OPEN_RAW_SVG_REGEX.containsMatchIn(rawPartial)) {
+        val cleaned = rawPartial.replace(OPEN_RAW_SVG_REGEX, "").trim()
+        return if (cleaned.isEmpty()) "📐 Grafik ve görsel diyagram çiziliyor..." else "$cleaned\n\n📐 Grafik ve görsel diyagram çiziliyor..."
+    }
+    return rawPartial
+}
+
+private fun ensureSvgViewBox(svg: String): String {
+    val openTagEnd = svg.indexOf('>')
+    if (openTagEnd <= 0) return svg
+    val openTag = svg.substring(0, openTagEnd)
+    return if (openTag.contains("viewBox", ignoreCase = true)) {
+        svg
+    } else {
+        svg.substring(0, openTagEnd) + " viewBox=\"0 0 380 240\"" + svg.substring(openTagEnd)
+    }
+}
 
 /**
  * Extracts an inline SVG geometry/function diagram (if present) from an AI response,
@@ -52,13 +124,13 @@ fun extractSvgDiagramAndCleanText(raw: String): Pair<String?, String> {
     if (raw.isBlank()) return null to raw
     val fenced = SVG_FENCE_REGEX.find(raw)
     if (fenced != null) {
-        val svg = normalizeMathSymbolsInSvg(fenced.groupValues[1].trim())
+        val svg = ensureSvgViewBox(normalizeMathSymbolsInSvg(fenced.groupValues[1].trim()))
         val cleaned = raw.replaceRange(fenced.range, "").trim()
         return svg to cleaned
     }
     val inline = RAW_SVG_REGEX.find(raw)
     if (inline != null) {
-        val svg = normalizeMathSymbolsInSvg(inline.groupValues[1].trim())
+        val svg = ensureSvgViewBox(normalizeMathSymbolsInSvg(inline.groupValues[1].trim()))
         val cleaned = raw.replaceRange(inline.range, "").trim()
         return svg to cleaned
     }

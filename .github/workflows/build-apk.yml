@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 75 APK
+name: Build SharkMentor Mark 75.9 APK
 
 on:
   push:
@@ -21,6 +21,7 @@ on:
       - mark-73.3
       - mark-73.5
       - mark-75
+      - mark-75.9
   workflow_dispatch:
 
 permissions:
@@ -274,7 +275,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark75-debug-apk
+          name: SharkMentor-Mark75.9-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -283,8 +284,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark75-debug.apk
-          gh release delete mark75-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark75-apk SharkMentor-Mark75-debug.apk \
-            --title "Shark Mentor Study Mark 75 (Debug APK)" \
-            --notes "Mark 75 Karma Sürüm: Mark 73 dokunmatik plak/CD/kaset hareket kabiliyetleri (iğne, çekme anahtarı, döner ses düğmesi, tıklanabilir Sıradakiler) + Mark 73.5 3-paket tema senkronu & SharkMix 3 katmanlı mikser, Samsung S-Pen ve Honor Magic-Pencil için ham Android MotionEvent/KeyEvent kalem yan tuşu motoru + SHARK kalibrasyon ekranı, çakışmasız arka plan & 16:9 PiP video oynatıcı, gerçek token sayaçlı SharkTokenQuotaManager, /detayli görsel SVG çözücü, /simulasyon, yüzen Hata Bankası AI ve Kütüphane arama/filtre/sıralama."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark75.9-debug.apk
+          gh release delete mark75.9-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark75.9-apk SharkMentor-Mark75.9-debug.apk \
+            --title "Shark Mentor Study Mark 75.9 (Debug APK)" \
+            --notes "Mark 75.9: Çoklu dinamik kütüphane kitap filtreleme motoru (Durum + kütüphanedeki dersler + kitap türleri), kalıcı kilitli & otomatik 2. geçiş garantili /detayli görsel SVG fonksiyon/geometri çözücü, holografik J.A.R.V.I.S. açılış HUD'u (saat, hava durumu, akıllı öneri, doğrudan yönlendirmeler) + 'efendim' yapay zeka hitap modu + ULTRON geri alma anti-kodu, ve doğrudan düzenlenebilir hibrit modüler Kontrol Paneli."

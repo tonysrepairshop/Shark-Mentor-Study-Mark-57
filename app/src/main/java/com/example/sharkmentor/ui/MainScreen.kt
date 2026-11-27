@@ -804,6 +804,37 @@ fun MainScreen(
                     )
                 }
 
+                // Personal J.A.R.V.I.S. Holographic Launch Briefing HUD (shown once per launch ONLY when JARVIS is unlocked)
+                LaunchedEffect(context) {
+                    com.example.sharkmentor.core.ai.SharkTokenQuotaManager.ensureLoaded(context)
+                }
+                val jarvisQuotaSnapshot by com.example.sharkmentor.core.ai.SharkTokenQuotaManager.snapshot.collectAsStateWithLifecycle()
+                var jarvisBriefingDismissed by remember { mutableStateOf(false) }
+                LaunchedEffect(jarvisQuotaSnapshot.isUnlimitedUnlocked) {
+                    if (!jarvisQuotaSnapshot.isUnlimitedUnlocked) {
+                        jarvisBriefingDismissed = false
+                    }
+                }
+                if (!showFirstTimeTutorial &&
+                    jarvisQuotaSnapshot.isUnlimitedUnlocked &&
+                    !jarvisBriefingDismissed &&
+                    currentDestination?.route != Screen.Login.route
+                ) {
+                    com.example.sharkmentor.ui.components.JarvisLaunchBriefingOverlay(
+                        weatherState = weatherState,
+                        weatherSettings = weatherSettings,
+                        dueQuestionsCount = dueQuestionsCount,
+                        onNavigate = { targetRoute ->
+                            if (currentDestination?.route != targetRoute) {
+                                runCatching {
+                                    navController.navigate(targetRoute) { launchSingleTop = true }
+                                }
+                            }
+                        },
+                        onDismiss = { jarvisBriefingDismissed = true }
+                    )
+                }
+
                 com.example.sharkmentor.ui.components.WellnessReminderSmartwatchOverlay()
             }
 
@@ -832,26 +863,37 @@ fun MainScreen(
                 Surface(
                     modifier = Modifier
                         .widthIn(max = 360.dp)
-                        .fillMaxWidth(0.82f)
+                        .fillMaxWidth(0.84f)
                         .fillMaxHeight(),
                     color = MaterialTheme.colorScheme.surface,
                     shape = RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp),
                     shadowElevation = 12.dp
                 ) {
+                    val drawerMusicEnabled by MusicPlayerHub.isEnabled.collectAsStateWithLifecycle()
                     ControlPanelContent(
-                        themeMode       = themeMode,
-                        onThemeToggle   = { themePrefs.setThemeMode(it) },
-                        currentPalette  = currentPalette,
-                        onPaletteChange = { themePrefs.setPalette(it) },
-                        onDismiss       = { isRightDrawerOpen = false },
-                        currentRoute    = currentDestination?.route,
-                        onNavigate      = { route ->
+                        themeMode           = themeMode,
+                        onThemeToggle       = { themePrefs.setThemeMode(it) },
+                        currentPalette      = currentPalette,
+                        onPaletteChange     = { themePrefs.setPalette(it) },
+                        onDismiss           = { isRightDrawerOpen = false },
+                        currentRoute        = currentDestination?.route,
+                        dueQuestionsCount   = dueQuestionsCount,
+                        onToggleMusicPlayer = if (drawerMusicEnabled) {
+                            {
+                                if (currentDestination?.route == Screen.Focus.route) {
+                                    MusicPlayerHub.toggleHomePanel()
+                                } else {
+                                    MusicPlayerHub.toggleFloatingMini()
+                                }
+                            }
+                        } else null,
+                        onNavigate          = { route ->
                             isRightDrawerOpen = false
                             if (currentDestination?.route != route) {
                                 navController.navigate(route) { launchSingleTop = true }
                             }
                         },
-                        onLogout        = {
+                        onLogout            = {
                             isRightDrawerOpen = false
                             performCleanLogout()
                         }

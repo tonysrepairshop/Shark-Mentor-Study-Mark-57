@@ -182,6 +182,7 @@ fun SharkAiScreen(
     val selectedAttachmentUri by viewModel.selectedAttachmentUri.collectAsStateWithLifecycle()
     val attachmentPreview by viewModel.attachmentPreview.collectAsStateWithLifecycle()
     val lockedEngine by viewModel.lockedEngine.collectAsStateWithLifecycle()
+    val isDetailedVisualLocked by viewModel.isDetailedVisualLocked.collectAsStateWithLifecycle()
     val hasAnyCustomApiKey by viewModel.hasAnyCustomApiKey.collectAsStateWithLifecycle()
     val customProviderGroups by viewModel.customProviderGroups.collectAsStateWithLifecycle()
     val activeModelDisplay by viewModel.activeModelDisplay.collectAsStateWithLifecycle()
@@ -334,6 +335,7 @@ fun SharkAiScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 val activeSubRunnerCmd = when {
+                    isDetailedVisualLocked -> "/detayli"
                     lockedEngine == SharkAiEngine.SOLVER_ENGINE -> "/soru"
                     lockedEngine == SharkAiEngine.TWIN_QUESTION_ENGINE -> "/benzer"
                     lockedEngine == SharkAiEngine.PLANNER_OR_ORGANIZER ||

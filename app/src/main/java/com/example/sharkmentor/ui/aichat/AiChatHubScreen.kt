@@ -17,8 +17,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,12 +74,35 @@ fun PersonalizedGreetingHeader(
     selectedMode: AiPersona,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(context) {
+        com.example.sharkmentor.core.ai.SharkTokenQuotaManager.ensureLoaded(context)
+    }
+    val quotaSnapshot by com.example.sharkmentor.core.ai.SharkTokenQuotaManager.snapshot.collectAsState()
+    val isJarvisActive = quotaSnapshot.isUnlimitedUnlocked
+
     val firstName = remember(userName) {
         userName.trim().split(" ").firstOrNull()?.takeIf { it.isNotBlank() && !it.equals("Şampiyon", ignoreCase = true) }?.replaceFirstChar { it.uppercase() }
     }
 
     val currentHour = remember { LocalTime.now().hour }
-    val (timeGreeting, invitationText) = remember(currentHour, firstName, selectedMode) {
+    val (timeGreeting, invitationText) = remember(currentHour, firstName, selectedMode, isJarvisActive) {
+        if (isJarvisActive) {
+            val jarvisHeader = when (currentHour) {
+                in 5..11 -> "Günaydın efendim. Hoş geldiniz."
+                in 12..17 -> "Hoş geldiniz efendim, sistemler hazır."
+                in 18..21 -> "İyi akşamlar efendim, sistemler hazır."
+                else -> "İyi geceler efendim. Gece protokolü aktif."
+            }
+            val jarvisSub = when (selectedMode) {
+                AiPersona.STUDY_PLANNER -> "Program ve etüt düzeninizi oluşturmak için hazırım efendim. Hangi derslerle başlayalım?"
+                AiPersona.GOAL_SETTER -> "Hedef analizlerinizi ve net projeksiyonunuzu güncelleyebilirim efendim."
+                AiPersona.DOPAMINE_COACH -> "Derin odak protokolünü başlatmaya hazırım efendim."
+                AiPersona.ZEN_CALM -> "Zihninizi dinlendirmek için sakin bir nefes seansı hazırlayabilirim efendim."
+                else -> "Bana doğrudan J.A.R.V.I.S. diye seslenebilirsiniz efendim. Soru, grafik veya plan — emrinizdeyim."
+            }
+            jarvisHeader to jarvisSub
+        } else {
         val namePart = if (firstName != null) " $firstName" else ""
         when (currentHour) {
             in 6..11 -> {
@@ -115,6 +142,7 @@ fun PersonalizedGreetingHeader(
                 }
             }
         }
+        }
     }
 
     Column(
@@ -123,6 +151,23 @@ fun PersonalizedGreetingHeader(
             .padding(horizontal = 20.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        if (isJarvisActive) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+            ) {
+                Text(
+                    text = "J.A.R.V.I.S. • ÇEVRİMİÇİ",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.1.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+        }
         Text(
             text = timeGreeting,
             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
@@ -139,7 +184,7 @@ fun PersonalizedGreetingHeader(
         if (selectedMode == AiPersona.SHARK_COACH) {
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "Özel araçlar için / yaz (/plan, /soru, /benzer, /hedef, /zen) • Konu, kitap ve hata bankası düzenlemelerini doğrudan isteyebilirsin.",
+                text = "Özel araçlar için / yaz (/detayli, /simulasyon, /plan, /soru, /benzer, /hedef, /zen)",
                 style = MaterialTheme.typography.labelSmall.copy(lineHeight = 17.sp),
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f),
                 textAlign = TextAlign.Center

@@ -187,9 +187,16 @@ fun ErrorTrainingFloatingAiOverlay(
                 loadQuestionBitmapSafely(context, question.questionImageUri)
             }
             try {
+                val isJarvisActive = SharkTokenQuotaManager.isUnlimitedUnlocked(context)
+                val jarvisDirective = SharkTokenQuotaManager.buildJarvisPersonaDirective(isJarvisActive)
+                val effectiveSystemDirective = if (jarvisDirective.isNotBlank()) {
+                    "$systemDirective\n\n$jarvisDirective"
+                } else {
+                    systemDirective
+                }
                 val res = GeminiAiFactory.streamContentWithFailover(
                     context = context,
-                    systemInstruction = systemDirective,
+                    systemInstruction = effectiveSystemDirective,
                     userPrompt = userPrompt,
                     bitmaps = if (bmp != null) listOf(bmp) else emptyList(),
                     temperature = 0.25f,
@@ -198,7 +205,9 @@ fun ErrorTrainingFloatingAiOverlay(
                     onPartialText = { partial ->
                         val idx = chatTurns.indexOfFirst { it.id == aiMsgId }
                         if (idx >= 0) {
-                            chatTurns[idx] = chatTurns[idx].copy(text = partial)
+                            chatTurns[idx] = chatTurns[idx].copy(
+                                text = com.example.sharkmentor.ui.components.maskInProgressSvgForStreaming(partial)
+                            )
                         }
                     }
                 )

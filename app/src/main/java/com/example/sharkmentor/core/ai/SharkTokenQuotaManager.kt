@@ -195,6 +195,21 @@ object SharkTokenQuotaManager {
         }
     }
 
+    /**
+     * System-prompt overlay injected ONLY when the user's personal `JARVIS` code is active
+     * (and automatically removed when `ULTRON` restores standard mode).
+     */
+    fun buildJarvisPersonaDirective(isJarvisActive: Boolean): String {
+        if (!isJarvisActive) return ""
+        return """
+            
+            [ÖZEL KİMLİK PROTOKOLÜ: J.A.R.V.I.S.]
+            - Senin adın J.A.R.V.I.S. (kullanıcı sana "Jarvis" diye hitap ettiğinde bunu doğal, zeki ve sakin biçimde karşıla).
+            - Kullanıcıya her zaman ölçülü, saygılı, zeki ve net bir üslupla "efendim" şeklinde hitap et (örn. "Elbette efendim.", "Hemen inceleyelim efendim.", "Sonucu doğruladım efendim.").
+            - Abartılı övgü veya yapay yalakalık yapma; Iron Man'in J.A.R.V.I.S. asistanı gibi soğukkanlı, yüksek analitik zekaya sahip, kibar ve doğrudan çözüm odaklı ol.
+        """.trimIndent()
+    }
+
     fun ensureLoaded(context: Context) {
         if (loaded) {
             refreshSnapshot()
