@@ -284,10 +284,13 @@ fun OnboardingScreen(
 
                             val cleanCode = institutionCode.trim().uppercase()
                             val isJarvisUnlimitedCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedTokenCode(cleanCode)
+                            val isUltronResetCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isResetTokenCode(cleanCode)
                             if (isJarvisUnlimitedCode) {
                                 com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+                            } else if (isUltronResetCode) {
+                                com.example.sharkmentor.core.ai.SharkTokenQuotaManager.lockUnlimitedAccess(context)
                             }
-                            if (!isIndividual && cleanCode.isNotBlank() && !isJarvisUnlimitedCode) {
+                            if (!isIndividual && cleanCode.isNotBlank() && !isJarvisUnlimitedCode && !isUltronResetCode) {
                                 studentPayload["coachCode"] = cleanCode
                                 studentPayload["userMode"] = "campus"
                                 studentPayload["isInstitutional"] = true
@@ -424,10 +427,13 @@ fun OnboardingScreen(
 
                         val prefs = UserPreferences.getInstance(context)
                         val enteredJarvisCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedTokenCode(institutionCode)
+                        val enteredUltronCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isResetTokenCode(institutionCode)
                         if (enteredJarvisCode) {
                             com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+                        } else if (enteredUltronCode) {
+                            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.lockUnlimitedAccess(context)
                         }
-                        if (isIndividual || institutionCode.isBlank() || enteredJarvisCode) {
+                        if (isIndividual || institutionCode.isBlank() || enteredJarvisCode || enteredUltronCode) {
                             prefs.completeOnboardingAsIndividual(fullName.trim())
                         } else {
                             prefs.completeOnboardingWithInstitution(fullName.trim(), institutionCode.trim())

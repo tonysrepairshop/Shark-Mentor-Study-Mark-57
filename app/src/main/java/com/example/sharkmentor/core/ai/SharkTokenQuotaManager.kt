@@ -102,6 +102,7 @@ sealed class QuotaCheckResult {
 object SharkTokenQuotaManager {
 
     const val UNLIMITED_ACCESS_CODE = "JARVIS"
+    const val RESET_ACCESS_CODE = "ULTRON"
 
     private const val PREFS_NAME = "shark_token_quota_v1"
     private const val KEY_ENTRIES = "usage_entries_json"
@@ -124,18 +125,29 @@ object SharkTokenQuotaManager {
     private val _snapshot = MutableStateFlow(SharkQuotaSnapshot())
     val snapshot: StateFlow<SharkQuotaSnapshot> = _snapshot.asStateFlow()
 
+    private fun normalizeAccessCode(rawInput: String?): String {
+        if (rawInput.isNullOrBlank()) return ""
+        return rawInput.trim()
+            .replace('İ', 'I')
+            .replace('ı', 'I')
+            .uppercase(java.util.Locale.ROOT)
+    }
+
     /**
      * Turkish-locale-safe matcher for the personal unlimited-token code (`JARVIS`).
      * Handles ASCII and Turkish dotted/dotless I variants (`jarvis`, `JARVİS`, `Jarvis`, `JARVIS`).
      */
-    fun isUnlimitedTokenCode(rawInput: String?): Boolean {
-        if (rawInput.isNullOrBlank()) return false
-        val normalized = rawInput.trim()
-            .replace('İ', 'I')
-            .replace('ı', 'I')
-            .uppercase(java.util.Locale.ROOT)
-        return normalized == UNLIMITED_ACCESS_CODE
-    }
+    fun isUnlimitedTokenCode(rawInput: String?): Boolean =
+        normalizeAccessCode(rawInput) == UNLIMITED_ACCESS_CODE
+
+    /**
+     * Turkish-locale-safe matcher for the anti-code (`ULTRON`) that restores standard token limits.
+     */
+    fun isResetTokenCode(rawInput: String?): Boolean =
+        normalizeAccessCode(rawInput) == RESET_ACCESS_CODE
+
+    fun isSpecialTokenCode(rawInput: String?): Boolean =
+        isUnlimitedTokenCode(rawInput) || isResetTokenCode(rawInput)
 
     /**
      * Permanently lifts local token & hourly feature limits on this device without enabling Campus mode
@@ -152,6 +164,27 @@ object SharkTokenQuotaManager {
                     .apply()
             }
             refreshSnapshotLocked(System.currentTimeMillis())
+        }
+    }
+
+    /**
+     * Restores standard token limits when unlimited access is currently active.
+     * Returns `true` if unlimited mode was active and has now been reverted; returns `false` with zero
+     * state/preference changes if already on standard limits ("boşta yazıldığında değişiklik yapmaz").
+     */
+    fun lockUnlimitedAccess(context: Context): Boolean {
+        ensureLoaded(context)
+        synchronized(lock) {
+            if (!unlimitedUnlocked) return false
+            unlimitedUnlocked = false
+            runCatching {
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_UNLIMITED_UNLOCKED, false)
+                    .apply()
+            }
+            refreshSnapshotLocked(System.currentTimeMillis())
+            return true
         }
     }
 

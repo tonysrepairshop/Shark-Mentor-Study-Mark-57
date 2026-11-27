@@ -864,7 +864,16 @@ fun ProfileScreen(
                                         com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
                                         inputCode = ""
                                         linkError = ""
-                                        Toast.makeText(context, "Token limiti kaldırıldı.", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Hoş geldiniz efendim. Token limiti kaldırıldı.", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    if (com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isResetTokenCode(cleanCode)) {
+                                        val wasUnlocked = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.lockUnlimitedAccess(context)
+                                        inputCode = ""
+                                        linkError = ""
+                                        if (wasUnlocked) {
+                                            Toast.makeText(context, "Token limiti eski haline getirildi.", Toast.LENGTH_SHORT).show()
+                                        }
                                         return@Button
                                     }
                                     isSubmitting = true

@@ -30,6 +30,11 @@ class CoachCodeRepository(private val context: Context) {
             onSuccess()
             return
         }
+        if (SharkTokenQuotaManager.isResetTokenCode(inputCode)) {
+            SharkTokenQuotaManager.lockUnlimitedAccess(context)
+            onSuccess()
+            return
+        }
         val cleanCode = inputCode.trim().uppercase()
         if (cleanCode.isBlank()) {
             onError("Lütfen bir koç veya kurum kodu giriniz.")

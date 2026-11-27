@@ -136,17 +136,26 @@ class Mark75FeaturesTest {
     }
 
     @Test
-    fun jarvisCodeMatchesTurkishLocaleVariantsAndLiftsAllTokenLimitsCleanly() {
+    fun jarvisAndUltronCodesMatchTurkishLocaleVariantsAndControlTokenLimitsCleanly() {
         assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVIS"))
         assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("jarvis"))
         assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("  Jarvis  "))
         assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVİS"))
         assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("jarvıs"))
 
+        assertTrue(SharkTokenQuotaManager.isResetTokenCode("ULTRON"))
+        assertTrue(SharkTokenQuotaManager.isResetTokenCode("ultron"))
+        assertTrue(SharkTokenQuotaManager.isResetTokenCode("  Ultron  "))
+        assertTrue(SharkTokenQuotaManager.isSpecialTokenCode("JARVIS"))
+        assertTrue(SharkTokenQuotaManager.isSpecialTokenCode("ULTRON"))
+
         assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode(null))
         assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode(""))
         assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode("SHK-102"))
         assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVIS2"))
+        assertFalse(SharkTokenQuotaManager.isResetTokenCode("JARVIS"))
+        assertFalse(SharkTokenQuotaManager.isResetTokenCode("ULTRON2"))
+        assertFalse(SharkTokenQuotaManager.isSpecialTokenCode("SHK-102"))
 
         val maxedBlocked = com.example.sharkmentor.core.ai.SharkQuotaSnapshot(
             used5hTokens = 999_999L,
@@ -181,5 +190,66 @@ class Mark75FeaturesTest {
             com.example.sharkmentor.core.ai.QuotaCheckResult.Allowed,
             SharkTokenQuotaManager.evaluateCheck(unlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.SIMULATION)
         )
+    }
+
+    @Test
+    fun allThemesDefineDedicatedContainersWithoutM3PurpleFallbackAndPaperUsesLightCoffee() {
+        val forbiddenM3BaselinePurpleColors = setOf(
+            androidx.compose.ui.graphics.Color(0xFFF7F2FA),
+            androidx.compose.ui.graphics.Color(0xFFF3EDF7),
+            androidx.compose.ui.graphics.Color(0xFFECE6F0),
+            androidx.compose.ui.graphics.Color(0xFFE6E0E9),
+            androidx.compose.ui.graphics.Color(0xFFFEF7FF),
+            androidx.compose.ui.graphics.Color(0xFFDED8E1),
+            androidx.compose.ui.graphics.Color(0xFFFFD8E4),
+            androidx.compose.ui.graphics.Color(0xFF211F26),
+            androidx.compose.ui.graphics.Color(0xFF2B2930),
+            androidx.compose.ui.graphics.Color(0xFF36343B)
+        )
+
+        for (palette in com.example.sharkmentor.core.data.ThemePalette.entries) {
+            for (isDark in listOf(false, true)) {
+                val scheme = com.example.sharkmentor.ui.theme.paletteSchemeFor(palette, isDark)
+                val tokens = listOf(
+                    scheme.surfaceVariant,
+                    scheme.surfaceBright,
+                    scheme.surfaceDim,
+                    scheme.surfaceContainerLow,
+                    scheme.surfaceContainer,
+                    scheme.surfaceContainerHigh,
+                    scheme.surfaceContainerHighest,
+                    scheme.tertiaryContainer
+                )
+                for (color in tokens) {
+                    assertFalse(
+                        "Theme ${palette.name} (dark=$isDark) fell back to M3 default purple token $color",
+                        color in forbiddenM3BaselinePurpleColors
+                    )
+                }
+            }
+        }
+
+        // Paper Light MUST use warm light-coffee tones (R > G > B) across cards & containers
+        val paperLight = com.example.sharkmentor.ui.theme.paletteSchemeFor(
+            com.example.sharkmentor.core.data.ThemePalette.PAPER,
+            isDark = false
+        )
+        for (coffeeSurface in listOf(
+            paperLight.surfaceVariant,
+            paperLight.surfaceContainerLow,
+            paperLight.surfaceContainer,
+            paperLight.surfaceContainerHigh,
+            paperLight.surfaceContainerHighest
+        )) {
+            assertTrue("Paper Light surface must be warm light-coffee (R > G > B)", coffeeSurface.red > coffeeSurface.green && coffeeSurface.green > coffeeSurface.blue)
+        }
+
+        // Blueberry Light exclusively keeps its dedicated purple/lavender container tint (B > R & B > G)
+        val blueberryLight = com.example.sharkmentor.ui.theme.paletteSchemeFor(
+            com.example.sharkmentor.core.data.ThemePalette.BLUEBERRY,
+            isDark = false
+        )
+        assertTrue(blueberryLight.surfaceVariant.blue > blueberryLight.surfaceVariant.red)
+        assertTrue(blueberryLight.surfaceContainer.blue > blueberryLight.surfaceContainer.green)
     }
 }
