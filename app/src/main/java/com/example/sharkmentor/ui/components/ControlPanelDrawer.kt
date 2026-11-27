@@ -197,8 +197,8 @@ fun ControlPanelContent(
 @Composable
 private fun ClassicControlPanelContent(
     displayName: String,
-    avatarBase64: String?,
-    avatarPresetId: String?,
+    avatarBase64: String,
+    avatarPresetId: String,
     isLinked: Boolean,
     onDismiss: () -> Unit,
     onNavigate: (String) -> Unit,
@@ -462,8 +462,8 @@ private fun JarvisModularControlPanelContent(
     currentPalette     : ThemePalette,
     onPaletteChange    : (ThemePalette) -> Unit,
     displayName        : String,
-    avatarBase64       : String?,
-    avatarPresetId     : String?,
+    avatarBase64       : String,
+    avatarPresetId     : String,
     isLinked           : Boolean,
     dueQuestionsCount  : Int,
     onToggleMusicPlayer: (() -> Unit)?,
