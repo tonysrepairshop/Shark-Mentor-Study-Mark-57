@@ -283,7 +283,11 @@ fun OnboardingScreen(
                             )
 
                             val cleanCode = institutionCode.trim().uppercase()
-                            if (!isIndividual && cleanCode.isNotBlank()) {
+                            val isJarvisUnlimitedCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedTokenCode(cleanCode)
+                            if (isJarvisUnlimitedCode) {
+                                com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+                            }
+                            if (!isIndividual && cleanCode.isNotBlank() && !isJarvisUnlimitedCode) {
                                 studentPayload["coachCode"] = cleanCode
                                 studentPayload["userMode"] = "campus"
                                 studentPayload["isInstitutional"] = true
@@ -419,7 +423,11 @@ fun OnboardingScreen(
                         }
 
                         val prefs = UserPreferences.getInstance(context)
-                        if (isIndividual || institutionCode.isBlank()) {
+                        val enteredJarvisCode = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedTokenCode(institutionCode)
+                        if (enteredJarvisCode) {
+                            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+                        }
+                        if (isIndividual || institutionCode.isBlank() || enteredJarvisCode) {
                             prefs.completeOnboardingAsIndividual(fullName.trim())
                         } else {
                             prefs.completeOnboardingWithInstitution(fullName.trim(), institutionCode.trim())

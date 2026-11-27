@@ -72,12 +72,13 @@ fun SharkQuotaUsageCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                val isUnlimitedActive = hasCustomApiKey || snap.isUnlimitedUnlocked
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Icon(
-                        imageVector = if (hasCustomApiKey) Icons.Default.VerifiedUser else Icons.Default.Bolt,
+                        imageVector = if (isUnlimitedActive) Icons.Default.VerifiedUser else Icons.Default.Bolt,
                         contentDescription = null,
                         tint = colorScheme.primary,
                         modifier = Modifier.size(16.dp)
@@ -94,7 +95,7 @@ fun SharkQuotaUsageCard(
                     color = colorScheme.primary.copy(alpha = 0.13f)
                 ) {
                     Text(
-                        text = if (hasCustomApiKey) "LİMİTSİZ" else snap.tier.id.uppercase(),
+                        text = if (isUnlimitedActive) "LİMİTSİZ" else snap.tier.id.uppercase(),
                         fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -107,6 +108,13 @@ fun SharkQuotaUsageCard(
             if (hasCustomApiKey) {
                 Text(
                     text = "Kendi API anahtarını kullandığın için 5 saatlik, haftalık veya saatlik sabit model sınırları uygulanmıyor.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colorScheme.onSurfaceVariant,
+                    lineHeight = 17.sp
+                )
+            } else if (snap.isUnlimitedUnlocked) {
+                Text(
+                    text = "Token limiti kaldırıldı. 5 saatlik, haftalık ve saatlik kullanım sınırları uygulanmıyor.",
                     style = MaterialTheme.typography.bodySmall,
                     color = colorScheme.onSurfaceVariant,
                     lineHeight = 17.sp

@@ -80,7 +80,8 @@ data class SharkQuotaSnapshot(
     val usedHourlySimulation: Int = 0,
     val limitHourlySimulation: Int = SharkSubscriptionTier.FREE.hourlySimulationLimit,
     val resetSimulationInMs: Long = 0L,
-    val bonusTokens: Long = 0L
+    val bonusTokens: Long = 0L,
+    val isUnlimitedUnlocked: Boolean = false
 ) {
     val fiveHourProgress: Float
         get() = if (limit5hTokens > 0L) (used5hTokens.toFloat() / limit5hTokens.toFloat()).coerceIn(0f, 1f) else 0f
@@ -96,14 +97,17 @@ sealed class QuotaCheckResult {
 
 /**
  * Rolling-window token & hourly feature quota manager for SharkMentor's built-in fixed API key.
- * NEVER restricts users who supply their own custom API keys.
+ * NEVER restricts users who supply their own custom API keys or unlock unlimited token access.
  */
 object SharkTokenQuotaManager {
+
+    const val UNLIMITED_ACCESS_CODE = "JARVIS"
 
     private const val PREFS_NAME = "shark_token_quota_v1"
     private const val KEY_ENTRIES = "usage_entries_json"
     private const val KEY_TIER = "subscription_tier"
     private const val KEY_BONUS_TOKENS = "bonus_tokens"
+    private const val KEY_UNLIMITED_UNLOCKED = "unlimited_token_unlocked"
 
     const val ONE_HOUR_MS = 60L * 60L * 1000L
     const val FIVE_HOURS_MS = 5L * ONE_HOUR_MS
@@ -115,9 +119,48 @@ object SharkTokenQuotaManager {
     private val entries = mutableListOf<QuotaUsageEntry>()
     private var currentTier: SharkSubscriptionTier = SharkSubscriptionTier.FREE
     private var bonusTokens: Long = 0L
+    private var unlimitedUnlocked: Boolean = false
 
     private val _snapshot = MutableStateFlow(SharkQuotaSnapshot())
     val snapshot: StateFlow<SharkQuotaSnapshot> = _snapshot.asStateFlow()
+
+    /**
+     * Turkish-locale-safe matcher for the personal unlimited-token code (`JARVIS`).
+     * Handles ASCII and Turkish dotted/dotless I variants (`jarvis`, `JARVİS`, `Jarvis`, `JARVIS`).
+     */
+    fun isUnlimitedTokenCode(rawInput: String?): Boolean {
+        if (rawInput.isNullOrBlank()) return false
+        val normalized = rawInput.trim()
+            .replace('İ', 'I')
+            .replace('ı', 'I')
+            .uppercase(java.util.Locale.ROOT)
+        return normalized == UNLIMITED_ACCESS_CODE
+    }
+
+    /**
+     * Permanently lifts local token & hourly feature limits on this device without enabling Campus mode
+     * or altering any app branding, logos, profile, or Firestore state.
+     */
+    fun unlockUnlimitedAccess(context: Context) {
+        ensureLoaded(context)
+        synchronized(lock) {
+            unlimitedUnlocked = true
+            runCatching {
+                context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_UNLIMITED_UNLOCKED, true)
+                    .apply()
+            }
+            refreshSnapshotLocked(System.currentTimeMillis())
+        }
+    }
+
+    fun isUnlimitedUnlocked(context: Context): Boolean {
+        ensureLoaded(context)
+        synchronized(lock) {
+            return unlimitedUnlocked
+        }
+    }
 
     fun ensureLoaded(context: Context) {
         if (loaded) {
@@ -133,6 +176,7 @@ object SharkTokenQuotaManager {
                 val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 currentTier = SharkSubscriptionTier.fromId(prefs.getString(KEY_TIER, SharkSubscriptionTier.FREE.id))
                 bonusTokens = prefs.getLong(KEY_BONUS_TOKENS, 0L).coerceAtLeast(0L)
+                unlimitedUnlocked = prefs.getBoolean(KEY_UNLIMITED_UNLOCKED, false)
                 val rawJson = prefs.getString(KEY_ENTRIES, null)
                 entries.clear()
                 if (!rawJson.isNullOrBlank()) {
@@ -177,6 +221,7 @@ object SharkTokenQuotaManager {
         snap: SharkQuotaSnapshot,
         kind: QuotaUsageKind
     ): QuotaCheckResult {
+        if (snap.isUnlimitedUnlocked) return QuotaCheckResult.Allowed
         if (kind == QuotaUsageKind.VISUAL_QUESTION && snap.usedHourlyVisual >= snap.limitHourlyVisual) {
             val waitLabel = formatRemainingDuration(snap.resetVisualInMs)
             return QuotaCheckResult.Blocked(
@@ -220,6 +265,7 @@ object SharkTokenQuotaManager {
         val safeTokens = tokens.coerceAtLeast(0L)
         if (safeTokens == 0L && kind == QuotaUsageKind.CHAT) return
         synchronized(lock) {
+            if (unlimitedUnlocked) return
             val beforeSnap = refreshSnapshotLocked(nowMs)
             val overBaseLimit = beforeSnap.used5hTokens >= beforeSnap.limit5hTokens ||
                 beforeSnap.usedWeeklyTokens >= beforeSnap.limitWeeklyTokens
@@ -313,7 +359,8 @@ object SharkTokenQuotaManager {
             usedHourlySimulation = usedSim1h,
             limitHourlySimulation = currentTier.hourlySimulationLimit,
             resetSimulationInMs = if (oldestSim1h < Long.MAX_VALUE) (oldestSim1h + ONE_HOUR_MS - nowMs).coerceAtLeast(0L) else 0L,
-            bonusTokens = bonusTokens
+            bonusTokens = bonusTokens,
+            isUnlimitedUnlocked = unlimitedUnlocked
         )
         _snapshot.value = snap
         return snap
@@ -335,6 +382,7 @@ object SharkTokenQuotaManager {
                 .edit()
                 .putString(KEY_TIER, currentTier.id)
                 .putLong(KEY_BONUS_TOKENS, bonusTokens)
+                .putBoolean(KEY_UNLIMITED_UNLOCKED, unlimitedUnlocked)
                 .putString(KEY_ENTRIES, arr.toString())
                 .apply()
         }

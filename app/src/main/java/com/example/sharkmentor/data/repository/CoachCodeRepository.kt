@@ -2,6 +2,7 @@ package com.example.sharkmentor.data.repository
 
 import android.content.Context
 import android.util.Log
+import com.example.sharkmentor.core.ai.SharkTokenQuotaManager
 import com.example.sharkmentor.core.util.GoogleServicesHelper
 import com.example.sharkmentor.core.util.SessionManager
 import com.example.sharkmentor.data.local.preferences.UserPreferences
@@ -24,6 +25,11 @@ class CoachCodeRepository(private val context: Context) {
     }
 
     fun submitCoachCode(inputCode: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        if (SharkTokenQuotaManager.isUnlimitedTokenCode(inputCode)) {
+            SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+            onSuccess()
+            return
+        }
         val cleanCode = inputCode.trim().uppercase()
         if (cleanCode.isBlank()) {
             onError("Lütfen bir koç veya kurum kodu giriniz.")

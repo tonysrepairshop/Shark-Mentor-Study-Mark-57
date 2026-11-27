@@ -859,9 +859,16 @@ fun ProfileScreen(
                                         linkError = "Lütfen geçerli bir kurum/koç kodu girin."
                                         return@Button
                                     }
+                                    val cleanCode = inputCode.trim()
+                                    if (com.example.sharkmentor.core.ai.SharkTokenQuotaManager.isUnlimitedTokenCode(cleanCode)) {
+                                        com.example.sharkmentor.core.ai.SharkTokenQuotaManager.unlockUnlimitedAccess(context)
+                                        inputCode = ""
+                                        linkError = ""
+                                        Toast.makeText(context, "Token limiti kaldırıldı.", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
                                     isSubmitting = true
                                     linkError = ""
-                                    val cleanCode = inputCode.trim()
                                     CoachCodeRepository(context).submitCoachCode(
                                         inputCode = cleanCode,
                                         onSuccess = {

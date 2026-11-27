@@ -134,4 +134,52 @@ class Mark75FeaturesTest {
         assertTrue("Estimated tokens must be >= 64", estimated >= 64L)
         assertEquals("80.0K", SharkTokenQuotaManager.formatCompactTokens(80_000L))
     }
+
+    @Test
+    fun jarvisCodeMatchesTurkishLocaleVariantsAndLiftsAllTokenLimitsCleanly() {
+        assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVIS"))
+        assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("jarvis"))
+        assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("  Jarvis  "))
+        assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVİS"))
+        assertTrue(SharkTokenQuotaManager.isUnlimitedTokenCode("jarvıs"))
+
+        assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode(null))
+        assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode(""))
+        assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode("SHK-102"))
+        assertFalse(SharkTokenQuotaManager.isUnlimitedTokenCode("JARVIS2"))
+
+        val maxedBlocked = com.example.sharkmentor.core.ai.SharkQuotaSnapshot(
+            used5hTokens = 999_999L,
+            usedWeeklyTokens = 9_999_999L,
+            usedHourlyVisual = 99,
+            usedHourlySimulation = 99,
+            isUnlimitedUnlocked = false
+        )
+        assertTrue(
+            SharkTokenQuotaManager.evaluateCheck(maxedBlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.CHAT)
+                is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked
+        )
+        assertTrue(
+            SharkTokenQuotaManager.evaluateCheck(maxedBlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION)
+                is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked
+        )
+        assertTrue(
+            SharkTokenQuotaManager.evaluateCheck(maxedBlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.SIMULATION)
+                is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked
+        )
+
+        val unlocked = maxedBlocked.copy(isUnlimitedUnlocked = true)
+        assertEquals(
+            com.example.sharkmentor.core.ai.QuotaCheckResult.Allowed,
+            SharkTokenQuotaManager.evaluateCheck(unlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.CHAT)
+        )
+        assertEquals(
+            com.example.sharkmentor.core.ai.QuotaCheckResult.Allowed,
+            SharkTokenQuotaManager.evaluateCheck(unlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION)
+        )
+        assertEquals(
+            com.example.sharkmentor.core.ai.QuotaCheckResult.Allowed,
+            SharkTokenQuotaManager.evaluateCheck(unlocked, com.example.sharkmentor.core.ai.QuotaUsageKind.SIMULATION)
+        )
+    }
 }
