@@ -239,7 +239,7 @@ class PdfReaderActivity : ComponentActivity() {
         return super.dispatchGenericMotionEvent(ev)
     }
 
-    override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawKeyEvent(event)) {
             return true
         }
