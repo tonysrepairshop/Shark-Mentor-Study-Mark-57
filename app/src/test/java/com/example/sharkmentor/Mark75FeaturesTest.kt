@@ -392,6 +392,10 @@ class Mark75FeaturesTest {
 
     @Test
     fun controlPanelSettingsNormalizesReordersAndTogglesModulesCleanly() {
+        // Modular Control Panel MUST stay locked for standard users (and after ULTRON) and open ONLY with JARVIS
+        assertFalse(com.example.sharkmentor.data.controlpanel.ControlPanelPreferences.isModularControlPanelEnabled(false))
+        assertTrue(com.example.sharkmentor.data.controlpanel.ControlPanelPreferences.isModularControlPanelEnabled(true))
+
         val normalized = com.example.sharkmentor.data.controlpanel.ControlPanelModule.normalizeOrder(
             listOf(
                 com.example.sharkmentor.data.controlpanel.ControlPanelModule.THEME_STRIP,

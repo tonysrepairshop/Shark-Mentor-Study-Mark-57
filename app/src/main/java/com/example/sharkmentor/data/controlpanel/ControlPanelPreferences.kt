@@ -159,6 +159,8 @@ class ControlPanelPreferences private constructor(context: Context) {
         @Volatile
         private var INSTANCE: ControlPanelPreferences? = null
 
+        fun isModularControlPanelEnabled(isJarvisUnlocked: Boolean): Boolean = isJarvisUnlocked
+
         fun getInstance(context: Context): ControlPanelPreferences {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: ControlPanelPreferences(context.applicationContext).also { INSTANCE = it }
