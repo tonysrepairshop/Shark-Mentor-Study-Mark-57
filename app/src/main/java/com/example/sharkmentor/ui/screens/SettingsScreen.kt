@@ -801,41 +801,45 @@ fun SettingsScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    val visibleOrdered = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING && topBarSettings.isModuleVisible(it) }
-                                    if (visibleOrdered.isEmpty()) {
-                                        item {
+                                    item(key = "preview_fixed_logo") {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.surface,
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f))
+                                        ) {
                                             Text(
-                                                text = "Üst bar modülleri gizli",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                text = "Logo (Sabit)",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                             )
                                         }
-                                    } else {
-                                        items(visibleOrdered, key = { "preview_${it.name}" }) { mod ->
-                                            Surface(
-                                                shape = RoundedCornerShape(8.dp),
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
-                                            ) {
-                                                Text(
-                                                    text = mod.label,
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                                )
-                                            }
+                                    }
+                                    val visibleOrdered = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING && topBarSettings.isModuleVisible(it) }
+                                    items(visibleOrdered, key = { "preview_${it.name}" }) { mod ->
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                                        ) {
+                                            Text(
+                                                text = mod.label,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
                                         }
                                     }
                                 }
                             }
 
-                            // Per-module visibility, left/right reorder & size controls
+                            // Per-module visibility & left/right reorder controls (App Logo is permanently fixed)
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 val editableModules = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING }
                                 editableModules.forEachIndexed { index, mod ->
                                     val isVisible = topBarSettings.isModuleVisible(mod)
-                                    val currentSize = topBarSettings.sizeFor(mod)
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = MaterialTheme.colorScheme.surface,
@@ -859,24 +863,8 @@ fun SettingsScreen(
                                             }
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                                             ) {
-                                                if (isVisible) {
-                                                    Surface(
-                                                        onClick = { topBarPrefs.setModuleSize(mod, currentSize.next()) },
-                                                        shape = RoundedCornerShape(7.dp),
-                                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f))
-                                                    ) {
-                                                        Text(
-                                                            text = currentSize.label,
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.SemiBold,
-                                                            color = MaterialTheme.colorScheme.primary,
-                                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                                        )
-                                                    }
-                                                }
                                                 IconButton(
                                                     onClick = { topBarPrefs.moveModule(mod, -1) },
                                                     enabled = index > 0,

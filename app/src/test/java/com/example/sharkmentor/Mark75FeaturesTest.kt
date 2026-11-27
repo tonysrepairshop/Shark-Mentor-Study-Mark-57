@@ -4,7 +4,6 @@ import com.example.sharkmentor.core.ai.SharkTokenQuotaManager
 import com.example.sharkmentor.core.audio.MusicPlaybackState
 import com.example.sharkmentor.core.audio.MusicQueueItem
 import com.example.sharkmentor.data.topbar.TopBarModule
-import com.example.sharkmentor.data.topbar.TopBarModuleSize
 import com.example.sharkmentor.data.topbar.TopBarSettings
 import com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge
 import org.junit.Assert.assertEquals
@@ -64,14 +63,17 @@ class Mark75FeaturesTest {
     }
 
     @Test
-    fun topBarModuleSizeCyclesAndResolvesDefaultsCleanly() {
-        assertEquals(TopBarModuleSize.NORMAL, TopBarModuleSize.COMPACT.next())
-        assertEquals(TopBarModuleSize.LARGE, TopBarModuleSize.NORMAL.next())
-        assertEquals(TopBarModuleSize.COMPACT, TopBarModuleSize.LARGE.next())
+    fun appLogoRemainsPermanentlyFixedAndCannotBeHiddenInTopBar() {
+        val normalized = TopBarModule.normalizeOrder(
+            listOf(TopBarModule.WEATHER, TopBarModule.MUSIC, TopBarModule.BRANDING)
+        )
+        assertEquals(TopBarModule.BRANDING, normalized.first())
+        assertEquals(TopBarModule.DEFAULT_ORDER.size, normalized.size)
 
-        val settings = TopBarSettings(moduleSizes = mapOf(TopBarModule.MUSIC to TopBarModuleSize.LARGE))
-        assertEquals(TopBarModuleSize.LARGE, settings.sizeFor(TopBarModule.MUSIC))
-        assertEquals(TopBarModuleSize.NORMAL, settings.sizeFor(TopBarModule.WEATHER))
+        // Even if BRANDING appears in a legacy hiddenModules set, isModuleVisible MUST stay true
+        val settings = TopBarSettings(hiddenModules = setOf(TopBarModule.BRANDING, TopBarModule.COUNTDOWN))
+        assertTrue(settings.isModuleVisible(TopBarModule.BRANDING))
+        assertFalse(settings.isModuleVisible(TopBarModule.COUNTDOWN))
     }
 
     @Test

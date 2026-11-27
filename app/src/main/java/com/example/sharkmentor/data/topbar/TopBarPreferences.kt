@@ -93,18 +93,12 @@ enum class TopBarModule(val label: String) {
         val DEFAULT_ORDER: List<TopBarModule> = listOf(
             BRANDING, MUSIC, WEATHER, AI_BAR, DM, COUNTDOWN
         )
-    }
-}
 
-enum class TopBarModuleSize(val label: String, val scale: Float) {
-    COMPACT("Küçük", 0.86f),
-    NORMAL("Normal", 1.0f),
-    LARGE("Büyük", 1.14f);
-
-    fun next(): TopBarModuleSize = when (this) {
-        COMPACT -> NORMAL
-        NORMAL -> LARGE
-        LARGE -> COMPACT
+        fun normalizeOrder(raw: List<TopBarModule>): List<TopBarModule> {
+            val editable = raw.filter { it != BRANDING }.distinct()
+            val missing = DEFAULT_ORDER.filter { it != BRANDING && it !in editable }
+            return listOf(BRANDING) + editable + missing
+        }
     }
 }
 
@@ -126,11 +120,11 @@ data class TopBarSettings(
     val postureReminderEnabled: Boolean = true,
     val postureIntervalMinutes: Int = 50,
     val moduleOrder: List<TopBarModule> = TopBarModule.DEFAULT_ORDER,
-    val hiddenModules: Set<TopBarModule> = emptySet(),
-    val moduleSizes: Map<TopBarModule, TopBarModuleSize> = emptyMap()
+    val hiddenModules: Set<TopBarModule> = emptySet()
 ) {
-    fun isModuleVisible(module: TopBarModule): Boolean = (module == TopBarModule.BRANDING) || (module !in hiddenModules)
-    fun sizeFor(module: TopBarModule): TopBarModuleSize = moduleSizes[module] ?: TopBarModuleSize.NORMAL
+    /** App logo (BRANDING) is always fixed and can never be hidden by the user. */
+    fun isModuleVisible(module: TopBarModule): Boolean =
+        (module == TopBarModule.BRANDING) || (module !in hiddenModules)
 }
 
 object FocusSessionState {
@@ -206,8 +200,7 @@ class TopBarPreferences private constructor(context: Context) {
             postureReminderEnabled = prefs.getBoolean(KEY_POSTURE_REMINDER, true),
             postureIntervalMinutes = prefs.getInt(KEY_POSTURE_INTERVAL_MIN, 50).coerceIn(20, 120),
             moduleOrder = loadModuleOrder(),
-            hiddenModules = loadHiddenModules(),
-            moduleSizes = loadModuleSizes()
+            hiddenModules = loadHiddenModules()
         )
     }
 
@@ -542,74 +535,52 @@ class TopBarPreferences private constructor(context: Context) {
         val raw = prefs.getString(KEY_MODULE_ORDER, null) ?: return TopBarModule.DEFAULT_ORDER
         val parsed = raw.split(",").mapNotNull { name ->
             TopBarModule.entries.firstOrNull { it.name == name.trim() }
-        }.distinct()
-        val missing = TopBarModule.DEFAULT_ORDER.filter { it !in parsed }
-        return (parsed + missing).ifEmpty { TopBarModule.DEFAULT_ORDER }
+        }
+        return TopBarModule.normalizeOrder(parsed)
     }
 
     private fun loadHiddenModules(): Set<TopBarModule> {
         val raw = prefs.getString(KEY_HIDDEN_MODULES, null) ?: return emptySet()
         return raw.split(",").mapNotNull { name ->
             TopBarModule.entries.firstOrNull { it.name == name.trim() }
-        }.toSet()
-    }
-
-    private fun loadModuleSizes(): Map<TopBarModule, TopBarModuleSize> {
-        val raw = prefs.getString(KEY_MODULE_SIZES, null) ?: return emptyMap()
-        val out = mutableMapOf<TopBarModule, TopBarModuleSize>()
-        raw.split(",").forEach { entry ->
-            val parts = entry.split(":")
-            if (parts.size == 2) {
-                val mod = TopBarModule.entries.firstOrNull { it.name == parts[0].trim() }
-                val sz = TopBarModuleSize.entries.firstOrNull { it.name == parts[1].trim() }
-                if (mod != null && sz != null) out[mod] = sz
-            }
-        }
-        return out
+        }.filter { it != TopBarModule.BRANDING }.toSet()
     }
 
     fun setModuleVisible(module: TopBarModule, visible: Boolean) {
+        if (module == TopBarModule.BRANDING) return // App logo is always fixed & visible
         val next = _settings.value.hiddenModules.toMutableSet()
         if (visible) next.remove(module) else next.add(module)
+        next.remove(TopBarModule.BRANDING)
         prefs.edit().putString(KEY_HIDDEN_MODULES, next.joinToString(",") { it.name }).apply()
         _settings.value = _settings.value.copy(hiddenModules = next)
     }
 
     fun moveModule(module: TopBarModule, delta: Int) {
-        val list = _settings.value.moduleOrder.toMutableList()
-        val idx = list.indexOf(module)
-        if (idx < 0) return
-        val target = (idx + delta).coerceIn(0, list.lastIndex)
+        if (module == TopBarModule.BRANDING) return // App logo stays permanently fixed on the left
+        val normalized = TopBarModule.normalizeOrder(_settings.value.moduleOrder).toMutableList()
+        val idx = normalized.indexOf(module)
+        if (idx <= 0) return
+        val target = (idx + delta).coerceIn(1, normalized.lastIndex)
         if (target == idx) return
-        list.removeAt(idx)
-        list.add(target, module)
-        setModuleOrder(list)
+        normalized.removeAt(idx)
+        normalized.add(target, module)
+        setModuleOrder(normalized)
     }
 
     fun setModuleOrder(order: List<TopBarModule>) {
-        val normalized = (order.distinct() + TopBarModule.DEFAULT_ORDER.filter { it !in order })
+        val normalized = TopBarModule.normalizeOrder(order)
         prefs.edit().putString(KEY_MODULE_ORDER, normalized.joinToString(",") { it.name }).apply()
         _settings.value = _settings.value.copy(moduleOrder = normalized)
-    }
-
-    fun setModuleSize(module: TopBarModule, size: TopBarModuleSize) {
-        val next = _settings.value.moduleSizes.toMutableMap()
-        next[module] = size
-        val encoded = next.entries.joinToString(",") { "${it.key.name}:${it.value.name}" }
-        prefs.edit().putString(KEY_MODULE_SIZES, encoded).apply()
-        _settings.value = _settings.value.copy(moduleSizes = next)
     }
 
     fun resetTopBarLayout() {
         prefs.edit()
             .remove(KEY_MODULE_ORDER)
             .remove(KEY_HIDDEN_MODULES)
-            .remove(KEY_MODULE_SIZES)
             .apply()
         _settings.value = _settings.value.copy(
             moduleOrder = TopBarModule.DEFAULT_ORDER,
-            hiddenModules = emptySet(),
-            moduleSizes = emptyMap()
+            hiddenModules = emptySet()
         )
     }
 
@@ -633,7 +604,6 @@ class TopBarPreferences private constructor(context: Context) {
         private const val KEY_POSTURE_INTERVAL_MIN = "posture_interval_minutes"
         private const val KEY_MODULE_ORDER = "topbar_module_order"
         private const val KEY_HIDDEN_MODULES = "topbar_hidden_modules"
-        private const val KEY_MODULE_SIZES = "topbar_module_sizes"
 
         const val MAX_CUSTOM_TEXTS = 10
         const val MIN_AI_QUOTES = 5

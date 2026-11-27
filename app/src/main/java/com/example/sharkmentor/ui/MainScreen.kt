@@ -118,7 +118,6 @@ import com.example.sharkmentor.data.weather.WeatherUiState
 import com.example.sharkmentor.data.topbar.FocusSessionState
 import com.example.sharkmentor.data.topbar.TopBarPreferences
 import com.example.sharkmentor.data.topbar.TopBarSettings
-import com.example.sharkmentor.data.topbar.TopBarModuleSize
 import com.example.sharkmentor.data.topbar.TopBarModule
 import androidx.compose.ui.graphics.graphicsLayer
 import com.example.sharkmentor.ui.components.PendingAiPromptBus
