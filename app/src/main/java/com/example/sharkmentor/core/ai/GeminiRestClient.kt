@@ -649,8 +649,7 @@ object GeminiRestClient {
                 text = "",
                 modelName = modelName,
                 endpoint = endpoint,
-                usedEndpointFallback = usedEndpointFallback,
-                totalTokensUsed = maxTokensUsed
+                usedEndpointFallback = usedEndpointFallback
             )
         }
 
@@ -769,7 +768,7 @@ object GeminiRestClient {
             }
         }
 
-        val usageObj = root.getAsJsonObjectOrNull("usageMetadata")
+        val usageObj = rootObj.getAsJsonObjectOrNull("usageMetadata")
         val totalTok = usageObj?.get("totalTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt
             ?: ((usageObj?.get("promptTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0) +
                 (usageObj?.get("candidatesTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0))
@@ -853,7 +852,8 @@ object GeminiRestClient {
                 finishReason = lastFinishReason,
                 modelName = modelName,
                 endpoint = endpoint,
-                usedEndpointFallback = usedEndpointFallback
+                usedEndpointFallback = usedEndpointFallback,
+                totalTokensUsed = maxTokensUsed
             )
         }
 

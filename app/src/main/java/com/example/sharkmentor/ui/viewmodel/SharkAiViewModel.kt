@@ -931,7 +931,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                     isBuiltInKey = isBuiltInSim
                 )
                 if (simQuotaCheck is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked) {
-                    val blockedMsg = AiChatMessage(sender = "ai", text = simQuotaCheck.message, personaTag = currentPersona.id)
+                    val blockedMsg = AiChatMessage(sender = "ai", text = simQuotaCheck.message, personaTag = _uiState.value.activePersona.id)
                     _uiState.value = _uiState.value.copy(
                         messages = _uiState.value.messages + blockedMsg,
                         isLoading = false
