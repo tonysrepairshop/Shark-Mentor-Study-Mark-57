@@ -228,6 +228,23 @@ class PdfReaderActivity : ComponentActivity() {
     private var importedPdfState by mutableStateOf<ImportedPdfFile?>(null)
     private var isImporting by mutableStateOf(true)
     private var importError by mutableStateOf<String?>(null)
+
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawMotionEvent(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
+        com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawMotionEvent(ev)
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawKeyEvent(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
     private var activeMode by mutableStateOf(PdfOpenMode.CHOOSER)
     private var editableNoteText by mutableStateOf("")
     private var isExtractingText by mutableStateOf(false)

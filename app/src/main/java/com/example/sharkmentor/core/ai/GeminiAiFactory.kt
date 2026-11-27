@@ -640,6 +640,19 @@ object GeminiAiFactory {
                         proxyResp.text.trim()
                     }
                     if (finalText.isNotBlank() || proxyResp.functionCalls.isNotEmpty()) {
+                        if (context != null) {
+                            val usedTok = if (proxyResp.totalTokensUsed > 0) {
+                                proxyResp.totalTokensUsed.toLong()
+                            } else {
+                                SharkTokenQuotaManager.estimateTokens(userPrompt, finalText)
+                            }
+                            SharkTokenQuotaManager.recordUsage(
+                                context = context,
+                                tokens = usedTok,
+                                kind = QuotaUsageKind.CHAT,
+                                isBuiltInKey = true
+                            )
+                        }
                         if (finalText.isNotBlank() && finalText != lastProxyEmitted) {
                             onPartialText(finalText)
                         }
@@ -718,6 +731,19 @@ object GeminiAiFactory {
                     }
                     if (finalText.isNotBlank() || resp.functionCalls.isNotEmpty()) {
                         ApiKeyRotator.reportKeySuccess(activeKey)
+                        if (isBuiltInKey && context != null) {
+                            val usedTok = if (resp.totalTokensUsed > 0) {
+                                resp.totalTokensUsed.toLong()
+                            } else {
+                                SharkTokenQuotaManager.estimateTokens(userPrompt, finalText)
+                            }
+                            SharkTokenQuotaManager.recordUsage(
+                                context = context,
+                                tokens = usedTok,
+                                kind = QuotaUsageKind.CHAT,
+                                isBuiltInKey = true
+                            )
+                        }
                         if (finalText.isNotBlank() && finalText != lastEmitted) {
                             onPartialText(finalText)
                         }
@@ -800,6 +826,19 @@ object GeminiAiFactory {
                         }
                         if (finalText.isNotBlank() || resp.functionCalls.isNotEmpty()) {
                             ApiKeyRotator.reportKeySuccess(activeKey)
+                            if (context != null) {
+                                val usedTok = if (resp.totalTokensUsed > 0) {
+                                    resp.totalTokensUsed.toLong()
+                                } else {
+                                    SharkTokenQuotaManager.estimateTokens(userPrompt, finalText)
+                                }
+                                SharkTokenQuotaManager.recordUsage(
+                                    context = context,
+                                    tokens = usedTok,
+                                    kind = QuotaUsageKind.CHAT,
+                                    isBuiltInKey = true
+                                )
+                            }
                             if (finalText.isNotBlank() && finalText != lastEmitted) {
                                 onPartialText(finalText)
                             }

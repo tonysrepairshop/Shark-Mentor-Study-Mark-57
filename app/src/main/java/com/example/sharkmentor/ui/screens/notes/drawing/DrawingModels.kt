@@ -281,7 +281,7 @@ object NoteDrawingPreferences {
     fun saveStylusCalibration(context: Context, avgPressure: Float) {
         ensureLoaded(context)
         val clampedPressure = avgPressure.coerceIn(0.15f, 1.2f)
-        // Gently tune pressure sensitivity strength from the user's natural "Hello" handwriting pressure
+        // Gently tune pressure sensitivity strength from the user's natural "SHARK" handwriting pressure
         val tunedStrength = (1.15f + (0.55f - clampedPressure) * 0.65f).coerceIn(0.75f, 1.55f)
         _stylusCalibrated.value = true
         _stylusCalibratedPressure.value = clampedPressure

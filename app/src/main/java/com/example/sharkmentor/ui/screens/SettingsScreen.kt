@@ -835,6 +835,7 @@ fun SettingsScreen(
                                 val editableModules = topBarSettings.moduleOrder.filter { it != TopBarModule.BRANDING }
                                 editableModules.forEachIndexed { index, mod ->
                                     val isVisible = topBarSettings.isModuleVisible(mod)
+                                    val currentSize = topBarSettings.sizeFor(mod)
                                     Surface(
                                         shape = RoundedCornerShape(10.dp),
                                         color = MaterialTheme.colorScheme.surface,
@@ -855,12 +856,27 @@ fun SettingsScreen(
                                                     fontWeight = FontWeight.SemiBold,
                                                     color = if (isVisible) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
-
                                             }
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                                             ) {
+                                                if (isVisible) {
+                                                    Surface(
+                                                        onClick = { topBarPrefs.setModuleSize(mod, currentSize.next()) },
+                                                        shape = RoundedCornerShape(7.dp),
+                                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.32f))
+                                                    ) {
+                                                        Text(
+                                                            text = currentSize.label,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = MaterialTheme.colorScheme.primary,
+                                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                                        )
+                                                    }
+                                                }
                                                 IconButton(
                                                     onClick = { topBarPrefs.moveModule(mod, -1) },
                                                     enabled = index > 0,

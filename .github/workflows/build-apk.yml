@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 73.5 APK
+name: Build SharkMentor Mark 75 APK
 
 on:
   push:
@@ -16,9 +16,11 @@ on:
       - mark-70
       - mark-71
       - mark-72
+      - mark-73
       - mark-73.1
       - mark-73.3
       - mark-73.5
+      - mark-75
   workflow_dispatch:
 
 permissions:
@@ -272,7 +274,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark73.5-debug-apk
+          name: SharkMentor-Mark75-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -281,8 +283,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark73.5-debug.apk
-          gh release delete mark73.5-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark73.5-apk SharkMentor-Mark73.5-debug.apk \
-            --title "Shark Mentor Study Mark 73.5 (Debug APK)" \
-            --notes "Mark 73.5 sürümü: İçe aktarılan playlist videolarını tekil silme, sıfırlanan çalışma başlığı & gerçek metin senkronizasyonu, arka planda/kilitli ekranda medya bildirimli video oynatma, gerçek Not/PDF özeti Podcast motoru, Ana Ekran solunda 5 temalı (Default, Modern Vinyl, Classic Vinyl, CD, Cassette) dönen plaklı Müzik & Zen çalar, konuma/saate duyarlı Tema Döngüsü + Mavi Işık Filtresi ve Kronometre ekran açık tutma seçeneği."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark75-debug.apk
+          gh release delete mark75-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark75-apk SharkMentor-Mark75-debug.apk \
+            --title "Shark Mentor Study Mark 75 (Debug APK)" \
+            --notes "Mark 75 Karma Sürüm: Mark 73 dokunmatik plak/CD/kaset hareket kabiliyetleri (iğne, çekme anahtarı, döner ses düğmesi, tıklanabilir Sıradakiler) + Mark 73.5 3-paket tema senkronu & SharkMix 3 katmanlı mikser, Samsung S-Pen ve Honor Magic-Pencil için ham Android MotionEvent/KeyEvent kalem yan tuşu motoru + SHARK kalibrasyon ekranı, çakışmasız arka plan & 16:9 PiP video oynatıcı, gerçek token sayaçlı SharkTokenQuotaManager, /detayli görsel SVG çözücü, /simulasyon, yüzen Hata Bankası AI ve Kütüphane arama/filtre/sıralama."

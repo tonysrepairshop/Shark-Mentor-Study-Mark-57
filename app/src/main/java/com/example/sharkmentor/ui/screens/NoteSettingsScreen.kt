@@ -504,13 +504,13 @@ fun NoteSettingsScreen(
                                 )
                                 Column {
                                     Text(
-                                        text = "Kalem Test & Senkronizasyon (Hello)",
+                                        text = "Kalem Test & Senkronizasyon (SHARK)",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else "'Hello' yazarak kalemini test edip senkronize et",
+                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else "'SHARK' yazarak kalemini test edip senkronize et",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colorScheme.onSurfaceVariant
                                     )

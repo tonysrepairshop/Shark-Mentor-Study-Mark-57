@@ -4,8 +4,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
@@ -45,6 +47,13 @@ enum class MusicSourceKind {
 }
 
 @Immutable
+data class MusicQueueItem(
+    val queueId: Long,
+    val title: String,
+    val subtitle: String = ""
+)
+
+@Immutable
 data class MusicPlaybackState(
     val hasActiveSession: Boolean = false,
     val isPlaying: Boolean = false,
@@ -59,7 +68,8 @@ data class MusicPlaybackState(
     val durationMs: Long = 0L,
     val lastPositionUpdateElapsedMs: Long = 0L,
     val playbackSpeed: Float = 1f,
-    val queueTitles: List<String> = emptyList()
+    val queueTitles: List<String> = emptyList(),
+    val queueItems: List<MusicQueueItem> = emptyList()
 ) {
     fun estimateCurrentPositionMs(nowElapsedRealtimeMs: Long = SystemClock.elapsedRealtime()): Long {
         if (durationMs <= 0L) return positionMs.coerceAtLeast(0L)
@@ -181,6 +191,10 @@ object MusicPlayerHub {
         }
 
         override fun onMetadataChanged(metadata: MediaMetadata?) {
+            recomputeMergedState()
+        }
+
+        override fun onQueueChanged(queue: MutableList<MediaSession.QueueItem>?) {
             recomputeMergedState()
         }
 
@@ -465,6 +479,8 @@ object MusicPlayerHub {
                 val speed = pb?.playbackSpeed?.takeIf { it > 0f } ?: 1f
                 val srcName = friendlySourceName(bestExternal.packageName)
 
+                val structuredQueue = extractUpcomingQueue(bestExternal)
+
                 _playbackState.value = MusicPlaybackState(
                     hasActiveSession = true,
                     isPlaying = extPlaying,
@@ -479,11 +495,8 @@ object MusicPlayerHub {
                     durationMs = duration,
                     lastPositionUpdateElapsedMs = lastUpdate,
                     playbackSpeed = speed,
-                    queueTitles = runCatching {
-                        primaryExternalController?.queue?.mapNotNull { qItem ->
-                            qItem.description?.title?.toString()?.trim()?.takeIf { it.isNotBlank() }
-                        }?.take(10).orEmpty()
-                    }.getOrDefault(emptyList())
+                    queueTitles = structuredQueue.map { it.title },
+                    queueItems = structuredQueue
                 )
             }
 
@@ -512,6 +525,29 @@ object MusicPlayerHub {
         }
     }
 
+    private fun extractUpcomingQueue(controller: MediaController): List<MusicQueueItem> {
+        val rawQueue = runCatching { controller.queue }.getOrNull().orEmpty()
+        if (rawQueue.isEmpty()) return emptyList()
+        val activeId = controller.playbackState?.activeQueueItemId ?: MediaSession.QueueItem.UNKNOWN_ID.toLong()
+        val activeIndex = if (activeId != MediaSession.QueueItem.UNKNOWN_ID.toLong()) {
+            rawQueue.indexOfFirst { it.queueId == activeId }
+        } else {
+            -1
+        }
+        val slice = if (activeIndex >= 0 && activeIndex + 1 < rawQueue.size) {
+            rawQueue.subList(activeIndex + 1, rawQueue.size)
+        } else {
+            rawQueue
+        }
+        return slice.mapNotNull { item ->
+            val desc = item.description ?: return@mapNotNull null
+            val qTitle = desc.title?.toString()?.trim().orEmpty()
+            if (qTitle.isBlank()) return@mapNotNull null
+            val qSub = desc.subtitle?.toString()?.trim().orEmpty()
+            MusicQueueItem(queueId = item.queueId, title = qTitle, subtitle = qSub)
+        }.take(12)
+    }
+
     private fun friendlySourceName(pkg: String): String = when {
         pkg == PKG_SPOTIFY -> "Spotify"
         pkg == PKG_YOUTUBE_MUSIC -> "YouTube Music"
@@ -522,7 +558,32 @@ object MusicPlayerHub {
         else -> "Medya Oynatıcı"
     }
 
-    // ── Transport Controls ────────────────────────────────────────────────────
+    // ── Transport, Queue & Volume Controls ────────────────────────────────────
+
+    fun openMusicProvider(context: Context, packageName: String) {
+        connectMusicProvider(context, packageName)
+    }
+
+    fun skipToQueueItem(queueId: Long) {
+        val ctrl = primaryExternalController ?: return
+        runCatching { ctrl.transportControls.skipToQueueItem(queueId) }
+    }
+
+    fun getDeviceVolumeFraction(context: Context): Float {
+        val am = context.getSystemService(AudioManager::class.java) ?: return 0.5f
+        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val curVol = am.getStreamVolume(AudioManager.STREAM_MUSIC).coerceIn(0, maxVol)
+        return (curVol.toFloat() / maxVol.toFloat()).coerceIn(0f, 1f)
+    }
+
+    fun setDeviceVolumeFraction(context: Context, fraction: Float) {
+        val am = context.getSystemService(AudioManager::class.java) ?: return
+        val maxVol = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val target = (fraction.coerceIn(0f, 1f) * maxVol).toInt().coerceIn(0, maxVol)
+        runCatching {
+            am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+        }
+    }
 
     fun togglePlayPause(context: Context) {
         val current = _playbackState.value

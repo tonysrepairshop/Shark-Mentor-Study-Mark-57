@@ -15,6 +15,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -97,6 +99,7 @@ import androidx.compose.ui.unit.sp
 import com.example.sharkmentor.core.audio.MusicPlaybackState
 import com.example.sharkmentor.core.audio.MusicPlayerHub
 import com.example.sharkmentor.core.audio.MusicPlayerSkin
+import com.example.sharkmentor.core.audio.MusicQueueItem
 import com.example.sharkmentor.core.audio.MusicSourceKind
 import com.example.sharkmentor.core.audio.SHARK_MIX_PRESETS
 import com.example.sharkmentor.core.audio.SharkMixPreset
@@ -236,10 +239,14 @@ fun ThemedMusicPlayerPage(
         }
     }
 
+    var deviceVolumeFraction by remember(context) {
+        mutableFloatStateOf(MusicPlayerHub.getDeviceVolumeFraction(context))
+    }
+
     if (showSoundQueueSheet) {
         MusicQuickSourceSheet(
             selectedSkin = selectedSkin,
-            queueTitles = playbackState.queueTitles,
+            queueItems = playbackState.queueItems,
             onSelectSkin = onSelectSkin,
             onDismiss = { showSoundQueueSheet = false }
         )
@@ -303,6 +310,7 @@ fun ThemedMusicPlayerPage(
                                 artwork = playbackState.artwork,
                                 skin = selectedSkin,
                                 syncPalette = syncPalette,
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.MODERN_VINYL -> VinylTurntableStage(
@@ -311,7 +319,7 @@ fun ThemedMusicPlayerPage(
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = true,
                                 syncPalette = syncPalette,
-                                onTonearmClick = { MusicPlayerHub.togglePlayPause(context) },
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CLASSIC_VINYL -> VinylTurntableStage(
@@ -320,21 +328,28 @@ fun ThemedMusicPlayerPage(
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = false,
                                 syncPalette = syncPalette,
-                                onTonearmClick = { MusicPlayerHub.togglePlayPause(context) },
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CD -> WallCdPlayerStage(
                                 artwork = playbackState.artwork,
                                 spinDegreesProvider = { spinDegrees },
                                 isPlaying = playbackState.isPlaying,
+                                volumeFraction = deviceVolumeFraction,
                                 syncPalette = syncPalette,
-                                onPowerSwitchClick = { MusicPlayerHub.togglePlayPause(context) },
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
+                                onVolumeChange = { newVol ->
+                                    val clamped = newVol.coerceIn(0f, 1f)
+                                    deviceVolumeFraction = clamped
+                                    MusicPlayerHub.setDeviceVolumeFraction(context, clamped)
+                                },
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CASSETTE -> CassetteDeckStage(
                                 artwork = playbackState.artwork,
                                 spinDegreesProvider = { spinDegrees },
                                 syncPalette = syncPalette,
+                                onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
                                 modifier = stageModifier
                             )
                         }
@@ -612,6 +627,7 @@ private fun DefaultAlbumStage(
     artwork: Bitmap?,
     skin: MusicPlayerSkin,
     syncPalette: PlayerSyncPalette? = null,
+    onTogglePlay: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -621,6 +637,11 @@ private fun DefaultAlbumStage(
                 if (syncPalette != null) {
                     Modifier.background(syncPalette.shellColor)
                 } else Modifier
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onTogglePlay
             ),
         contentAlignment = Alignment.Center
     ) {
@@ -635,17 +656,29 @@ private fun VinylTurntableStage(
     tonearmSwingDeg: Float,
     isModernBlue: Boolean,
     syncPalette: PlayerSyncPalette? = null,
-    onTonearmClick: () -> Unit = {},
+    onTogglePlay: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
+    val triggerToggle = {
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+        onTogglePlay()
+    }
+
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        // Spinning Vinyl Platter + Center Art
+        // Spinning Vinyl Platter + Center Art (tap anywhere on the vinyl to play/pause)
         Box(
             modifier = Modifier
                 .fillMaxSize(0.88f)
+                .clip(CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = triggerToggle
+                )
                 .graphicsLayer {
                     rotationZ = spinDegreesProvider()
                 },
@@ -827,8 +860,13 @@ private fun VinylTurntableStage(
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .fillMaxSize(0.48f)
-                .clickable { onTonearmClick() }
+                .fillMaxWidth(0.36f)
+                .fillMaxSize(0.70f)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = triggerToggle
+                )
         )
     }
 }
@@ -838,10 +876,21 @@ private fun WallCdPlayerStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     isPlaying: Boolean,
+    volumeFraction: Float = 0.5f,
     syncPalette: PlayerSyncPalette? = null,
-    onPowerSwitchClick: () -> Unit = {},
+    onTogglePlay: () -> Unit = {},
+    onVolumeChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
+    val switchProgress by animateFloatAsState(
+        targetValue = if (isPlaying) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "cd_pull_switch"
+    )
+    val latestVolume by androidx.compose.runtime.rememberUpdatedState(volumeFraction.coerceIn(0f, 1f))
+    val latestOnVolumeChange by androidx.compose.runtime.rememberUpdatedState(onVolumeChange)
+
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = syncPalette?.shellColor ?: Color(0xFF2B293B),
@@ -850,11 +899,12 @@ private fun WallCdPlayerStage(
         modifier = modifier
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            // Speaker Grilles + Pull Switch + Volume Knob
+            // Speaker Grilles + Animated Pull Switch + Live Rotary Volume Knob
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
                 val dotColor = syncPalette?.accent?.copy(alpha = 0.5f) ?: Color(0xFF56536E)
+                val accentColor = syncPalette?.accent ?: Color(0xFF38BDF8)
                 val dotRadius = 1.8.dp.toPx()
 
                 // Left & Right Dot-Matrix Speaker Grilles
@@ -868,13 +918,11 @@ private fun WallCdPlayerStage(
                     val stagger = if (r % 2 == 1) stepX * 0.45f else 0f
                     val y = startY + r * stepY
                     for (c in 0 until cols) {
-                        // Left grille
                         drawCircle(
                             color = dotColor,
                             radius = dotRadius,
                             center = Offset(w * 0.085f + c * stepX + stagger, y)
                         )
-                        // Right grille
                         drawCircle(
                             color = dotColor,
                             radius = dotRadius,
@@ -883,7 +931,7 @@ private fun WallCdPlayerStage(
                     }
                 }
 
-                // Bottom-Left Vertical Pull Switch
+                // Bottom-Left Animated Vertical Pull Switch (slides smoothly ON/OFF)
                 val switchTopLeft = Offset(w * 0.14f, h * 0.72f)
                 val switchSize = Size(10.dp.toPx(), 42.dp.toPx())
                 drawRoundRect(
@@ -893,30 +941,45 @@ private fun WallCdPlayerStage(
                     cornerRadius = CornerRadius(6.dp.toPx())
                 )
                 drawRoundRect(
-                    color = Color(0xFF47445E),
+                    color = if (isPlaying) accentColor.copy(alpha = 0.75f) else Color(0xFF47445E),
                     topLeft = switchTopLeft,
                     size = switchSize,
                     cornerRadius = CornerRadius(6.dp.toPx()),
                     style = Stroke(width = 1.4.dp.toPx())
                 )
-                val thumbCenterY = if (isPlaying) switchTopLeft.y + switchSize.height - 6.dp.toPx() else switchTopLeft.y + 7.dp.toPx()
+                val minThumbY = switchTopLeft.y + 7.dp.toPx()
+                val maxThumbY = switchTopLeft.y + switchSize.height - 7.dp.toPx()
+                val thumbCenterY = minThumbY + (maxThumbY - minThumbY) * switchProgress
                 drawCircle(
-                    color = Color(0xFF635F7E),
-                    radius = 4.2.dp.toPx(),
+                    color = if (isPlaying) accentColor else Color(0xFF635F7E),
+                    radius = 4.6.dp.toPx(),
                     center = Offset(switchTopLeft.x + switchSize.width / 2f, thumbCenterY)
                 )
 
-                // Bottom-Right Rotary Volume Knob + Arc
+                // Bottom-Right Live Rotary Volume Knob + Glowing Progress Arc
                 val knobCenter = Offset(w * 0.80f, h * 0.82f)
-                val knobRadius = 13.dp.toPx()
+                val knobRadius = 13.5.dp.toPx()
+                val arcTopLeft = Offset(knobCenter.x - knobRadius * 1.45f, knobCenter.y - knobRadius * 1.45f)
+                val arcSize = Size(knobRadius * 2.9f, knobRadius * 2.9f)
+                // Background track arc
                 drawArc(
-                    color = Color(0xFF55526E),
-                    startAngle = 150f,
-                    sweepAngle = 130f,
+                    color = Color(0xFF55526E).copy(alpha = 0.55f),
+                    startAngle = 140f,
+                    sweepAngle = 260f,
                     useCenter = false,
-                    topLeft = Offset(knobCenter.x - knobRadius * 1.45f, knobCenter.y - knobRadius * 1.45f),
-                    size = Size(knobRadius * 2.9f, knobRadius * 2.9f),
-                    style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
+                )
+                // Active volume sweep arc
+                drawArc(
+                    color = accentColor,
+                    startAngle = 140f,
+                    sweepAngle = 260f * latestVolume,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcSize,
+                    style = Stroke(width = 2.4.dp.toPx(), cap = StrokeCap.Round)
                 )
                 drawCircle(
                     color = Color(0xFF39364D),
@@ -924,19 +987,40 @@ private fun WallCdPlayerStage(
                     center = knobCenter
                 )
                 drawCircle(
-                    color = Color(0xFF5D5978),
+                    color = Color(0xFF6B678A),
                     radius = knobRadius,
                     center = knobCenter,
                     style = Stroke(width = 1.6.dp.toPx())
                 )
+                // Rotating indicator dot on the knob face
+                val indicatorDeg = 140.0 + (260.0 * latestVolume.toDouble())
+                val indicatorRad = indicatorDeg * PI / 180.0
+                val dotDist = knobRadius * 0.62f
+                val indicatorCenter = Offset(
+                    x = knobCenter.x + (dotDist * cos(indicatorRad)).toFloat(),
+                    y = knobCenter.y + (dotDist * sin(indicatorRad)).toFloat()
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 2.4.dp.toPx(),
+                    center = indicatorCenter
+                )
             }
 
-            // Central Recessed CD Well + Spinning Optical Disc
+            // Central Recessed CD Well + Spinning Optical Disc (tap disc to play/pause)
             Box(
                 modifier = Modifier
                     .fillMaxSize(0.68f)
                     .clip(CircleShape)
                     .background(Color(0xFF1B1926))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onTogglePlay()
+                        }
+                    )
                     .padding(8.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -975,13 +1059,42 @@ private fun WallCdPlayerStage(
                 }
             }
 
-            // Interactive bottom pull-cord / power button hit-area (tap to toggle play/pause!)
+            // Interactive Bottom-Left Pull-Switch hit-target (slides switch & toggles Play/Pause)
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth(0.55f)
-                    .height(44.dp)
-                    .clickable { onPowerSwitchClick() }
+                    .align(Alignment.BottomStart)
+                    .padding(start = 10.dp, bottom = 10.dp)
+                    .size(width = 56.dp, height = 68.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onTogglePlay()
+                        }
+                    )
+            )
+
+            // Interactive Bottom-Right Rotary Volume Knob hit-target (drag or tap to adjust STREAM_MUSIC)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 8.dp, bottom = 8.dp)
+                    .size(64.dp)
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, dragAmount ->
+                            change.consume()
+                            val delta = (-dragAmount.y + dragAmount.x) / 140f
+                            latestOnVolumeChange((latestVolume + delta).coerceIn(0f, 1f))
+                        }
+                    }
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            val step = if (offset.x >= size.width / 2f) 0.10f else -0.10f
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            latestOnVolumeChange((latestVolume + step).coerceIn(0f, 1f))
+                        }
+                    }
             )
         }
     }
@@ -992,8 +1105,10 @@ private fun CassetteDeckStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     syncPalette: PlayerSyncPalette? = null,
+    onTogglePlay: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
     Surface(
         shape = RoundedCornerShape(26.dp),
         color = syncPalette?.shellColor ?: Color(0xFF47474B),
@@ -1007,7 +1122,7 @@ private fun CassetteDeckStage(
             val reelSize = (minOf(maxWidth, maxHeight) * 0.21f).coerceIn(22.dp, 54.dp)
             val reelInset = (maxWidth * 0.08f).coerceIn(10.dp, 24.dp)
 
-            // Central Chamfered Cassette Window + Artwork + Dual Spinning Toothed Reels
+            // Central Chamfered Cassette Window + Artwork + Dual Spinning Toothed Reels (tap reels to play/pause)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -1016,6 +1131,14 @@ private fun CassetteDeckStage(
                     .fillMaxSize(0.66f)
                     .clip(CassetteWindowShape)
                     .background(Color(0xFF18181B))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onTogglePlay()
+                        }
+                    )
             ) {
                 AlbumOrAtmosphericArt(
                     artwork = artwork,
@@ -1250,7 +1373,7 @@ private fun AlbumOrAtmosphericArt(
 @Composable
 private fun MusicQuickSourceSheet(
     selectedSkin: MusicPlayerSkin,
-    queueTitles: List<String> = emptyList(),
+    queueItems: List<MusicQueueItem> = emptyList(),
     onSelectSkin: (MusicPlayerSkin) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1288,7 +1411,7 @@ private fun MusicQuickSourceSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "SharkMusic • Kaynak & SharkMix",
+                    text = if (queueItems.isNotEmpty()) "SharkMusic • Sıradakiler & SharkMix" else "SharkMusic • Kaynak & SharkMix",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface
@@ -1323,20 +1446,22 @@ private fun MusicQuickSourceSheet(
                         shape = RoundedCornerShape(10.dp),
                         color = if (chosen) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.5f)
                     ) {
-                        Text(
-                            text = when (skin) {
-                                MusicPlayerSkin.MODERN_VINYL -> "Modern"
-                                MusicPlayerSkin.CLASSIC_VINYL -> "Classic"
-                                else -> skin.displayTitle
-                            },
-                            fontSize = 11.sp,
-                            fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
-                            color = if (chosen) colorScheme.onPrimary else colorScheme.onSurface,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .padding(vertical = 8.dp, horizontal = 4.dp)
-                                .align(Alignment.CenterVertically)
-                        )
+                        Box(
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = when (skin) {
+                                    MusicPlayerSkin.MODERN_VINYL -> "Modern"
+                                    MusicPlayerSkin.CLASSIC_VINYL -> "Classic"
+                                    else -> skin.displayTitle
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
+                                color = if (chosen) colorScheme.onPrimary else colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -1351,6 +1476,68 @@ private fun MusicQuickSourceSheet(
                 color = colorScheme.onSurfaceVariant
             )
 
+            // Dynamic Tappable "Sıradakiler" Queue (shown automatically whenever active media player exposes queue)
+            if (queueItems.isNotEmpty()) {
+                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Text(
+                    text = "Sıradakiler (${queueItems.size})",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.primary
+                )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(queueItems, key = { "q_${it.queueId}_${it.title}" }) { item ->
+                        Surface(
+                            onClick = {
+                                MusicPlayerHub.skipToQueueItem(item.queueId)
+                                onDismiss()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.42f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (item.subtitle.isNotBlank()) {
+                                        Text(
+                                            text = item.subtitle,
+                                            fontSize = 10.5.sp,
+                                            color = colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = "Çal",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
 
             Row(
@@ -1360,38 +1547,46 @@ private fun MusicQuickSourceSheet(
                 Surface(
                     onClick = {
                         onDismiss()
-                        MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
+                        MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
                     },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
-                    Text(
-                        text = "Spotify Aç",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                    )
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Spotify'ı Aç",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurface
+                        )
+                    }
                 }
                 Surface(
                     onClick = {
                         onDismiss()
-                        MusicPlayerHub.connectMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
+                        MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
                     },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(10.dp),
                     color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
-                    Text(
-                        text = "YouTube Music Aç",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                    )
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "YouTube Music'i Aç",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurface
+                        )
+                    }
                 }
             }
 

@@ -67,6 +67,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -122,7 +123,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sharkmentor.ui.screens.notes.NoteFontOption
 import com.example.sharkmentor.ui.screens.notes.NoteRichTextHelper
 import com.example.sharkmentor.ui.screens.notes.drawing.DrawingScreenshotHelper.findActivity
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -570,15 +570,18 @@ fun DrawingCanvasOverlay(
                     down.consume()
                 }
 
+                val isStylusPointer = activeDown.type == PointerType.Stylus || activeDown.type == PointerType.Eraser
                 val stylusSideButtonHeld = prefStylusButtonsEnabled &&
-                    activeDown.type == PointerType.Stylus &&
-                    (currentEvent.buttons.isSecondaryPressed || currentEvent.buttons.isTertiaryPressed)
+                    isStylusPointer &&
+                    (StylusHardwareInputBridge.isStylusButtonHeld.value ||
+                        currentEvent.buttons.isSecondaryPressed ||
+                        currentEvent.buttons.isTertiaryPressed)
 
                 val effectiveTool = when {
-                    activeDown.type == PointerType.Eraser -> prefLastEraser
                     stylusSideButtonHeld && prefStylusHoldAction == StylusHoldAction.ERASER -> prefLastEraser
                     stylusSideButtonHeld && prefStylusHoldAction == StylusHoldAction.LASSO -> DrawingTool.LASSO
                     stylusSideButtonHeld && prefStylusHoldAction == StylusHoldAction.PEN -> DrawingTool.BALLPOINT_PEN
+                    activeDown.type == PointerType.Eraser -> prefLastEraser
                     else -> activeTool
                 }
 
@@ -921,115 +924,111 @@ fun DrawingCanvasOverlay(
         }
     }
 
-    val stylusDoubleTapModifier = if (
-        prefStylusButtonsEnabled &&
-        (prefStylusSingleTapAction != StylusSingleTapAction.NONE || prefStylusDoubleTapAction != StylusDoubleTapAction.NONE)
+    DisposableEffect(prefStylusButtonsEnabled) {
+        if (prefStylusButtonsEnabled) {
+            StylusHardwareInputBridge.registerActiveListener()
+        }
+        onDispose {
+            if (prefStylusButtonsEnabled) {
+                StylusHardwareInputBridge.unregisterActiveListener()
+            }
+        }
+    }
+
+    LaunchedEffect(
+        prefStylusButtonsEnabled,
+        prefStylusSingleTapAction,
+        prefStylusDoubleTapAction,
+        prefLastEraser
     ) {
-        Modifier.pointerInput(prefStylusButtonsEnabled, prefStylusSingleTapAction, prefStylusDoubleTapAction, prefLastEraser) {
-            var prevBtnPressed = false
-            var pressDownMs = 0L
-            var lastTapReleaseMs = 0L
-            var touchedWhileHeld = false
-            var pendingSingleTapJob: Job? = null
-
-            fun dispatchSingleTap() {
-                if (prefStylusSingleTapAction == StylusSingleTapAction.NONE) return
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                when (prefStylusSingleTapAction) {
-                    StylusSingleTapAction.PEN -> {
-                        controller.selectTool(DrawingTool.BALLPOINT_PEN)
-                        feedbackMessage = "Kalem seçildi"
-                    }
-                    StylusSingleTapAction.ERASER -> {
-                        controller.selectTool(prefLastEraser)
-                        feedbackMessage = "Silgi seçildi"
-                    }
-                    StylusSingleTapAction.LASSO -> {
-                        controller.selectTool(DrawingTool.LASSO)
-                        feedbackMessage = "Kement seçildi"
-                    }
-                    StylusSingleTapAction.UNDO -> {
-                        if (controller.canUndo) {
-                            controller.undo()
-                            feedbackMessage = "Geri alındı"
+        if (!prefStylusButtonsEnabled) return@LaunchedEffect
+        StylusHardwareInputBridge.clickEvents.collect { click ->
+            when (click.type) {
+                StylusHardwareClickType.SINGLE_TAP -> {
+                    if (prefStylusSingleTapAction == StylusSingleTapAction.NONE) return@collect
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    when (prefStylusSingleTapAction) {
+                        StylusSingleTapAction.PEN -> {
+                            controller.selectTool(DrawingTool.BALLPOINT_PEN)
+                            feedbackMessage = "Kalem seçildi"
                         }
-                    }
-                    StylusSingleTapAction.NONE -> Unit
-                }
-            }
-
-            fun dispatchDoubleTap() {
-                if (prefStylusDoubleTapAction == StylusDoubleTapAction.NONE) return
-                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                when (prefStylusDoubleTapAction) {
-                    StylusDoubleTapAction.LASSO -> {
-                        controller.selectTool(DrawingTool.LASSO)
-                        feedbackMessage = "Kement seçildi"
-                    }
-                    StylusDoubleTapAction.ERASER -> {
-                        val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.BALLPOINT_PEN else prefLastEraser
-                        controller.selectTool(nextTool)
-                        feedbackMessage = if (nextTool.isEraserTool) "Silgi seçildi" else "Kalem seçildi"
-                    }
-                    StylusDoubleTapAction.PEN -> {
-                        controller.selectTool(DrawingTool.BALLPOINT_PEN)
-                        feedbackMessage = "Kalem seçildi"
-                    }
-                    StylusDoubleTapAction.UNDO -> {
-                        if (controller.canUndo) {
-                            controller.undo()
-                            feedbackMessage = "Geri alındı"
+                        StylusSingleTapAction.ERASER -> {
+                            controller.selectTool(prefLastEraser)
+                            feedbackMessage = "Silgi seçildi"
                         }
-                    }
-                    StylusDoubleTapAction.NONE -> Unit
-                }
-            }
-
-            awaitPointerEventScope {
-                while (true) {
-                    val ev = awaitPointerEvent(PointerEventPass.Initial)
-                    val isStylusOrHover = ev.changes.any { it.type == PointerType.Stylus || it.type == PointerType.Eraser }
-                    val anyTouchDown = ev.changes.any { it.pressed }
-                    val btnPressed = ev.buttons.isSecondaryPressed || ev.buttons.isTertiaryPressed
-                    if (btnPressed && anyTouchDown) {
-                        touchedWhileHeld = true
-                    }
-                    if (isStylusOrHover && btnPressed && !prevBtnPressed) {
-                        pressDownMs = SystemClock.elapsedRealtime()
-                        touchedWhileHeld = anyTouchDown
-                    } else if (!btnPressed && prevBtnPressed) {
-                        val now = SystemClock.elapsedRealtime()
-                        val pressDur = now - pressDownMs
-                        if (!touchedWhileHeld && pressDur in 10L..350L) {
-                            if (now - lastTapReleaseMs in 30L..340L && prefStylusDoubleTapAction != StylusDoubleTapAction.NONE) {
-                                pendingSingleTapJob?.cancel()
-                                pendingSingleTapJob = null
-                                lastTapReleaseMs = 0L
-                                dispatchDoubleTap()
-                            } else {
-                                lastTapReleaseMs = now
-                                pendingSingleTapJob?.cancel()
-                                if (prefStylusSingleTapAction != StylusSingleTapAction.NONE) {
-                                    if (prefStylusDoubleTapAction == StylusDoubleTapAction.NONE) {
-                                        dispatchSingleTap()
-                                    } else {
-                                        pendingSingleTapJob = coroutineScope.launch {
-                                            delay(340L)
-                                            dispatchSingleTap()
-                                        }
-                                    }
-                                }
+                        StylusSingleTapAction.LASSO -> {
+                            controller.selectTool(DrawingTool.LASSO)
+                            feedbackMessage = "Kement seçildi"
+                        }
+                        StylusSingleTapAction.UNDO -> {
+                            if (controller.canUndo) {
+                                controller.undo()
+                                feedbackMessage = "Geri alındı"
                             }
                         }
-                        touchedWhileHeld = false
+                        StylusSingleTapAction.NONE -> Unit
                     }
-                    prevBtnPressed = btnPressed
+                }
+                StylusHardwareClickType.DOUBLE_TAP -> {
+                    val effectiveDouble = prefStylusDoubleTapAction
+                    if (effectiveDouble == StylusDoubleTapAction.NONE) {
+                        // Fallback to single-tap action on Honor Magic-Pencil if user disabled double-tap
+                        if (prefStylusSingleTapAction != StylusSingleTapAction.NONE) {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            when (prefStylusSingleTapAction) {
+                                StylusSingleTapAction.PEN -> {
+                                    controller.selectTool(DrawingTool.BALLPOINT_PEN)
+                                    feedbackMessage = "Kalem seçildi"
+                                }
+                                StylusSingleTapAction.ERASER -> {
+                                    val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.BALLPOINT_PEN else prefLastEraser
+                                    controller.selectTool(nextTool)
+                                    feedbackMessage = if (nextTool.isEraserTool) "Silgi seçildi" else "Kalem seçildi"
+                                }
+                                StylusSingleTapAction.LASSO -> {
+                                    controller.selectTool(DrawingTool.LASSO)
+                                    feedbackMessage = "Kement seçildi"
+                                }
+                                StylusSingleTapAction.UNDO -> {
+                                    if (controller.canUndo) {
+                                        controller.undo()
+                                        feedbackMessage = "Geri alındı"
+                                    }
+                                }
+                                StylusSingleTapAction.NONE -> Unit
+                            }
+                        }
+                        return@collect
+                    }
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    when (effectiveDouble) {
+                        StylusDoubleTapAction.LASSO -> {
+                            controller.selectTool(DrawingTool.LASSO)
+                            feedbackMessage = "Kement seçildi"
+                        }
+                        StylusDoubleTapAction.ERASER -> {
+                            val nextTool = if (controller.activeTool.isEraserTool) DrawingTool.BALLPOINT_PEN else prefLastEraser
+                            controller.selectTool(nextTool)
+                            feedbackMessage = if (nextTool.isEraserTool) "Silgi seçildi" else "Kalem seçildi"
+                        }
+                        StylusDoubleTapAction.PEN -> {
+                            controller.selectTool(DrawingTool.BALLPOINT_PEN)
+                            feedbackMessage = "Kalem seçildi"
+                        }
+                        StylusDoubleTapAction.UNDO -> {
+                            if (controller.canUndo) {
+                                controller.undo()
+                                feedbackMessage = "Geri alındı"
+                            }
+                        }
+                        StylusDoubleTapAction.NONE -> Unit
+                    }
                 }
             }
         }
-    } else {
-        Modifier
     }
+
+    val stylusDoubleTapModifier = Modifier
 
     Box(
         modifier = modifier

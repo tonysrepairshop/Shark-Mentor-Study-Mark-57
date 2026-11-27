@@ -467,7 +467,6 @@ class CampVideoPlaybackService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var notificationManager: NotificationManager
-    private var mediaSession: MediaSession? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var screenOffReceiver: BroadcastReceiver? = null
 
@@ -518,7 +517,6 @@ class CampVideoPlaybackService : Service() {
         super.onCreate()
         notificationManager = getSystemService(NotificationManager::class.java)
         createNotificationChannel()
-        initMediaSession()
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == Intent.ACTION_SCREEN_OFF) {
@@ -540,7 +538,6 @@ class CampVideoPlaybackService : Service() {
                     stopServiceCleanly()
                 } else {
                     updateWakeLock(st.isPlaying)
-                    updateMediaSessionState(st)
                     if (isForegroundStarted) {
                         notificationManager.notify(NOTIFICATION_ID, buildMediaNotification(st))
                     }
@@ -560,11 +557,6 @@ class CampVideoPlaybackService : Service() {
             startForegroundCompat(buildMediaNotification(CampVideoPlaybackController.state.value))
         }
         when (action) {
-            ACTION_STOP -> {
-                CampVideoPlaybackController.releaseSessionOnly(applicationContext)
-                stopServiceCleanly()
-                return START_NOT_STICKY
-            }
             ACTION_TOGGLE_PLAY -> {
                 CampVideoPlaybackController.togglePlayPause(applicationContext)
             }
@@ -583,66 +575,8 @@ class CampVideoPlaybackService : Service() {
         }
 
         updateWakeLock(current.isPlaying)
-        updateMediaSessionState(current)
         startForegroundCompat(buildMediaNotification(current))
         return START_NOT_STICKY
-    }
-
-    private fun initMediaSession() {
-        val session = MediaSession(this, "SharkCampVideoSession")
-        session.setCallback(object : MediaSession.Callback() {
-            override fun onPlay() {
-                CampVideoPlaybackController.setPlaying(applicationContext, true)
-            }
-
-            override fun onPause() {
-                CampVideoPlaybackController.setPlaying(applicationContext, false)
-            }
-
-            override fun onFastForward() {
-                CampVideoPlaybackController.seekBySeconds(applicationContext, 10)
-            }
-
-            override fun onRewind() {
-                CampVideoPlaybackController.seekBySeconds(applicationContext, -10)
-            }
-
-            override fun onSeekTo(pos: Long) {
-                CampVideoPlaybackController.seekToSeconds(applicationContext, (pos / 1000L).toInt())
-            }
-
-            override fun onStop() {
-                CampVideoPlaybackController.stopAndRelease(applicationContext)
-                stopServiceCleanly()
-            }
-        })
-        session.isActive = true
-        mediaSession = session
-    }
-
-    private fun updateMediaSessionState(st: CampVideoPlaybackState) {
-        val session = mediaSession ?: return
-        val metadataBuilder = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, st.title.ifBlank { "Ders Videosu" })
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, st.subtitle.ifBlank { "SharkMentor Video" })
-        if (st.durationSeconds > 0) {
-            metadataBuilder.putLong(MediaMetadata.METADATA_KEY_DURATION, st.durationSeconds * 1000L)
-        }
-        session.setMetadata(metadataBuilder.build())
-
-        val pbState = if (st.isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
-        val actions = PlaybackState.ACTION_PLAY or
-            PlaybackState.ACTION_PAUSE or
-            PlaybackState.ACTION_PLAY_PAUSE or
-            PlaybackState.ACTION_REWIND or
-            PlaybackState.ACTION_FAST_FORWARD or
-            PlaybackState.ACTION_SEEK_TO or
-            PlaybackState.ACTION_STOP
-        val playbackState = PlaybackState.Builder()
-            .setActions(actions)
-            .setState(pbState, st.positionSeconds * 1000L, if (st.isPlaying) 1.0f else 0f)
-            .build()
-        session.setPlaybackState(playbackState)
     }
 
     private fun buildMediaNotification(st: CampVideoPlaybackState): Notification {
@@ -689,17 +623,11 @@ class CampVideoPlaybackService : Service() {
             stopPending
         ).build()
 
-        val mediaStyle = Notification.MediaStyle()
-            .setShowActionsInCompactView(0, 1, 2)
-        mediaSession?.sessionToken?.let { token ->
-            mediaStyle.setMediaSession(token)
-        }
-
         val activeShark = AppIconManager.getActiveIcon(this)
         val smallIconRes = if (activeShark.notificationSmallIconRes != 0) {
             activeShark.notificationSmallIconRes
         } else {
-            R.drawable.ic_notification_original
+            R.drawable.ic_notification_shark
         }
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(smallIconRes)
@@ -710,7 +638,6 @@ class CampVideoPlaybackService : Service() {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(st.isPlaying)
             .setOnlyAlertOnce(true)
-            .setStyle(mediaStyle)
             .addAction(rewAction)
             .addAction(playPauseAction)
             .addAction(ffAction)
@@ -773,11 +700,6 @@ class CampVideoPlaybackService : Service() {
     private fun stopServiceCleanly() {
         serviceScope.cancel()
         releaseWakeLock()
-        runCatching {
-            mediaSession?.isActive = false
-            mediaSession?.release()
-            mediaSession = null
-        }
         isForegroundStarted = false
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         runCatching { notificationManager.cancel(NOTIFICATION_ID) }
@@ -803,11 +725,6 @@ class CampVideoPlaybackService : Service() {
         screenOffReceiver?.let { runCatching { unregisterReceiver(it) } }
         screenOffReceiver = null
         releaseWakeLock()
-        runCatching {
-            mediaSession?.isActive = false
-            mediaSession?.release()
-            mediaSession = null
-        }
         serviceScope.cancel()
         super.onDestroy()
     }

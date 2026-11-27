@@ -61,6 +61,23 @@ class MainActivity : ComponentActivity() {
     private var pendingPdfChoiceState by mutableStateOf<com.example.sharkmentor.core.util.ImportedPdfFile?>(null)
     private var targetRouteState by mutableStateOf<String?>(null)
 
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawMotionEvent(ev)
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent?): Boolean {
+        com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawMotionEvent(ev)
+        return super.dispatchGenericMotionEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge.onRawKeyEvent(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition { false }
