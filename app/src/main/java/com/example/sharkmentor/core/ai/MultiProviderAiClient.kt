@@ -1289,7 +1289,7 @@ object MultiProviderAiClient {
         val first = choices?.optJSONObject(0)
         val msg = first?.optJSONObject("message")
         val text = msg?.optString("content")?.trim()
-            ?.ifBlank { msg.optString("reasoning_content").trim() }
+            
             .orEmpty()
         if (text.isBlank()) throw IllegalStateException("Model boş yanıt döndürdü.")
         return text

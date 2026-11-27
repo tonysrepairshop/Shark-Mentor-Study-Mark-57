@@ -137,7 +137,7 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         private val STREAM_ACTION_TAIL_REGEX = Regex("#ACTION:.*", RegexOption.DOT_MATCHES_ALL)
         private val JSON_FENCE_COMPLETE_REGEX = Regex("```json[\\s\\S]*?```", RegexOption.IGNORE_CASE)
         private val JSON_FENCE_OPEN_REGEX = Regex("```json[\\s\\S]*", RegexOption.IGNORE_CASE)
-        private val CODE_FENCE_COMPLETE_REGEX = Regex("```[\\s\\S]*?```")
+        private val CODE_FENCE_COMPLETE_REGEX = Regex("```json\\b[\\s\\S]*?```", RegexOption.IGNORE_CASE)
         private val CODE_FENCE_OPEN_REGEX = Regex("```(?:json)?\\s*", RegexOption.IGNORE_CASE)
         private val NON_ALNUM_TR_REGEX = Regex("[^a-z0-9çğıöşü\\s]")
         private val MULTI_SPACE_REGEX = Regex("\\s+")
@@ -924,6 +924,27 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
 
             // Handle `/simulasyon <konu>` (BETA) directly via SimulationLabEngine and emit an in-app shortcut card
             if (cmd == com.example.sharkmentor.ui.aichat.SharkSlashCommand.SIMULASYON && parsedSlash.argumentText.isNotBlank()) {
+                val isBuiltInSim = !com.example.sharkmentor.core.ai.UserAiPreferences.hasCustomUserGeminiKeys(getApplication())
+                val simQuotaCheck = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.checkCanConsume(
+                    context = getApplication(),
+                    kind = com.example.sharkmentor.core.ai.QuotaUsageKind.SIMULATION,
+                    isBuiltInKey = isBuiltInSim
+                )
+                if (simQuotaCheck is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked) {
+                    val blockedMsg = AiChatMessage(sender = "ai", text = simQuotaCheck.message, personaTag = currentPersona.id)
+                    _uiState.value = _uiState.value.copy(
+                        messages = _uiState.value.messages + blockedMsg,
+                        isLoading = false
+                    )
+                    persistCurrentChatState()
+                    return
+                }
+                com.example.sharkmentor.core.ai.SharkTokenQuotaManager.recordUsage(
+                    context = getApplication(),
+                    tokens = 0L,
+                    kind = com.example.sharkmentor.core.ai.QuotaUsageKind.SIMULATION,
+                    isBuiltInKey = isBuiltInSim
+                )
                 val topicArg = parsedSlash.argumentText.trim()
                 val userMsg = AiChatMessage(
                     sender = "user",
@@ -1138,6 +1159,30 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
         val originatingSessionId = _activeChatSessionId.value
 
         activeAiJob?.cancel()
+        val isBuiltInSolver = !com.example.sharkmentor.core.ai.UserAiPreferences.hasCustomUserGeminiKeys(getApplication())
+        val isVisualQuestionReq = attachmentUri != null && (resolvedEngine == SharkAiEngine.SOLVER_ENGINE || isDetailedVisualSolve)
+        val preQuotaCheck = com.example.sharkmentor.core.ai.SharkTokenQuotaManager.checkCanConsume(
+            context = getApplication(),
+            kind = if (isVisualQuestionReq) com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION else com.example.sharkmentor.core.ai.QuotaUsageKind.CHAT,
+            isBuiltInKey = isBuiltInSolver
+        )
+        if (preQuotaCheck is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked) {
+            val blockedMsg = AiChatMessage(sender = "ai", text = preQuotaCheck.message, personaTag = currentPersona.id)
+            _uiState.value = _uiState.value.copy(
+                messages = _uiState.value.messages + blockedMsg,
+                isLoading = false
+            )
+            persistCurrentChatState()
+            return
+        }
+        if (isVisualQuestionReq) {
+            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.recordUsage(
+                context = getApplication(),
+                tokens = 0L,
+                kind = com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION,
+                isBuiltInKey = isBuiltInSolver
+            )
+        }
         activeAiJob = SharkStudioBackgroundHelper.backgroundScope.launch {
             try {
                 val appCtx = getApplication<Application>()
@@ -1436,8 +1481,8 @@ open class SharkAiViewModel(application: Application) : AndroidViewModel(applica
                 // - Text-only honors UserAiPreferences.selectedAiProvider across all 6 providers and AUTO.
                 val solverFormatDirective = if (isDetailedVisualSolve) {
                     "\n\n[SHARKAI DETAYLI GÖRSEL ÇÖZÜM MODU - BETA]\n" +
-                    "1. Önce sorunun geometri şeklini (üçgen, çember, açı, yükseklik, uzunluk etiketleri) veya fonksiyon/matematik grafiğini (eksenler, kökler, tepe noktası, eğri) net, temiz ve yüksek kontrastlı bir ```svg ... ``` bloğu (viewBox=\"0 0 360 220\") içinde çiz. Etiketlerde sadece temiz Unicode semboller (π, Δ, θ, √, °, x², x³) kullan.\n" +
-                    "2. Hemen ardından şekil üzerindeki harflere ve noktalara atıf yaparak Adım 1:, Adım 2:, Adım 3: şeklinde anlaşılır çözümü yaz ve son satırda **Sonuç:** ile net cevabı ver."
+                    "1. Eğer soru geometri şekli (üçgen, çember, çokgen, açı/uzunluk), fonksiyon/analitik grafiği, fizik vektör/devre diyagramı veya küme şeması içeriyorsa ÖNCE net, yüksek kontrastlı bir ```svg ... ``` bloğu (viewBox=\"0 0 360 220\") çiz ve etiketlerde temiz Unicode semboller (π, Δ, θ, √, °, x², x³) kullan. Saf cebir/sayma sorularında zorlama şekil çizme.\n" +
+                    "2. Ardından (varsa çizdiğin şekil üzerindeki noktalara atıf yaparak) Adım 1:, Adım 2:, Adım 3: şeklinde eksiksiz ve sade çözümü yaz, son satırda **Sonuç:** ile net cevabı ver. Asla 'Bekle!' veya 'Durun!' gibi sesli düşünme metni yazma."
                 } else {
                     "\n\n[SHARKAI MATEMATİK & ANLAŞILABİLİRLİK FORMATI]\n" +
                     "Çözümü mutlaka Adım 1:, Adım 2: şeklinde numaralandır, formülleri ve sembolleri (π, Δ, √, ², ³, °) temiz yaz ve son satırda **Sonuç:** ile net cevabı vurgula."

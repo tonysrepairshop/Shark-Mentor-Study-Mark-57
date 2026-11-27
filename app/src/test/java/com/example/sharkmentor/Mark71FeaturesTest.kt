@@ -256,4 +256,43 @@ class Mark71FeaturesTest {
         assertTrue(svg.contains("π"))
         assertEquals("Adım 1: Çözüm", cleanText)
     }
+
+    @Test
+    fun sharkTokenQuotaManagerEnforcesBuiltInLimitsCleanly() {
+        val freeTier = com.example.sharkmentor.core.ai.SharkSubscriptionTier.FREE
+        assertEquals(80_000L, freeTier.fiveHourTokenLimit)
+        assertEquals(450_000L, freeTier.weeklyTokenLimit)
+        assertEquals(2, freeTier.hourlyVisualQuestionLimit)
+        assertEquals(2, freeTier.hourlySimulationLimit)
+
+        val underLimit = com.example.sharkmentor.core.ai.SharkQuotaSnapshot(
+            used5hTokens = 40_000L,
+            usedWeeklyTokens = 100_000L,
+            usedHourlyVisual = 1,
+            usedHourlySimulation = 1
+        )
+        assertEquals(
+            com.example.sharkmentor.core.ai.QuotaCheckResult.Allowed,
+            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.evaluateCheck(
+                underLimit,
+                com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION
+            )
+        )
+
+        val visualFull = underLimit.copy(usedHourlyVisual = 2, resetVisualInMs = 18 * 60_000L)
+        assertTrue(
+            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.evaluateCheck(
+                visualFull,
+                com.example.sharkmentor.core.ai.QuotaUsageKind.VISUAL_QUESTION
+            ) is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked
+        )
+
+        val fiveHourFull = underLimit.copy(used5hTokens = 80_000L, reset5hInMs = 90 * 60_000L)
+        assertTrue(
+            com.example.sharkmentor.core.ai.SharkTokenQuotaManager.evaluateCheck(
+                fiveHourFull,
+                com.example.sharkmentor.core.ai.QuotaUsageKind.CHAT
+            ) is com.example.sharkmentor.core.ai.QuotaCheckResult.Blocked
+        )
+    }
 }

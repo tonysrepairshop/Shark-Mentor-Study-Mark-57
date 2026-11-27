@@ -179,7 +179,8 @@ data class GeminiResponse(
     val finishReason: String? = null,
     val modelName: String = "",
     val endpoint: GeminiEndpointType? = null,
-    val usedEndpointFallback: Boolean = false
+    val usedEndpointFallback: Boolean = false,
+    val totalTokensUsed: Int = 0
 )
 
 data class GeminiModelInfo(
@@ -648,7 +649,8 @@ object GeminiRestClient {
                 text = "",
                 modelName = modelName,
                 endpoint = endpoint,
-                usedEndpointFallback = usedEndpointFallback
+                usedEndpointFallback = usedEndpointFallback,
+                totalTokensUsed = maxTokensUsed
             )
         }
 
@@ -767,6 +769,11 @@ object GeminiRestClient {
             }
         }
 
+        val usageObj = root.getAsJsonObjectOrNull("usageMetadata")
+        val totalTok = usageObj?.get("totalTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt
+            ?: ((usageObj?.get("promptTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0) +
+                (usageObj?.get("candidatesTokenCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0))
+
         return GeminiResponse(
             text = textBuilder.toString(),
             thinkingText = thinkingBuilder.toString(),
@@ -775,7 +782,8 @@ object GeminiRestClient {
             finishReason = finishReason,
             modelName = modelName,
             endpoint = endpoint,
-            usedEndpointFallback = usedEndpointFallback
+            usedEndpointFallback = usedEndpointFallback,
+            totalTokensUsed = totalTok
         )
     }
 
@@ -796,6 +804,7 @@ object GeminiRestClient {
         private val collectedCalls = mutableListOf<GeminiFunctionCall>()
         private val collectedParts = mutableListOf<GeminiPart>()
         private var lastFinishReason: String? = null
+        private var maxTokensUsed: Int = 0
         private var doneReached = false
 
         fun processLine(rawLine: String): Boolean {
@@ -874,6 +883,7 @@ object GeminiRestClient {
                 accumulatedText.append(chunk.text)
                 onPartialText(accumulatedText.toString())
             }
+            if (chunk.totalTokensUsed > maxTokensUsed) maxTokensUsed = chunk.totalTokensUsed
             if (chunk.functionCalls.isNotEmpty()) {
                 collectedCalls.addAll(chunk.functionCalls)
             }

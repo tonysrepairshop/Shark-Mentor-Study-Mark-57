@@ -78,6 +78,7 @@ import com.example.sharkmentor.core.ai.AiProviderConnectionResult
 import com.example.sharkmentor.core.ai.ApiKeyRotator
 import com.example.sharkmentor.core.ai.GeminiModelOption
 import com.example.sharkmentor.core.ai.GeminiRestClient
+import com.example.sharkmentor.ui.components.SharkQuotaUsageCard
 import com.example.sharkmentor.core.ai.MultiProviderAiClient
 import com.example.sharkmentor.core.ai.UserAiPreferences
 import kotlinx.coroutines.delay
@@ -269,6 +270,8 @@ fun AiSettingsScreen(
                     claudeInput.isNotBlank() ||
                     openAiInput.isNotBlank() ||
                     grokInput.isNotBlank()
+
+                SharkQuotaUsageCard(hasCustomApiKey = hasAnyCustomKeyInput)
 
                 // Compact Unified Active Status & Transparent Policy Banner
                 Surface(

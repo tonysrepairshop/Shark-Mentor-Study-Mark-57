@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -59,6 +60,9 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +82,31 @@ fun GoalsScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val folders = uiState.groupedTopics
     val resources = uiState.resources
+    var librarySearchQuery by remember { mutableStateOf("") }
+    var libraryStatusFilter by remember { mutableStateOf("Tümü") } // Tümü, Devam Eden, Tamamlanan
+    var librarySortMode by remember { mutableStateOf("Varsayılan") } // Varsayılan, İlerleme %, İsim A-Z
+    val filteredResources = remember(resources, librarySearchQuery, libraryStatusFilter, librarySortMode) {
+        val q = librarySearchQuery.trim()
+        val base = resources.filter { r ->
+            val matchesQuery = q.isEmpty() ||
+                r.title.contains(q, ignoreCase = true) ||
+                r.subject.contains(q, ignoreCase = true)
+            val isCompleted = r.totalUnits > 0 && r.completedUnits >= r.totalUnits
+            val matchesStatus = when (libraryStatusFilter) {
+                "Devam Eden" -> !isCompleted
+                "Tamamlanan" -> isCompleted
+                else -> true
+            }
+            matchesQuery && matchesStatus
+        }
+        when (librarySortMode) {
+            "İlerleme %" -> base.sortedByDescending { r ->
+                if (r.totalUnits > 0) r.completedUnits.toFloat() / r.totalUnits.toFloat() else 0f
+            }
+            "İsim A-Z" -> base.sortedBy { it.title.lowercase() }
+            else -> base
+        }
+    }
     val context = LocalContext.current
     val isScanning = uiState.isScanning
     val scanError = uiState.scanError
@@ -373,8 +402,96 @@ fun GoalsScreen(
                     }
                 }
             }
+            if (resources.isNotEmpty()) {
+                item(key = "library_search_filter_sort_bar") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = librarySearchQuery,
+                            onValueChange = { librarySearchQuery = it },
+                            placeholder = { Text("Kitap veya ders ara...", fontSize = 13.sp) },
+                            leadingIcon = {
+                                Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                            },
+                            trailingIcon = {
+                                if (librarySearchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { librarySearchQuery = "" }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Temizle", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                listOf("Tümü", "Devam Eden", "Tamamlanan").forEach { statusOpt ->
+                                    val selected = libraryStatusFilter == statusOpt
+                                    Surface(
+                                        onClick = { libraryStatusFilter = statusOpt },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerLow,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                        )
+                                    ) {
+                                        Text(
+                                            text = statusOpt,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            Surface(
+                                onClick = {
+                                    librarySortMode = when (librarySortMode) {
+                                        "Varsayılan" -> "İlerleme %"
+                                        "İlerleme %" -> "İsim A-Z"
+                                        else -> "Varsayılan"
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SwapVert,
+                                        contentDescription = "Sırala",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = librarySortMode,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(
-                items = resources,
+                items = filteredResources,
                 key = { "resource_${it.id}" },
                 contentType = { "resource_card" }
             ) { res ->

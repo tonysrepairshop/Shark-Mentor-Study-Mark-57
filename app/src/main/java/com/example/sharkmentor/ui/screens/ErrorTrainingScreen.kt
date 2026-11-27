@@ -70,6 +70,7 @@ import coil.request.ImageRequest
 import com.example.sharkmentor.core.fsrs.FsrsRating
 import com.example.sharkmentor.ui.theme.ScoreGreen
 import com.example.sharkmentor.ui.theme.ScoreRed
+import com.example.sharkmentor.ui.errorbank.components.ErrorTrainingFloatingAiOverlay
 import com.example.sharkmentor.ui.viewmodel.ErrorBankViewModel
 import com.example.sharkmentor.ui.viewmodel.TrainingUiState
 import com.example.sharkmentor.ui.viewmodel.QuestionInteractionState
@@ -202,15 +203,25 @@ fun ErrorTrainingScreen(
                 }
                 is TrainingUiState.Active -> {
                     val interactionState = interactionStates[state.currentQuestion.id] ?: QuestionInteractionState()
-                    TrainingCardContent(
-                        state = state,
-                        isAnswerRevealed = isAnswerRevealed,
-                        interactionState = interactionState,
-                        isTwinGenerating = isTwinGenerating,
-                        selectedOptionIndex = selectedOptionIndex,
-                        isOptionChecked = isOptionChecked,
-                        viewModel = viewModel
-                    )
+                    var forcedWrongBySolution by remember(state.currentQuestion.id) { mutableStateOf(false) }
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        TrainingCardContent(
+                            state = state,
+                            isAnswerRevealed = isAnswerRevealed,
+                            interactionState = interactionState,
+                            isTwinGenerating = isTwinGenerating,
+                            selectedOptionIndex = selectedOptionIndex,
+                            isOptionChecked = isOptionChecked,
+                            forcedWrongBySolution = forcedWrongBySolution,
+                            viewModel = viewModel
+                        )
+                        ErrorTrainingFloatingAiOverlay(
+                            question = state.currentQuestion,
+                            isMarkedWrongBySolution = forcedWrongBySolution,
+                            onMarkedWrongBySolution = { forcedWrongBySolution = true },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
         }
@@ -225,6 +236,7 @@ fun TrainingCardContent(
     isTwinGenerating: Boolean,
     selectedOptionIndex: Int?,
     isOptionChecked: Boolean,
+    forcedWrongBySolution: Boolean = false,
     viewModel: ErrorBankViewModel
 ) {
     val currentQuestion = state.currentQuestion
@@ -419,7 +431,7 @@ fun TrainingCardContent(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    if (isCorrect) {
+                    if (isCorrect && !forcedWrongBySolution) {
                         RatingButton("İyi", MaterialTheme.colorScheme.primary) {
                             viewModel.onRatingSelected(FsrsRating.GOOD)
                         }
@@ -448,17 +460,23 @@ fun TrainingCardContent(
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
-                    RatingButton("Tekrar", ScoreRed) {
-                        viewModel.onRatingSelected(FsrsRating.AGAIN)
-                    }
-                    RatingButton("Zor", androidx.compose.ui.graphics.Color(0xFFFFA000)) {
-                        viewModel.onRatingSelected(FsrsRating.HARD)
-                    }
-                    RatingButton("İyi", MaterialTheme.colorScheme.primary) {
-                        viewModel.onRatingSelected(FsrsRating.GOOD)
-                    }
-                    RatingButton("Kolay", ScoreGreen) {
-                        viewModel.onRatingSelected(FsrsRating.EASY)
+                    if (forcedWrongBySolution) {
+                        RatingButton("Yanlış (Tekrar)", ScoreRed) {
+                            viewModel.onRatingSelected(FsrsRating.AGAIN)
+                        }
+                    } else {
+                        RatingButton("Tekrar", ScoreRed) {
+                            viewModel.onRatingSelected(FsrsRating.AGAIN)
+                        }
+                        RatingButton("Zor", androidx.compose.ui.graphics.Color(0xFFFFA000)) {
+                            viewModel.onRatingSelected(FsrsRating.HARD)
+                        }
+                        RatingButton("İyi", MaterialTheme.colorScheme.primary) {
+                            viewModel.onRatingSelected(FsrsRating.GOOD)
+                        }
+                        RatingButton("Kolay", ScoreGreen) {
+                            viewModel.onRatingSelected(FsrsRating.EASY)
+                        }
                     }
                 }
             }
@@ -568,67 +586,5 @@ fun QuestionAssistBar(
             }
         }
 
-        // Action Buttons Row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Socratic Hint / AI Solver Morphing Button
-            AnimatedContent(
-                targetState = interactionState.hasUsedSocraticHint,
-                label = "hint_to_ai_button_transition",
-                modifier = Modifier.weight(1f)
-            ) { hasUsedSocratic ->
-                if (!hasUsedSocratic) {
-                    OutlinedButton(
-                        onClick = onSocraticHintClick,
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (interactionState.isHintLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Lightbulb, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("İpucu", maxLines = 1)
-                        }
-                    }
-                } else {
-                    Button(
-                        onClick = onAiSolutionClick,
-                        enabled = !interactionState.isAiLoading,
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary,
-                            contentColor = MaterialTheme.colorScheme.onTertiary
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (interactionState.isAiLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), color = MaterialTheme.colorScheme.onTertiary, strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (interactionState.cachedAiSolution != null) "Çözümü İncele" else "Soru Çözümü", maxLines = 1)
-                        }
-                    }
-                }
-            }
-
-            // Twin Question Button — always enabled, independent of AI Solver
-            OutlinedButton(
-                onClick = onGenerateTwinQuestion,
-                enabled = true,
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Default.ControlPointDuplicate, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Benzer Soru",
-                    maxLines = 1
-                )
-            }
-        }
     }
 }

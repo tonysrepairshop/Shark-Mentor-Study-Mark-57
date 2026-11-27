@@ -320,6 +320,9 @@ ANLAŞILIRLIK VE MATEMATİKSEL YAZIM KURALLARI (ÇOK ÖNEMLİ):
    **DOĞRU CEVAP & SONUÇ:**
    • **Doğru Seçenek: [Şık ve Değer]** (Örn: **Doğru Cevap: C (24)**)
    • 1 cümlelik pratik kontrol veya kilit ipucu.
+3. KESİN DOĞRULUK, İÇ SES YASAĞI VE ŞIK KONTROLÜ:
+   - ASLA "Bekle!", "Durun!", "Acaba...", "Hayır, tekrar bakalım..." gibi kendi kendine sesli düşünme veya kararsızlık cümleleri yazma. Tüm kontrolünü içinden bitirip yalnızca temiz, kesin ve eksiksiz çözümü yaz.
+   - Bulduğun matematiksel sonuç şıklarda yoksa kısır döngüye girme; görseldeki olası bir ek koşulu (bire bir, örten, sabit değil, pozitif tam sayı vb.) tek seferde kontrol et; hâlâ uyuşmuyorsa doğru matematiksel sonucu ve şıklardaki olası baskı/koşul farkını 1-2 cümlede netçe belirt.
 $MANDATORY_PERSONA_RULES
 """
 
@@ -672,7 +675,7 @@ $MANDATORY_PERSONA_RULES
                 return@withContext Result.failure(IllegalStateException("Eklenen dosya veya görsel okunamadı."))
             }
 
-            val maxTokens = 6144
+            val maxTokens = 12288
             val prefs = UserAiPreferences.getOrNull(context)
             val selectedProvider = prefs?.getSelectedProvider() ?: AiProviderChoice.AUTO
             val cleanVisionPrompt = prompt.trim().ifBlank { "Eklenen görseli veya belgeyi incele." }
@@ -744,7 +747,7 @@ $MANDATORY_PERSONA_RULES
                 temperature = 0.1f,
                 maxOutputTokens = maxTokens,
                 topP = 0.8f,
-                timeoutMs = 75_000L,
+                timeoutMs = 90_000L,
                 onPartialText = { partial ->
                     lastEmitted = partial
                     onPartialText(partial)

@@ -143,6 +143,11 @@ import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.PulsingDotsIndicator
 import com.example.sharkmentor.ui.components.RichChatText
 import com.example.sharkmentor.ui.components.RichSolutionContent
+import com.example.sharkmentor.ui.components.SharkQuotaLimitsDialog
+import com.canhub.cropper.CropImageView
+import com.canhub.cropper.CropImageOptions
+import com.canhub.cropper.CropImageContractOptions
+import com.canhub.cropper.CropImageContract
 import com.example.sharkmentor.ui.components.extractSvgDiagramAndCleanText
 import com.example.sharkmentor.ui.components.DetailedVisualDiagramCard
 import androidx.compose.ui.text.input.TextFieldValue
@@ -180,6 +185,7 @@ fun SharkAiScreen(
     val hasAnyCustomApiKey by viewModel.hasAnyCustomApiKey.collectAsStateWithLifecycle()
     val customProviderGroups by viewModel.customProviderGroups.collectAsStateWithLifecycle()
     val activeModelDisplay by viewModel.activeModelDisplay.collectAsStateWithLifecycle()
+    var showQuotaLimitsDialog by remember { mutableStateOf(false) }
     val isDiscoveringInlineModels by viewModel.isDiscoveringInlineModels.collectAsStateWithLifecycle()
     val pendingHandoff by SharkAiHandoffManager.pendingHandoff.collectAsStateWithLifecycle()
     val pendingDossierAction by viewModel.pendingDossierAction.collectAsStateWithLifecycle()
@@ -233,11 +239,38 @@ fun SharkAiScreen(
         )
     }
 
+    val cropLauncher = rememberLauncherForActivityResult(
+        contract = CropImageContract()
+    ) { result ->
+        if (result.isSuccessful && result.uriContent != null) {
+            viewModel.onAttachmentSelected(result.uriContent!!)
+        }
+    }
+
+    fun launchCropperForUri(uri: Uri) {
+        val options = CropImageContractOptions(
+            uri = uri,
+            cropImageOptions = CropImageOptions().apply {
+                imageSourceIncludeGallery = false
+                imageSourceIncludeCamera = false
+                guidelines = CropImageView.Guidelines.ON
+                cropShape = CropImageView.CropShape.RECTANGLE
+                allowRotation = true
+                allowFlipping = true
+                autoZoomEnabled = true
+                activityTitle = "Fotoğrafı Düzenle"
+                cropMenuCropButtonTitle = "Tamam"
+            }
+        )
+        runCatching { cropLauncher.launch(options) }
+            .onFailure { viewModel.onAttachmentSelected(uri) }
+    }
+
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicture()
     ) { success ->
         if (success && tempCameraUri != null) {
-            viewModel.onAttachmentSelected(tempCameraUri!!)
+            launchCropperForUri(tempCameraUri!!)
         }
     }
 
@@ -257,7 +290,7 @@ fun SharkAiScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri: Uri? ->
         if (uri != null) {
-            viewModel.onAttachmentSelected(uri)
+            launchCropperForUri(uri)
         }
     }
 
@@ -1516,6 +1549,32 @@ fun SharkAiScreen(
                                         )
                                     }
                                 }
+                            } else {
+                                Surface(
+                                    onClick = { showQuotaLimitsDialog = true },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                                    border = BorderStroke(
+                                        0.75.dp,
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+                                    ),
+                                    modifier = Modifier.padding(start = 4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Sabit Model • Kullanım Sınırları",
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -1567,6 +1626,13 @@ fun SharkAiScreen(
         }
 
         // OpenCode / Antigravity Brand-Grouped Custom Model Switcher Sheet (ONLY for user-added API keys!)
+        if (showQuotaLimitsDialog) {
+            SharkQuotaLimitsDialog(
+                hasCustomApiKey = hasAnyCustomApiKey,
+                onDismiss = { showQuotaLimitsDialog = false }
+            )
+        }
+
         if (showCustomModelSheet && hasAnyCustomApiKey) {
             val (currentActiveProv, currentActiveModelId) = remember(activeModelDisplay, customProviderGroups) {
                 UserAiPreferences.getActiveProviderAndModel()

@@ -564,6 +564,16 @@ object GeminiAiFactory {
             UserAiPreferences.initialize(context)
         }
         val hasCustomUserKeys = !forceBuiltInOnly && UserAiPreferences.hasCustomUserGeminiKeys(context)
+        if (!hasCustomUserKeys && context != null) {
+            val quotaCheck = SharkTokenQuotaManager.checkCanConsume(
+                context = context,
+                kind = QuotaUsageKind.CHAT,
+                isBuiltInKey = true
+            )
+            if (quotaCheck is QuotaCheckResult.Blocked) {
+                return Result.failure(IllegalStateException(quotaCheck.message))
+            }
+        }
         val keys = if (forceBuiltInOnly) {
             resolveBuiltInOnlyKeys()
         } else {
