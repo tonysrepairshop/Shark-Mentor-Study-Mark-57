@@ -1,6 +1,7 @@
 package com.example.sharkmentor.ui.components
 
 import android.graphics.Bitmap
+import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -13,6 +14,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -35,6 +38,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +49,7 @@ import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
@@ -68,6 +73,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -101,6 +107,7 @@ import com.example.sharkmentor.core.audio.MusicPlayerHub
 import com.example.sharkmentor.core.audio.MusicPlayerSkin
 import com.example.sharkmentor.core.audio.MusicQueueItem
 import com.example.sharkmentor.core.audio.MusicSourceKind
+import com.example.sharkmentor.core.audio.PlatterScrubMath
 import com.example.sharkmentor.core.audio.SHARK_MIX_PRESETS
 import com.example.sharkmentor.core.audio.SharkMixPreset
 import com.example.sharkmentor.core.audio.ZenAudioManager
@@ -111,7 +118,9 @@ import com.example.sharkmentor.core.audio.formatMusicDurationLabel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -160,10 +169,18 @@ fun ThemedMusicPlayerPage(
         }
     }
 
-    // Zero-recomposition GPU rotation state: updated per VSync ONLY while playing
+    // Zero-recomposition GPU rotation state: updated per VSync ONLY while playing and not hand-scrubbing
     var spinDegrees by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(playbackState.isPlaying) {
-        if (!playbackState.isPlaying) return@LaunchedEffect
+    var isScrubbingPlatter by remember { mutableStateOf(false) }
+    var scrubAnchorMs by remember { mutableLongStateOf(0L) }
+    var scrubPreviewMs by remember { mutableStateOf<Long?>(null) }
+    var scrubBadgeText by remember { mutableStateOf<String?>(null) }
+    var lastScrubHapticBucket by remember { mutableLongStateOf(0L) }
+    var lastLiveSeekElapsedMs by remember { mutableLongStateOf(0L) }
+    var lastLiveSeekTargetMs by remember { mutableLongStateOf(-1L) }
+
+    LaunchedEffect(playbackState.isPlaying, isScrubbingPlatter) {
+        if (!playbackState.isPlaying || isScrubbingPlatter) return@LaunchedEffect
         var lastNanos = withFrameNanos { it }
         while (isActive) {
             val nowNanos = withFrameNanos { it }
@@ -193,8 +210,62 @@ fun ThemedMusicPlayerPage(
         }
     }
 
+    val handlePlatterScrubStart = {
+        isScrubbingPlatter = true
+        val canSeek = playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA && playbackState.durationMs > 0L
+        val anchor = if (canSeek) {
+            livePositionMs.coerceIn(0L, playbackState.durationMs)
+        } else {
+            0L
+        }
+        scrubAnchorMs = anchor
+        lastScrubHapticBucket = anchor / 3000L
+        lastLiveSeekElapsedMs = SystemClock.elapsedRealtime()
+        lastLiveSeekTargetMs = anchor
+        scrubPreviewMs = if (canSeek) anchor else null
+        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    val handlePlatterScrubDelta: (Float, Float) -> Unit = { stepDeg, accumulatedDeg ->
+        spinDegrees = ((spinDegrees + stepDeg) % 360f + 360f) % 360f
+        if (playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA && playbackState.durationMs > 0L) {
+            val targetMs = PlatterScrubMath.computeScrubTargetMs(
+                anchorPositionMs = scrubAnchorMs,
+                durationMs = playbackState.durationMs,
+                accumulatedDeltaDeg = accumulatedDeg
+            )
+            scrubPreviewMs = targetMs
+            scrubBadgeText = PlatterScrubMath.formatScrubBadgeText(
+                deltaMs = targetMs - scrubAnchorMs,
+                targetMs = targetMs
+            )
+            val hapticBucket = targetMs / 3000L
+            if (hapticBucket != lastScrubHapticBucket) {
+                lastScrubHapticBucket = hapticBucket
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+            val nowElapsed = SystemClock.elapsedRealtime()
+            if (nowElapsed - lastLiveSeekElapsedMs >= 450L && abs(targetMs - lastLiveSeekTargetMs) >= 1500L) {
+                lastLiveSeekElapsedMs = nowElapsed
+                lastLiveSeekTargetMs = targetMs
+                MusicPlayerHub.seekToMs(targetMs)
+            }
+        }
+    }
+
+    val handlePlatterScrubEnd = {
+        val finalTargetMs = scrubPreviewMs
+        isScrubbingPlatter = false
+        if (finalTargetMs != null && playbackState.sourceKind == MusicSourceKind.EXTERNAL_MEDIA && playbackState.durationMs > 0L) {
+            livePositionMs = finalTargetMs
+            MusicPlayerHub.seekToMs(finalTargetMs)
+        }
+        scrubPreviewMs = null
+        scrubBadgeText = null
+    }
+
     val tonearmSwingDeg by animateFloatAsState(
-        targetValue = if (playbackState.isPlaying) 0f else -14f,
+        targetValue = if (playbackState.isPlaying || isScrubbingPlatter) 0f else -14f,
         animationSpec = tween(durationMillis = 450),
         label = "tonearm_swing"
     )
@@ -246,6 +317,7 @@ fun ThemedMusicPlayerPage(
     if (showSoundQueueSheet) {
         MusicQuickSourceSheet(
             selectedSkin = selectedSkin,
+            sourceKind = playbackState.sourceKind,
             queueItems = playbackState.queueItems,
             onSelectSkin = onSelectSkin,
             onDismiss = { showSoundQueueSheet = false }
@@ -318,8 +390,12 @@ fun ThemedMusicPlayerPage(
                                 spinDegreesProvider = { spinDegrees },
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = true,
+                                isScrubbing = isScrubbingPlatter,
                                 syncPalette = syncPalette,
                                 onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
+                                onScrubStart = handlePlatterScrubStart,
+                                onScrubDelta = handlePlatterScrubDelta,
+                                onScrubEnd = handlePlatterScrubEnd,
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CLASSIC_VINYL -> VinylTurntableStage(
@@ -327,14 +403,19 @@ fun ThemedMusicPlayerPage(
                                 spinDegreesProvider = { spinDegrees },
                                 tonearmSwingDeg = tonearmSwingDeg,
                                 isModernBlue = false,
+                                isScrubbing = isScrubbingPlatter,
                                 syncPalette = syncPalette,
                                 onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
+                                onScrubStart = handlePlatterScrubStart,
+                                onScrubDelta = handlePlatterScrubDelta,
+                                onScrubEnd = handlePlatterScrubEnd,
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CD -> WallCdPlayerStage(
                                 artwork = playbackState.artwork,
                                 spinDegreesProvider = { spinDegrees },
                                 isPlaying = playbackState.isPlaying,
+                                isScrubbing = isScrubbingPlatter,
                                 volumeFraction = deviceVolumeFraction,
                                 syncPalette = syncPalette,
                                 onTogglePlay = { MusicPlayerHub.togglePlayPause(context) },
@@ -343,6 +424,9 @@ fun ThemedMusicPlayerPage(
                                     deviceVolumeFraction = clamped
                                     MusicPlayerHub.setDeviceVolumeFraction(context, clamped)
                                 },
+                                onScrubStart = handlePlatterScrubStart,
+                                onScrubDelta = handlePlatterScrubDelta,
+                                onScrubEnd = handlePlatterScrubEnd,
                                 modifier = stageModifier
                             )
                             MusicPlayerSkin.CASSETTE -> CassetteDeckStage(
@@ -354,22 +438,23 @@ fun ThemedMusicPlayerPage(
                             )
                         }
 
+                        val hudBadgeText = scrubBadgeText ?: syncBadgeText
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = syncBadgeText != null,
-                            enter = fadeIn(tween(180)),
-                            exit = fadeOut(tween(260)),
+                            visible = hudBadgeText != null,
+                            enter = fadeIn(tween(150)),
+                            exit = fadeOut(tween(220)),
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
                                 .padding(top = 4.dp)
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(50),
-                                color = Color.Black.copy(alpha = 0.68f),
-                                border = BorderStroke(1.dp, (syncPalette?.accent ?: Color.White).copy(alpha = 0.55f))
+                                color = Color.Black.copy(alpha = 0.72f),
+                                border = BorderStroke(1.dp, (syncPalette?.accent ?: Color.White).copy(alpha = 0.6f))
                             ) {
                                 Text(
-                                    text = syncBadgeText.orEmpty(),
-                                    fontSize = 10.sp,
+                                    text = hudBadgeText.orEmpty(),
+                                    fontSize = 10.5.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color.White,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -430,9 +515,10 @@ fun ThemedMusicPlayerPage(
                             }
                         }
 
-                        // Minimalist Progress Bar + Timestamps
+                        // Minimalist Progress Bar + Timestamps (live-synced with platter hand-scrubbing!)
+                        val displayedPositionMs = scrubPreviewMs ?: livePositionMs
                         val progressFraction = if (playbackState.durationMs > 0L) {
-                            (livePositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
+                            (displayedPositionMs.toFloat() / playbackState.durationMs.toFloat()).coerceIn(0f, 1f)
                         } else {
                             if (playbackState.isPlaying) 1f else 0f
                         }
@@ -472,7 +558,7 @@ fun ThemedMusicPlayerPage(
                                     )
                                     drawCircle(
                                         color = activeTrackColor,
-                                        radius = 4.2.dp.toPx(),
+                                        radius = (if (isScrubbingPlatter) 5.2f else 4.2f).dp.toPx(),
                                         center = Offset(
                                             activeEndX.coerceIn(4.2.dp.toPx(), (size.width - 4.2.dp.toPx()).coerceAtLeast(4.2.dp.toPx())),
                                             centerY
@@ -486,9 +572,9 @@ fun ThemedMusicPlayerPage(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(livePositionMs) else if (playbackState.hasActiveSession) "CANLI" else "00:00",
+                                    text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(displayedPositionMs) else if (playbackState.hasActiveSession) "CANLI" else "00:00",
                                     fontSize = 10.sp,
-                                    color = onCardColor.copy(alpha = 0.65f)
+                                    color = onCardColor.copy(alpha = if (isScrubbingPlatter) 0.95f else 0.65f)
                                 )
                                 Text(
                                     text = if (playbackState.durationMs > 0L) formatMusicDurationLabel(playbackState.durationMs) else playbackState.sourceLabel.ifBlank { "SharkMusic" },
@@ -591,7 +677,7 @@ fun ThemedMusicPlayerPage(
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                                    contentDescription = "Kaynak & SharkMix",
+                                    contentDescription = "Shark Music & Shark Mix",
                                     tint = onCardColor.copy(alpha = 0.85f),
                                     modifier = Modifier.size(sideIconSize)
                                 )
@@ -650,13 +736,90 @@ private fun DefaultAlbumStage(
 }
 
 @Composable
+private fun rememberPlatterGestureModifier(
+    onTap: () -> Unit,
+    onScrubStart: () -> Unit,
+    onScrubDelta: (stepDeg: Float, accumulatedDeg: Float) -> Unit,
+    onScrubEnd: () -> Unit
+): Modifier {
+    val latestOnTap by rememberUpdatedState(onTap)
+    val latestOnScrubStart by rememberUpdatedState(onScrubStart)
+    val latestOnScrubDelta by rememberUpdatedState(onScrubDelta)
+    val latestOnScrubEnd by rememberUpdatedState(onScrubEnd)
+
+    return Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = true)
+            val downPos = down.position
+            var prevPos = downPos
+            var dragStarted = false
+            var accumulatedDeg = 0f
+            val touchSlop = viewConfiguration.touchSlop
+            val centerX = size.width / 2f
+            val centerY = size.height / 2f
+            val minRadiusPx = (minOf(size.width, size.height) * 0.10f).coerceAtLeast(16f)
+
+            try {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (!change.pressed) {
+                        if (dragStarted) {
+                            change.consume()
+                        }
+                        break
+                    }
+                    val currPos = change.position
+                    if (!dragStarted) {
+                        val distFromDown = hypot(currPos.x - downPos.x, currPos.y - downPos.y)
+                        if (distFromDown > touchSlop) {
+                            dragStarted = true
+                            latestOnScrubStart()
+                        }
+                    }
+                    if (dragStarted) {
+                        change.consume()
+                        val stepDeg = PlatterScrubMath.computePlatterStepDegrees(
+                            centerX = centerX,
+                            centerY = centerY,
+                            prevX = prevPos.x,
+                            prevY = prevPos.y,
+                            currX = currPos.x,
+                            currY = currPos.y,
+                            minRadiusPx = minRadiusPx
+                        )
+                        if (stepDeg != 0f) {
+                            accumulatedDeg += stepDeg
+                            latestOnScrubDelta(stepDeg, accumulatedDeg)
+                        }
+                    }
+                    prevPos = currPos
+                }
+            } finally {
+                if (dragStarted) {
+                    latestOnScrubEnd()
+                }
+            }
+
+            if (!dragStarted && !down.isConsumed) {
+                latestOnTap()
+            }
+        }
+    }
+}
+
+@Composable
 private fun VinylTurntableStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     tonearmSwingDeg: Float,
     isModernBlue: Boolean,
+    isScrubbing: Boolean = false,
     syncPalette: PlayerSyncPalette? = null,
     onTogglePlay: () -> Unit = {},
+    onScrubStart: () -> Unit = {},
+    onScrubDelta: (stepDeg: Float, accumulatedDeg: Float) -> Unit = { _, _ -> },
+    onScrubEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -664,123 +827,136 @@ private fun VinylTurntableStage(
         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         onTogglePlay()
     }
+    val platterGesture = rememberPlatterGestureModifier(
+        onTap = triggerToggle,
+        onScrubStart = onScrubStart,
+        onScrubDelta = onScrubDelta,
+        onScrubEnd = onScrubEnd
+    )
 
     BoxWithConstraints(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        // Spinning Vinyl Platter + Center Art (tap anywhere on the vinyl to play/pause)
+        // Stationary outer hit-surface for circular finger scrubbing + tap play/pause (never rotates touch space)
         Box(
             modifier = Modifier
                 .fillMaxSize(0.88f)
                 .clip(CircleShape)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = triggerToggle
-                )
-                .graphicsLayer {
-                    rotationZ = spinDegreesProvider()
-                },
+                .then(platterGesture),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val r = size.minDimension / 2f
-                val c = center
-
-                // Outer translucent / matte bezel ring
-                drawCircle(
-                    color = syncPalette?.accent?.copy(alpha = 0.42f)
-                        ?: if (isModernBlue) Color(0xFF8CC0F8).copy(alpha = 0.42f) else Color(0xFF4B4B50).copy(alpha = 0.55f),
-                    radius = r,
-                    center = c
-                )
-
-                // Vinyl disc body
-                drawCircle(
-                    brush = if (syncPalette != null) {
-                        Brush.sweepGradient(
-                            colors = listOf(
-                                syncPalette.vinylDark,
-                                syncPalette.vinylLight,
-                                syncPalette.vinylDark,
-                                syncPalette.vinylLight,
-                                syncPalette.vinylDark
-                            ),
-                            center = c
-                        )
-                    } else if (isModernBlue) {
-                        Brush.sweepGradient(
-                            colors = listOf(
-                                Color(0xFF215AC4),
-                                Color(0xFF5D9CEB),
-                                Color(0xFF1F55BC),
-                                Color(0xFF4E8FE5),
-                                Color(0xFF215AC4)
-                            ),
-                            center = c
-                        )
-                    } else {
-                        Brush.sweepGradient(
-                            colors = listOf(
-                                Color(0xFF141416),
-                                Color(0xFF2D2D32),
-                                Color(0xFF121214),
-                                Color(0xFF28282D),
-                                Color(0xFF141416)
-                            ),
-                            center = c
-                        )
-                    },
-                    radius = r * 0.93f,
-                    center = c
-                )
-
-                // Concentric micro-grooves
-                val grooveColor = if (isModernBlue) {
-                    Color(0xFF163F92).copy(alpha = 0.42f)
-                } else {
-                    Color.White.copy(alpha = 0.06f)
-                }
-                for (i in 1..9) {
-                    val frac = 0.56f + (i * 0.038f)
-                    drawCircle(
-                        color = grooveColor,
-                        radius = r * frac,
-                        center = c,
-                        style = Stroke(width = 1.1.dp.toPx())
-                    )
-                }
-            }
-
-            // Center Circular Artwork Label
+            // Spinning Vinyl Platter + Center Art
             Box(
                 modifier = Modifier
-                    .fillMaxSize(0.54f)
-                    .clip(CircleShape),
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        rotationZ = spinDegreesProvider()
+                    },
                 contentAlignment = Alignment.Center
             ) {
-                AlbumOrAtmosphericArt(
-                    artwork = artwork,
-                    skin = if (isModernBlue) MusicPlayerSkin.MODERN_VINYL else MusicPlayerSkin.CLASSIC_VINYL,
-                    modifier = Modifier.fillMaxSize()
-                )
-                if (isModernBlue) {
-                    // Signature Modern Vinyl vertical center prism reflection
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.38f)
-                            .fillMaxSize(0.56f)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        Color(0xFF1D2B6F).copy(alpha = 0.55f),
-                                        Color(0xFFD97BB6).copy(alpha = 0.25f),
-                                        Color(0xFF1A255C).copy(alpha = 0.6f)
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val r = size.minDimension / 2f
+                    val c = center
+
+                    // Outer translucent / matte bezel ring (brightens cleanly while hand-scrubbing)
+                    drawCircle(
+                        color = if (isScrubbing) {
+                            (syncPalette?.accent ?: Color.White).copy(alpha = 0.78f)
+                        } else {
+                            syncPalette?.accent?.copy(alpha = 0.42f)
+                                ?: if (isModernBlue) Color(0xFF8CC0F8).copy(alpha = 0.42f) else Color(0xFF4B4B50).copy(alpha = 0.55f)
+                        },
+                        radius = r,
+                        center = c
+                    )
+
+                    // Vinyl disc body
+                    drawCircle(
+                        brush = if (syncPalette != null) {
+                            Brush.sweepGradient(
+                                colors = listOf(
+                                    syncPalette.vinylDark,
+                                    syncPalette.vinylLight,
+                                    syncPalette.vinylDark,
+                                    syncPalette.vinylLight,
+                                    syncPalette.vinylDark
+                                ),
+                                center = c
+                            )
+                        } else if (isModernBlue) {
+                            Brush.sweepGradient(
+                                colors = listOf(
+                                    Color(0xFF215AC4),
+                                    Color(0xFF5D9CEB),
+                                    Color(0xFF1F55BC),
+                                    Color(0xFF4E8FE5),
+                                    Color(0xFF215AC4)
+                                ),
+                                center = c
+                            )
+                        } else {
+                            Brush.sweepGradient(
+                                colors = listOf(
+                                    Color(0xFF141416),
+                                    Color(0xFF2D2D32),
+                                    Color(0xFF121214),
+                                    Color(0xFF28282D),
+                                    Color(0xFF141416)
+                                ),
+                                center = c
+                            )
+                        },
+                        radius = r * 0.93f,
+                        center = c
+                    )
+
+                    // Concentric micro-grooves
+                    val grooveColor = if (isModernBlue) {
+                        Color(0xFF163F92).copy(alpha = 0.42f)
+                    } else {
+                        Color.White.copy(alpha = 0.06f)
+                    }
+                    for (i in 1..9) {
+                        val frac = 0.56f + (i * 0.038f)
+                        drawCircle(
+                            color = grooveColor,
+                            radius = r * frac,
+                            center = c,
+                            style = Stroke(width = 1.1.dp.toPx())
+                        )
+                    }
+                }
+
+                // Center Circular Artwork Label
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize(0.54f)
+                        .clip(CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AlbumOrAtmosphericArt(
+                        artwork = artwork,
+                        skin = if (isModernBlue) MusicPlayerSkin.MODERN_VINYL else MusicPlayerSkin.CLASSIC_VINYL,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    if (isModernBlue) {
+                        // Signature Modern Vinyl vertical center prism reflection
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(0.38f)
+                                .fillMaxSize(0.56f)
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFF1D2B6F).copy(alpha = 0.55f),
+                                            Color(0xFFD97BB6).copy(alpha = 0.25f),
+                                            Color(0xFF1A255C).copy(alpha = 0.6f)
+                                        )
                                     )
                                 )
-                            )
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -860,8 +1036,8 @@ private fun VinylTurntableStage(
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .fillMaxWidth(0.36f)
-                .fillMaxSize(0.70f)
+                .fillMaxWidth(0.26f)
+                .fillMaxSize(0.62f)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -876,10 +1052,14 @@ private fun WallCdPlayerStage(
     artwork: Bitmap?,
     spinDegreesProvider: () -> Float,
     isPlaying: Boolean,
+    isScrubbing: Boolean = false,
     volumeFraction: Float = 0.5f,
     syncPalette: PlayerSyncPalette? = null,
     onTogglePlay: () -> Unit = {},
     onVolumeChange: (Float) -> Unit = {},
+    onScrubStart: () -> Unit = {},
+    onScrubDelta: (stepDeg: Float, accumulatedDeg: Float) -> Unit = { _, _ -> },
+    onScrubEnd: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -888,8 +1068,17 @@ private fun WallCdPlayerStage(
         animationSpec = tween(durationMillis = 220),
         label = "cd_pull_switch"
     )
-    val latestVolume by androidx.compose.runtime.rememberUpdatedState(volumeFraction.coerceIn(0f, 1f))
-    val latestOnVolumeChange by androidx.compose.runtime.rememberUpdatedState(onVolumeChange)
+    val latestVolume by rememberUpdatedState(volumeFraction.coerceIn(0f, 1f))
+    val latestOnVolumeChange by rememberUpdatedState(onVolumeChange)
+    val cdGesture = rememberPlatterGestureModifier(
+        onTap = {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onTogglePlay()
+        },
+        onScrubStart = onScrubStart,
+        onScrubDelta = onScrubDelta,
+        onScrubEnd = onScrubEnd
+    )
 
     Surface(
         shape = RoundedCornerShape(28.dp),
@@ -1007,20 +1196,13 @@ private fun WallCdPlayerStage(
                 )
             }
 
-            // Central Recessed CD Well + Spinning Optical Disc (tap disc to play/pause)
+            // Central Recessed CD Well (stationary gesture space: drag circularly to scrub, tap to play/pause)
             Box(
                 modifier = Modifier
                     .fillMaxSize(0.68f)
                     .clip(CircleShape)
                     .background(Color(0xFF1B1926))
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onTogglePlay()
-                        }
-                    )
+                    .then(cdGesture)
                     .padding(8.dp),
                 contentAlignment = Alignment.Center
             ) {
@@ -1038,13 +1220,18 @@ private fun WallCdPlayerStage(
                         skin = MusicPlayerSkin.CD,
                         modifier = Modifier.fillMaxSize()
                     )
-                    // Subtle optical CD outer rim & spindle ring
+                    // Subtle optical CD outer rim & spindle ring (brightens while hand-scrubbing)
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val r = size.minDimension / 2f
+                        val rimColor = if (isScrubbing) {
+                            (syncPalette?.accent ?: Color(0xFF38BDF8)).copy(alpha = 0.85f)
+                        } else {
+                            Color.White.copy(alpha = 0.22f)
+                        }
                         drawCircle(
-                            color = Color.White.copy(alpha = 0.22f),
+                            color = rimColor,
                             radius = r - 1.dp.toPx(),
-                            style = Stroke(width = 2.dp.toPx())
+                            style = Stroke(width = (if (isScrubbing) 3.dp else 2.dp).toPx())
                         )
                         drawCircle(
                             color = Color(0xFF282638).copy(alpha = 0.65f),
@@ -1369,10 +1556,65 @@ private fun AlbumOrAtmosphericArt(
     }
 }
 
+private enum class MusicStudioSheetTab {
+    SHARK_MUSIC,
+    SHARK_MIX
+}
+
+@Composable
+private fun MusicStudioTabButton(
+    label: String,
+    isSelected: Boolean,
+    showActiveDot: Boolean = false,
+    primaryColor: Color,
+    mutedColor: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(
+                text = label,
+                fontSize = 15.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) primaryColor else mutedColor
+            )
+            if (showActiveDot) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(primaryColor)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .width(if (isSelected) 34.dp else 0.dp)
+                .height(2.5.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (isSelected) primaryColor else Color.Transparent)
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MusicQuickSourceSheet(
     selectedSkin: MusicPlayerSkin,
+    sourceKind: MusicSourceKind = MusicSourceKind.NONE,
     queueItems: List<MusicQueueItem> = emptyList(),
     onSelectSkin: (MusicPlayerSkin) -> Unit,
     onDismiss: () -> Unit
@@ -1383,7 +1625,18 @@ private fun MusicQuickSourceSheet(
     val activeLayers by ZenAudioManager.activeMixLayers.collectAsState()
     val activePresetId by ZenAudioManager.activePresetId.collectAsState()
     val syncPackIndex by MusicPlayerHub.themeSyncPackIndex.collectAsState()
+    val mediaAccessGranted by MusicPlayerHub.mediaAccessGranted.collectAsState()
     var maxLayerNotice by remember { mutableStateOf(false) }
+
+    var activeTab by remember {
+        mutableStateOf(
+            if (sourceKind == MusicSourceKind.ZEN_AUDIO && queueItems.isEmpty()) {
+                MusicStudioSheetTab.SHARK_MIX
+            } else {
+                MusicStudioSheetTab.SHARK_MUSIC
+            }
+        )
+    }
 
     LaunchedEffect(maxLayerNotice) {
         if (maxLayerNotice) {
@@ -1403,324 +1656,431 @@ private fun MusicQuickSourceSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 26.dp),
-            verticalArrangement = Arrangement.spacedBy(11.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Clean two-way tab switcher matching Notlarım | PDF'lerim style
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = if (queueItems.isNotEmpty()) "SharkMusic • Sıradakiler & SharkMix" else "SharkMusic • Kaynak & SharkMix",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface
+                MusicStudioTabButton(
+                    label = "Shark Music",
+                    isSelected = activeTab == MusicStudioSheetTab.SHARK_MUSIC,
+                    primaryColor = colorScheme.primary,
+                    mutedColor = colorScheme.onSurfaceVariant,
+                    onClick = { activeTab = MusicStudioSheetTab.SHARK_MUSIC }
                 )
-                if (activeLayers.isNotEmpty()) {
-                    Surface(
-                        onClick = { ZenAudioManager.stopSound(context) },
-                        shape = RoundedCornerShape(8.dp),
-                        color = colorScheme.errorContainer.copy(alpha = 0.7f)
+                Text(
+                    text = "|",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Light,
+                    color = colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                MusicStudioTabButton(
+                    label = "Shark Mix",
+                    isSelected = activeTab == MusicStudioSheetTab.SHARK_MIX,
+                    showActiveDot = activeLayers.isNotEmpty(),
+                    primaryColor = colorScheme.primary,
+                    mutedColor = colorScheme.onSurfaceVariant,
+                    onClick = { activeTab = MusicStudioSheetTab.SHARK_MIX }
+                )
+            }
+
+            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+            when (activeTab) {
+                MusicStudioSheetTab.SHARK_MUSIC -> {
+                    // ── TAB 1: Pure Shark Music (Uncapped Queue + Provider Launchers + Skin Picker) ──
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Durdur",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onErrorContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                            text = "Sıradaki Şarkılar",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
                         )
-                    }
-                }
-            }
-
-            // 5 Core Skin Pills
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                MusicPlayerSkin.entries.forEach { skin ->
-                    val chosen = skin == selectedSkin
-                    Surface(
-                        onClick = { onSelectSkin(skin) },
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (chosen) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    ) {
-                        Box(
-                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = when (skin) {
-                                    MusicPlayerSkin.MODERN_VINYL -> "Modern"
-                                    MusicPlayerSkin.CLASSIC_VINYL -> "Classic"
-                                    else -> skin.displayTitle
-                                },
-                                fontSize = 11.sp,
-                                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
-                                color = if (chosen) colorScheme.onPrimary else colorScheme.onSurface,
-                                maxLines = 1
-                            )
-                        }
-                    }
-                }
-            }
-
-            Text(
-                text = if (syncPackIndex == 0) {
-                    "Renk Senkronu: Orijinal (Sol alt plak tuşuna uzun basarak tema paketlerini gez)"
-                } else {
-                    "Renk Senkronu: Uygulama Teması Paket $syncPackIndex/3 (Uzun basarak değiştir)"
-                },
-                fontSize = 11.sp,
-                color = colorScheme.onSurfaceVariant
-            )
-
-            // Dynamic Tappable "Sıradakiler" Queue (shown automatically whenever active media player exposes queue)
-            if (queueItems.isNotEmpty()) {
-                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
-                Text(
-                    text = "Sıradakiler (${queueItems.size})",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.primary
-                )
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 150.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(queueItems, key = { "q_${it.queueId}_${it.title}" }) { item ->
-                        Surface(
-                            onClick = {
-                                MusicPlayerHub.skipToQueueItem(item.queueId)
-                                onDismiss()
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            color = colorScheme.surfaceVariant.copy(alpha = 0.42f)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                        if (queueItems.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = colorScheme.primary.copy(alpha = 0.12f)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = item.title,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    if (item.subtitle.isNotBlank()) {
-                                        Text(
-                                            text = item.subtitle,
-                                            fontSize = 10.5.sp,
-                                            color = colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = "Çal",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
+                                Text(
+                                    text = "${queueItems.size} şarkı",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
                                 )
                             }
                         }
                     }
-                }
-            }
 
-            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Surface(
-                    onClick = {
-                        onDismiss()
-                        MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                ) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Spotify'ı Aç",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurface
-                        )
-                    }
-                }
-                Surface(
-                    onClick = {
-                        onDismiss()
-                        MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
-                    },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(10.dp),
-                    color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
-                ) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "YouTube Music'i Aç",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-
-            // SharkMix Ready Presets
-            Text(
-                text = "SharkMix • Hazır Ortam Reçeteleri",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = colorScheme.primary
-            )
-
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(SHARK_MIX_PRESETS, key = { it.id }) { preset ->
-                    val isPresetActive = activePresetId == preset.id
-                    Surface(
-                        onClick = { ZenAudioManager.applyPreset(context, preset) },
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isPresetActive) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        border = BorderStroke(
-                            1.dp,
-                            if (isPresetActive) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        )
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Text(
-                                text = preset.title,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isPresetActive) colorScheme.onPrimary else colorScheme.onSurface
-                            )
-                            Text(
-                                text = preset.subtitle,
-                                fontSize = 10.sp,
-                                color = if (isPresetActive) colorScheme.onPrimary.copy(alpha = 0.82f) else colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "SharkMix • Canlı Mikser (${activeLayers.size}/${ZenAudioManager.MAX_MIX_LAYERS} Katman)",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.primary
-                )
-                if (maxLayerNotice) {
-                    Text(
-                        text = "En fazla 3 ses karıştırılabilir",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.error
-                    )
-                }
-            }
-
-            val zenItems = remember { ZenSound.entries.filter { it != ZenSound.NONE } }
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(210.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(zenItems, key = { it.id }) { sound ->
-                    val layerVolume = activeLayers[sound]
-                    val isSelected = layerVolume != null
-                    Surface(
-                        onClick = {
-                            val ok = ZenAudioManager.toggleMixLayer(context, sound)
-                            if (!ok) maxLayerNotice = true
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        color = if (isSelected) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                    ) {
-                        Column(
+                    if (queueItems.isNotEmpty()) {
+                        LazyColumn(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .heightIn(min = 210.dp, max = 360.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = sound.displayName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = colorScheme.onSurface
-                                )
-                                if (isSelected) {
+                            itemsIndexed(
+                                items = queueItems,
+                                key = { index, item -> "q_${index}_${item.queueId}" }
+                            ) { index, item ->
+                                Surface(
+                                    onClick = {
+                                        MusicPlayerHub.skipToQueueItem(item.queueId)
+                                        onDismiss()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = colorScheme.surfaceVariant.copy(alpha = 0.42f)
+                                ) {
                                     Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 9.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "%${((layerVolume ?: 0.65f) * 100).roundToInt()}",
+                                            text = "${index + 1}",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = colorScheme.primary
+                                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                            modifier = Modifier.widthIn(min = 22.dp)
                                         )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = item.title,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.Medium,
+                                                color = colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (item.subtitle.isNotBlank()) {
+                                                Text(
+                                                    text = item.subtitle,
+                                                    fontSize = 10.5.sp,
+                                                    color = colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
                                         Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = null,
+                                            imageVector = Icons.Default.PlayArrow,
+                                            contentDescription = "Çal",
                                             tint = colorScheme.primary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                     }
                                 }
                             }
-                            if (isSelected && layerVolume != null) {
-                                Slider(
-                                    value = layerVolume,
-                                    onValueChange = { ZenAudioManager.setLayerVolume(sound, it) },
-                                    valueRange = 0.05f..1.0f,
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = colorScheme.primary,
-                                        activeTrackColor = colorScheme.primary
-                                    ),
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 18.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    tint = colorScheme.primary.copy(alpha = 0.75f),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Text(
+                                    text = if (!mediaAccessGranted) {
+                                        "Spotify veya YouTube Music sırasını görmek için medya kontrol izni vermelisin."
+                                    } else {
+                                        "Aktif oynatıcı henüz şarkı sırası paylaşmıyor. Çalma listesi başlattığında tüm sıra burada listelenir."
+                                    },
+                                    fontSize = 12.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                if (!mediaAccessGranted) {
+                                    Surface(
+                                        onClick = { MusicPlayerHub.openMediaAccessSettings(context) },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = colorScheme.primary
+                                    ) {
+                                        Text(
+                                            text = "Medya Kontrol İzni Ver",
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colorScheme.onPrimary,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                    // Provider Launchers
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = {
+                                onDismiss()
+                                MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_SPOTIFY)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Spotify'ı Aç",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                        }
+                        Surface(
+                            onClick = {
+                                onDismiss()
+                                MusicPlayerHub.openMusicProvider(context, MusicPlayerHub.PKG_YOUTUBE_MUSIC)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            color = colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "YouTube Music'i Aç",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    // 5 Core Skin Pills
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        MusicPlayerSkin.entries.forEach { skin ->
+                            val chosen = skin == selectedSkin
+                            Surface(
+                                onClick = { onSelectSkin(skin) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (chosen) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = when (skin) {
+                                            MusicPlayerSkin.MODERN_VINYL -> "Modern"
+                                            MusicPlayerSkin.CLASSIC_VINYL -> "Classic"
+                                            else -> skin.displayTitle
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (chosen) colorScheme.onPrimary else colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = if (syncPackIndex == 0) {
+                            "Renk Senkronu: Orijinal (Sol alt plak tuşuna uzun basarak tema paketlerini gez)"
+                        } else {
+                            "Renk Senkronu: Uygulama Teması Paket $syncPackIndex/3 (Uzun basarak değiştir)"
+                        },
+                        fontSize = 10.5.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+
+                MusicStudioSheetTab.SHARK_MIX -> {
+                    // ── TAB 2: Pure Shark Mix (Ambient Presets + 3-Layer Live Mixer) ──
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Hazır Ortam Reçeteleri",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
+                        )
+                        if (activeLayers.isNotEmpty()) {
+                            Surface(
+                                onClick = { ZenAudioManager.stopSound(context) },
+                                shape = RoundedCornerShape(8.dp),
+                                color = colorScheme.errorContainer.copy(alpha = 0.7f)
+                            ) {
+                                Text(
+                                    text = "Durdur",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(SHARK_MIX_PRESETS, key = { it.id }) { preset ->
+                            val isPresetActive = activePresetId == preset.id
+                            Surface(
+                                onClick = { ZenAudioManager.applyPreset(context, preset) },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isPresetActive) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isPresetActive) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = preset.title,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isPresetActive) colorScheme.onPrimary else colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = preset.subtitle,
+                                        fontSize = 10.sp,
+                                        color = if (isPresetActive) colorScheme.onPrimary.copy(alpha = 0.82f) else colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Canlı Mikser (${activeLayers.size}/${ZenAudioManager.MAX_MIX_LAYERS} Katman)",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
+                        )
+                        if (maxLayerNotice) {
+                            Text(
+                                text = "En fazla 3 ses karıştırılabilir",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.error
+                            )
+                        }
+                    }
+
+                    val zenItems = remember { ZenSound.entries.filter { it != ZenSound.NONE } }
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 240.dp, max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(zenItems, key = { it.id }) { sound ->
+                            val layerVolume = activeLayers[sound]
+                            val isSelected = layerVolume != null
+                            Surface(
+                                onClick = {
+                                    val ok = ZenAudioManager.toggleMixLayer(context, sound)
+                                    if (!ok) maxLayerNotice = true
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) colorScheme.primary.copy(alpha = 0.14f) else colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            ) {
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(26.dp)
-                                )
+                                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = sound.displayName,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            color = colorScheme.onSurface
+                                        )
+                                        if (isSelected) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = "%${((layerVolume ?: 0.65f) * 100).roundToInt()}",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = colorScheme.primary
+                                                )
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (isSelected && layerVolume != null) {
+                                        Slider(
+                                            value = layerVolume,
+                                            onValueChange = { ZenAudioManager.setLayerVolume(sound, it) },
+                                            valueRange = 0.05f..1.0f,
+                                            colors = SliderDefaults.colors(
+                                                thumbColor = colorScheme.primary,
+                                                activeTrackColor = colorScheme.primary
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(26.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

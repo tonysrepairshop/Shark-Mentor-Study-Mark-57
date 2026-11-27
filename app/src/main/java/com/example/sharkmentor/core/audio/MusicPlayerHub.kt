@@ -96,6 +96,88 @@ fun formatMusicDurationLabel(ms: Long): String {
 }
 
 /**
+ * Pure-Kotlin circular jog-wheel math used by spinning Vinyl & CD platters
+ * so finger drags scrub tracks smoothly clockwise (forward) or counter-clockwise (backward).
+ */
+object PlatterScrubMath {
+    const val MS_PER_FULL_REVOLUTION = 30_000L
+
+    fun normalizeAngleDeltaDeg(rawDeltaDeg: Float): Float {
+        var delta = rawDeltaDeg
+        while (delta > 180f) delta -= 360f
+        while (delta < -180f) delta += 360f
+        return delta
+    }
+
+    fun computePlatterStepDegrees(
+        centerX: Float,
+        centerY: Float,
+        prevX: Float,
+        prevY: Float,
+        currX: Float,
+        currY: Float,
+        minRadiusPx: Float
+    ): Float {
+        val pDx = prevX - centerX
+        val pDy = prevY - centerY
+        val cDx = currX - centerX
+        val cDy = currY - centerY
+        val pDist = kotlin.math.hypot(pDx.toDouble(), pDy.toDouble()).toFloat()
+        val cDist = kotlin.math.hypot(cDx.toDouble(), cDy.toDouble()).toFloat()
+        if (pDist < minRadiusPx || cDist < minRadiusPx) {
+            // Near the spindle center: avoid erratic 180° atan2 flips with gentle horizontal drag fallback
+            val safeRadius = minRadiusPx.coerceAtLeast(16f)
+            return ((currX - prevX) / safeRadius) * 35f
+        }
+        val prevDeg = (kotlin.math.atan2(pDy.toDouble(), pDx.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
+        val currDeg = (kotlin.math.atan2(cDy.toDouble(), cDx.toDouble()) * 180.0 / kotlin.math.PI).toFloat()
+        return normalizeAngleDeltaDeg(currDeg - prevDeg)
+    }
+
+    fun computeScrubTargetMs(
+        anchorPositionMs: Long,
+        durationMs: Long,
+        accumulatedDeltaDeg: Float,
+        msPerRevolution: Long = MS_PER_FULL_REVOLUTION
+    ): Long {
+        if (durationMs <= 0L) return 0L
+        val safeAnchor = anchorPositionMs.coerceIn(0L, durationMs)
+        val deltaMs = Math.round((accumulatedDeltaDeg / 360.0) * msPerRevolution.toDouble())
+        return (safeAnchor + deltaMs).coerceIn(0L, durationMs)
+    }
+
+    fun formatScrubBadgeText(deltaMs: Long, targetMs: Long): String {
+        val deltaSec = deltaMs / 1000L
+        val sign = if (deltaSec >= 0L) "+" else ""
+        val arrow = if (deltaSec >= 0L) "⏩" else "⏪"
+        return "$arrow ${sign}${deltaSec}sn • ${formatMusicDurationLabel(targetMs)}"
+    }
+}
+
+/**
+ * Extracts all available upcoming queue items from a media session without any artificial 12-track cap.
+ */
+fun sliceUpcomingQueueItems(
+    rawItems: List<MusicQueueItem>,
+    activeQueueId: Long,
+    unknownQueueId: Long = -1L
+): List<MusicQueueItem> {
+    if (rawItems.isEmpty()) return emptyList()
+    val validItems = rawItems.filter { it.title.isNotBlank() }
+    if (validItems.isEmpty()) return emptyList()
+    val activeIndex = if (activeQueueId != unknownQueueId) {
+        validItems.indexOfFirst { it.queueId == activeQueueId }
+    } else {
+        -1
+    }
+    return if (activeIndex >= 0 && activeIndex + 1 < validItems.size) {
+        validItems.subList(activeIndex + 1, validItems.size)
+    } else {
+        validItems
+    }
+}
+
+/**
  * Lightweight Android NotificationListenerService used solely to observe active
  * MediaSessions from Spotify, YouTube Music, and system music players with zero network/API cost.
  */
@@ -528,24 +610,21 @@ object MusicPlayerHub {
     private fun extractUpcomingQueue(controller: MediaController): List<MusicQueueItem> {
         val rawQueue = runCatching { controller.queue }.getOrNull().orEmpty()
         if (rawQueue.isEmpty()) return emptyList()
-        val activeId = controller.playbackState?.activeQueueItemId ?: MediaSession.QueueItem.UNKNOWN_ID.toLong()
-        val activeIndex = if (activeId != MediaSession.QueueItem.UNKNOWN_ID.toLong()) {
-            rawQueue.indexOfFirst { it.queueId == activeId }
-        } else {
-            -1
-        }
-        val slice = if (activeIndex >= 0 && activeIndex + 1 < rawQueue.size) {
-            rawQueue.subList(activeIndex + 1, rawQueue.size)
-        } else {
-            rawQueue
-        }
-        return slice.mapNotNull { item ->
+        val unknownId = MediaSession.QueueItem.UNKNOWN_ID.toLong()
+        val activeId = controller.playbackState?.activeQueueItemId ?: unknownId
+        val mapped = rawQueue.mapNotNull { item ->
             val desc = item.description ?: return@mapNotNull null
             val qTitle = desc.title?.toString()?.trim().orEmpty()
             if (qTitle.isBlank()) return@mapNotNull null
             val qSub = desc.subtitle?.toString()?.trim().orEmpty()
+                .ifBlank { desc.description?.toString()?.trim().orEmpty() }
             MusicQueueItem(queueId = item.queueId, title = qTitle, subtitle = qSub)
-        }.take(12)
+        }
+        return sliceUpcomingQueueItems(
+            rawItems = mapped,
+            activeQueueId = activeId,
+            unknownQueueId = unknownId
+        )
     }
 
     private fun friendlySourceName(pkg: String): String = when {
@@ -651,15 +730,23 @@ object MusicPlayerHub {
         }
     }
 
+    fun seekToMs(targetMs: Long) {
+        val current = _playbackState.value
+        if (current.sourceKind == MusicSourceKind.EXTERNAL_MEDIA && current.durationMs > 0L) {
+            val clampedMs = targetMs.coerceIn(0L, current.durationMs)
+            runCatching { primaryExternalController?.transportControls?.seekTo(clampedMs) }
+            _playbackState.value = current.copy(
+                positionMs = clampedMs,
+                lastPositionUpdateElapsedMs = SystemClock.elapsedRealtime()
+            )
+        }
+    }
+
     fun seekToFraction(fraction: Float) {
         val current = _playbackState.value
         if (current.sourceKind == MusicSourceKind.EXTERNAL_MEDIA && current.durationMs > 0L) {
             val targetMs = (current.durationMs * fraction.coerceIn(0f, 1f)).toLong()
-            runCatching { primaryExternalController?.transportControls?.seekTo(targetMs) }
-            _playbackState.value = current.copy(
-                positionMs = targetMs,
-                lastPositionUpdateElapsedMs = SystemClock.elapsedRealtime()
-            )
+            seekToMs(targetMs)
         }
     }
 }

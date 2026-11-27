@@ -3,6 +3,8 @@ package com.example.sharkmentor
 import com.example.sharkmentor.core.ai.SharkTokenQuotaManager
 import com.example.sharkmentor.core.audio.MusicPlaybackState
 import com.example.sharkmentor.core.audio.MusicQueueItem
+import com.example.sharkmentor.core.audio.PlatterScrubMath
+import com.example.sharkmentor.core.audio.sliceUpcomingQueueItems
 import com.example.sharkmentor.data.topbar.TopBarModule
 import com.example.sharkmentor.data.topbar.TopBarSettings
 import com.example.sharkmentor.ui.screens.notes.drawing.StylusHardwareInputBridge
@@ -60,6 +62,56 @@ class Mark75FeaturesTest {
         assertEquals(2, state.queueItems.size)
         assertEquals(42L, state.queueItems[0].queueId)
         assertEquals("Time", state.queueTitles[1])
+    }
+
+    @Test
+    fun platterScrubMathHandlesCircularForwardBackwardAndClampingCleanly() {
+        // Wrap-around across -180/+180 boundary
+        assertEquals(20f, PlatterScrubMath.normalizeAngleDeltaDeg(-340f), 0.01f)
+        assertEquals(-20f, PlatterScrubMath.normalizeAngleDeltaDeg(340f), 0.01f)
+
+        // Clockwise drag from 12 o'clock (100, 20) to 3 o'clock (180, 100) around center (100, 100) => +90 deg
+        val cwStep = PlatterScrubMath.computePlatterStepDegrees(
+            centerX = 100f, centerY = 100f,
+            prevX = 100f, prevY = 20f,
+            currX = 180f, currY = 100f,
+            minRadiusPx = 16f
+        )
+        assertEquals(90f, cwStep, 0.5f)
+
+        // Counter-clockwise drag from 3 o'clock (180, 100) back to 12 o'clock (100, 20) => -90 deg
+        val ccwStep = PlatterScrubMath.computePlatterStepDegrees(
+            centerX = 100f, centerY = 100f,
+            prevX = 180f, prevY = 100f,
+            currX = 100f, currY = 20f,
+            minRadiusPx = 16f
+        )
+        assertEquals(-90f, ccwStep, 0.5f)
+
+        // Full +360° spin advances +30s; -180° rewinds -15s; clamps within [0, durationMs]
+        assertEquals(90_000L, PlatterScrubMath.computeScrubTargetMs(60_000L, 240_000L, 360f))
+        assertEquals(45_000L, PlatterScrubMath.computeScrubTargetMs(60_000L, 240_000L, -180f))
+        assertEquals(0L, PlatterScrubMath.computeScrubTargetMs(5_000L, 240_000L, -360f))
+        assertEquals(240_000L, PlatterScrubMath.computeScrubTargetMs(230_000L, 240_000L, 360f))
+
+        assertEquals("⏩ +14sn • 02:18", PlatterScrubMath.formatScrubBadgeText(14_000L, 138_000L))
+        assertEquals("⏪ -9sn • 01:55", PlatterScrubMath.formatScrubBadgeText(-9_000L, 115_000L))
+    }
+
+    @Test
+    fun upcomingQueueIsNoLongerCappedAtTwelveItems() {
+        val fullPlaylist = (1..40).map { i ->
+            MusicQueueItem(queueId = i.toLong(), title = "Track $i", subtitle = "Artist $i")
+        }
+        // Active track at id = 5 => should return ALL 35 remaining tracks (NOT capped at 12)
+        val upcoming = sliceUpcomingQueueItems(fullPlaylist, activeQueueId = 5L)
+        assertEquals(35, upcoming.size)
+        assertEquals(6L, upcoming.first().queueId)
+        assertEquals(40L, upcoming.last().queueId)
+
+        // Unknown active id => returns all 40 valid tracks without truncation
+        val allTracks = sliceUpcomingQueueItems(fullPlaylist, activeQueueId = -1L)
+        assertEquals(40, allTracks.size)
     }
 
     @Test
