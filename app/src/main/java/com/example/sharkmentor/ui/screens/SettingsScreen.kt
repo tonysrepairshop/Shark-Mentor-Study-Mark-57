@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.AccessTime
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.EditNote
@@ -415,6 +416,16 @@ fun SettingsScreen(
                             label = "SharkStudio Ayarları",
                             subtitle = "Kalem davranışı ve not içi AI",
                             onClick = onOpenNoteSettings
+                        )
+                        SettingsCardDivider()
+                        SettingRow(
+                            icon = Icons.Default.PlayCircleOutline,
+                            label = "Uygulama Turunu Tekrar İzle",
+                            subtitle = "Süper Güç Turu tanıtımını tekrar aç",
+                            onClick = {
+                                com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.resetForReplay(context)
+                                onBackClick()
+                            }
                         )
                     }
 

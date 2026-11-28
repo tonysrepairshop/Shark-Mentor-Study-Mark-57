@@ -240,6 +240,12 @@ fun MainScreen(
     var showFirstTimeTutorial by remember {
         mutableStateOf(com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.shouldShowTutorial(context))
     }
+    val tutorialReplayCount by com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.replayTrigger.collectAsStateWithLifecycle()
+    LaunchedEffect(tutorialReplayCount) {
+        if (tutorialReplayCount > 0) {
+            showFirstTimeTutorial = true
+        }
+    }
     val errorBankViewModel: ErrorBankViewModel = viewModel()
     val dueQuestionsCount by errorBankViewModel.dueQuestionsCount.collectAsStateWithLifecycle(initialValue = 0)
     val sundayCheckInRequested by com.example.sharkmentor.core.coaching.PlanReadinessNavBus.openSundayCheckInRequested.collectAsStateWithLifecycle()
@@ -800,7 +806,17 @@ fun MainScreen(
 
                 if (showFirstTimeTutorial) {
                     com.example.sharkmentor.ui.components.FirstTimeTutorialOverlay(
-                        onDismiss = { showFirstTimeTutorial = false }
+                        onDismiss = { showFirstTimeTutorial = false },
+                        onNavigate = { targetRoute ->
+                            if (currentDestination?.route != targetRoute) {
+                                runCatching {
+                                    navController.navigate(targetRoute) { launchSingleTop = true }
+                                }
+                            }
+                        },
+                        onLaunchAiPrompt = { prompt ->
+                            PendingAiPromptBus.pendingPrompt.value = prompt
+                        }
                     )
                 }
 
