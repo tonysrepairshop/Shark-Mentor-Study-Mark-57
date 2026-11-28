@@ -41,6 +41,12 @@ fun SharkScreen(
             selectedTab = 0
         }
     }
+    val pendingAiPrompt by com.example.sharkmentor.ui.components.PendingAiPromptBus.pendingPrompt.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingAiPrompt) {
+        if (!pendingAiPrompt.isNullOrBlank()) {
+            selectedTab = 0
+        }
+    }
 
     Column(
         modifier = modifier

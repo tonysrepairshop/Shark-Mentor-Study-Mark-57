@@ -1,36 +1,28 @@
 package com.example.sharkmentor.ui
 
+import android.content.res.Configuration
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.ui.graphics.Brush
-
-import android.content.res.Configuration
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import com.example.sharkmentor.core.audio.MusicPlayerHub
-import com.example.sharkmentor.core.service.CampVideoPlaybackController
-import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
-import com.example.sharkmentor.ui.components.DraggableMiniMusicPlayerWindow
-import kotlinx.coroutines.delay
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,8 +30,10 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
@@ -48,24 +42,32 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Business
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Event
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.StickyNote2
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -73,33 +75,47 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shadow
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -107,25 +123,33 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.sharkmentor.core.audio.MusicPlayerHub
 import com.example.sharkmentor.core.data.ThemePalette
 import com.example.sharkmentor.core.data.ThemePreferences
+import com.example.sharkmentor.core.service.CampVideoPlaybackController
 import com.example.sharkmentor.core.theme.ThemeManager
 import com.example.sharkmentor.core.util.GoogleServicesHelper
-import com.example.sharkmentor.ui.components.ControlPanelContent
+import com.example.sharkmentor.data.topbar.FocusSessionState
+import com.example.sharkmentor.data.topbar.TopBarModule
+import com.example.sharkmentor.data.topbar.TopBarPreferences
+import com.example.sharkmentor.data.topbar.TopBarSettings
 import com.example.sharkmentor.data.weather.WeatherRepository
 import com.example.sharkmentor.data.weather.WeatherSettings
 import com.example.sharkmentor.data.weather.WeatherUiState
-import com.example.sharkmentor.data.topbar.FocusSessionState
-import com.example.sharkmentor.data.topbar.TopBarPreferences
-import com.example.sharkmentor.data.topbar.TopBarSettings
-import com.example.sharkmentor.data.topbar.TopBarModule
-import androidx.compose.ui.graphics.graphicsLayer
+import com.example.sharkmentor.ui.coaching.CampVideoStudyStudioDialog
+import com.example.sharkmentor.ui.components.ControlPanelContent
+import com.example.sharkmentor.ui.components.DraggableMiniMusicPlayerWindow
 import com.example.sharkmentor.ui.components.PendingAiPromptBus
 import com.example.sharkmentor.ui.components.SpecialMemberConfig
 import com.example.sharkmentor.ui.components.TopBarAiShortcutBox
 import com.example.sharkmentor.ui.components.TopBarWeatherPill
 import com.example.sharkmentor.ui.components.WeatherHourlyDialog
 import com.example.sharkmentor.ui.navigation.Screen
+import com.example.sharkmentor.ui.navigation.SharkCoreQuickAction
+import com.example.sharkmentor.ui.navigation.buildSharkQuickActionPrompt
+import com.example.sharkmentor.ui.navigation.formatDueBadgeCount
+import com.example.sharkmentor.ui.navigation.isBottomTabSelected
+import com.example.sharkmentor.ui.navigation.isCenterAiCore
 import com.example.sharkmentor.ui.onboarding.OnboardingScreen
 import com.example.sharkmentor.ui.reflection.DailyReflectionDialog
 import com.example.sharkmentor.ui.screens.AiSettingsScreen
@@ -148,6 +172,7 @@ import com.example.sharkmentor.ui.theme.SharkMentorTheme
 import com.example.sharkmentor.ui.viewmodel.ErrorBankViewModel
 import com.example.sharkmentor.ui.zen.AiZenCoachScreen
 import com.example.sharkmentor.ui.zen.ZenRoomScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 
@@ -322,9 +347,10 @@ fun MainScreen(
                     val autoHideBottomBar by mainThemePrefs.autoHideBottomBar.collectAsStateWithLifecycle()
                     var lastInteractionMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
                     var isBottomBarAutoHidden by remember { mutableStateOf(false) }
+                    var isAiQuickMenuOpen by remember { mutableStateOf(false) }
 
-                    LaunchedEffect(autoHideBottomBar, lastInteractionMs, currentRoute) {
-                        if (!autoHideBottomBar) {
+                    LaunchedEffect(autoHideBottomBar, lastInteractionMs, currentRoute, isAiQuickMenuOpen) {
+                        if (!autoHideBottomBar || isAiQuickMenuOpen) {
                             isBottomBarAutoHidden = false
                         } else {
                             isBottomBarAutoHidden = false
@@ -458,6 +484,18 @@ fun MainScreen(
                                                 restoreState    = true
                                             }
                                         },
+                                        onAiQuickAction = { quickAction ->
+                                            PendingAiPromptBus.pendingPrompt.value =
+                                                buildSharkQuickActionPrompt(quickAction.command)
+                                            navController.navigate(Screen.Shark.route) {
+                                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                                launchSingleTop = true
+                                                restoreState    = true
+                                            }
+                                        },
+                                        onAiQuickMenuVisibilityChanged = { isOpen ->
+                                            isAiQuickMenuOpen = isOpen
+                                        },
                                         dueQuestionsCount = dueQuestionsCount
                                     )
                                 }
@@ -489,15 +527,112 @@ fun MainScreen(
                         }
                         composable(Screen.Dashboard.route)     { PlansScreen(onNavigateToSchedule = { navController.navigate(Screen.Schedule.route) { launchSingleTop = true } }) }
                         composable(Screen.Resources.route) {
-                            var isTopicOpen by androidx.compose.runtime.remember { mutableStateOf(false) }
-                            var isResOpen by androidx.compose.runtime.remember { mutableStateOf(false) }
-                            com.example.sharkmentor.ui.screens.GoalsScreen(
-                                currentModule = com.example.sharkmentor.ui.screens.NavModule.LIBRARY,
-                                isAddTopicDialogOpen = isTopicOpen,
-                                onCloseTopicDialog = { isTopicOpen = false },
-                                isAddResourceDialogOpen = isResOpen,
-                                onCloseResourceDialog = { isResOpen = false }
-                            )
+                            var isTopicOpen by remember { mutableStateOf(false) }
+                            var isResOpen by remember { mutableStateOf(false) }
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                                containerColor = MaterialTheme.colorScheme.background,
+                                floatingActionButton = {
+                                    FloatingActionButton(
+                                        onClick = { isResOpen = true },
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "Kitap Ekle")
+                                    }
+                                }
+                            ) { resPadding ->
+                                Column(
+                                    modifier = Modifier
+                                        .padding(resPadding)
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.background)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        color = MaterialTheme.colorScheme.surface,
+                                        tonalElevation = 1.dp
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Surface(
+                                                onClick = {
+                                                    navController.navigate(Screen.Dashboard.route) {
+                                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                                        launchSingleTop = true
+                                                        restoreState = true
+                                                    }
+                                                },
+                                                shape = RoundedCornerShape(20.dp),
+                                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.CalendarMonth,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Text(
+                                                        text = "Planlar",
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            }
+                                            Surface(
+                                                onClick = { },
+                                                shape = RoundedCornerShape(20.dp),
+                                                color = MaterialTheme.colorScheme.primaryContainer,
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Text(
+                                                        text = "Kitaplar & Kütüphane",
+                                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 20.dp)
+                                            .padding(top = 16.dp)
+                                    ) {
+                                        com.example.sharkmentor.ui.screens.GoalsScreen(
+                                            currentModule = com.example.sharkmentor.ui.screens.NavModule.LIBRARY,
+                                            isAddTopicDialogOpen = isTopicOpen,
+                                            onCloseTopicDialog = { isTopicOpen = false },
+                                            isAddResourceDialogOpen = isResOpen,
+                                            onCloseResourceDialog = { isResOpen = false }
+                                        )
+                                    }
+                                }
+                            }
                         }
                         composable(Screen.Shark.route)     { 
                             SharkScreen(
@@ -1231,53 +1366,349 @@ private fun SharkMentorBranding(
 // Bottom Navigation Bar
 // ─────────────────────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SharkMentorBottomBar(currentDestination: androidx.navigation.NavDestination?, onTabSelected: (Screen) -> Unit, dueQuestionsCount: Int = 0) {
+private fun SharkMentorBottomBar(
+    currentDestination: androidx.navigation.NavDestination?,
+    onTabSelected: (Screen) -> Unit,
+    onAiQuickAction: (SharkCoreQuickAction) -> Unit = {},
+    onAiQuickMenuVisibilityChanged: (Boolean) -> Unit = {},
+    dueQuestionsCount: Int = 0
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val haptic = LocalHapticFeedback.current
+    var showAiQuickMenu by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showAiQuickMenu) {
+        onAiQuickMenuVisibilityChanged(showAiQuickMenu)
+    }
+
+    val pulseTransition = rememberInfiniteTransition(label = "ai_core_pulse")
+    val coreGlowPulse by pulseTransition.animateFloat(
+        initialValue = 0.84f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2400, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ai_core_glow_pulse"
+    )
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface),
-        contentAlignment = Alignment.Center
+            .wrapContentHeight(),
+        contentAlignment = Alignment.BottomCenter
     ) {
-        NavigationBar(
-            containerColor = MaterialTheme.colorScheme.surface,
-            tonalElevation = 0.dp,
+        // Compact surface bar (58.dp + navigationBars inset) leaving 6.dp top lift headroom for AI Core
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = colorScheme.surface,
+            tonalElevation = 1.dp,
+            shadowElevation = 6.dp
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                HorizontalDivider(
+                    thickness = 0.75.dp,
+                    color = colorScheme.outlineVariant.copy(alpha = 0.42f)
+                )
+                Spacer(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.navigationBars)
+                        .height(58.dp)
+                )
+            }
+        }
+
+        Row(
             modifier = Modifier
                 .widthIn(max = 680.dp)
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.navigationBars)
+                .height(64.dp)
+                .padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
             Screen.bottomBarItems.forEach { screen ->
                 @Suppress("SENSELESS_COMPARISON")
                 if (screen != null && screen.icon != null) {
-                    val isSelected = currentDestination?.hierarchy?.any { it.route == screen.route } == true
-                    NavigationBarItem(
-                        selected = isSelected,
-                        onClick  = { onTabSelected(screen) },
-                        icon     = {
-                            BadgedBox(badge = {
-                                if (screen == Screen.ErrorBank && dueQuestionsCount > 0) {
-                                    Badge(
+                    val isSelected = currentDestination?.hierarchy?.any { dest ->
+                        isBottomTabSelected(screen, dest.route)
+                    } == true
+
+                    if (isCenterAiCore(screen)) {
+                        val coreScale by animateFloatAsState(
+                            targetValue = if (isSelected) 1.04f else 1.0f,
+                            animationSpec = tween(durationMillis = 200),
+                            label = "ai_core_scale"
+                        )
+                        val glowAlpha = (if (isSelected) 0.42f else 0.22f) * coreGlowPulse
+                        val coreContainerColor by animateColorAsState(
+                            targetValue = if (isSelected) colorScheme.primary else colorScheme.primaryContainer,
+                            animationSpec = tween(durationMillis = 200),
+                            label = "ai_core_bg"
+                        )
+                        val coreIconTint by animateColorAsState(
+                            targetValue = if (isSelected) colorScheme.onPrimary else colorScheme.primary,
+                            animationSpec = tween(durationMillis = 200),
+                            label = "ai_core_icon"
+                        )
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(64.dp),
+                            contentAlignment = Alignment.TopCenter
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .semantics {
+                                        selected = isSelected
+                                        role = Role.Tab
+                                    }
+                                    .combinedClickable(
+                                        onClick = { onTabSelected(screen) },
+                                        onLongClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            showAiQuickMenu = true
+                                        },
+                                        onLongClickLabel = "Hızlı AI modları"
+                                    )
+                                    .padding(top = 1.dp, bottom = 4.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.scale(coreScale)
+                                ) {
+                                    Box(
                                         modifier = Modifier
-                                            .size(6.dp)
-                                            .offset(x = (-2).dp, y = 2.dp),
-                                        containerColor = MaterialTheme.colorScheme.primary
+                                            .size(width = 62.dp, height = 42.dp)
+                                            .background(
+                                                brush = Brush.radialGradient(
+                                                    colors = listOf(
+                                                        colorScheme.primary.copy(alpha = glowAlpha),
+                                                        colorScheme.primary.copy(alpha = glowAlpha * 0.35f),
+                                                        Color.Transparent
+                                                    )
+                                                ),
+                                                shape = RoundedCornerShape(21.dp)
+                                            )
+                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = coreContainerColor,
+                                        shadowElevation = if (isSelected) 6.dp else 2.dp,
+                                        border = BorderStroke(
+                                            width = if (isSelected) 1.5.dp else 1.25.dp,
+                                            color = if (isSelected) {
+                                                colorScheme.onPrimary.copy(alpha = 0.32f)
+                                            } else {
+                                                colorScheme.primary.copy(alpha = 0.55f)
+                                            }
+                                        ),
+                                        modifier = Modifier.size(width = 50.dp, height = 36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.AutoAwesome,
+                                                contentDescription = "${screen.label} (Uzun bas: hızlı modlar)",
+                                                tint = coreIconTint,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Text(
+                                    text = screen.label,
+                                    fontSize = 10.sp,
+                                    lineHeight = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                    color = if (isSelected) {
+                                        colorScheme.primary
+                                    } else {
+                                        colorScheme.primary.copy(alpha = 0.88f)
+                                    },
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showAiQuickMenu,
+                                onDismissRequest = { showAiQuickMenu = false },
+                                offset = DpOffset(x = (-72).dp, y = (-6).dp),
+                                shape = RoundedCornerShape(18.dp),
+                                containerColor = colorScheme.surfaceContainerHigh,
+                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.32f))
+                            ) {
+                                Text(
+                                    text = "AI ÇEKİRDEK • HIZLI MOD",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.7.sp,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                                )
+                                HorizontalDivider(
+                                    thickness = 0.75.dp,
+                                    color = colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                )
+                                Screen.sharkCoreQuickActions.forEach { action ->
+                                    DropdownMenuItem(
+                                        leadingIcon = {
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = colorScheme.primaryContainer,
+                                                modifier = Modifier.size(30.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = action.icon,
+                                                        contentDescription = action.title,
+                                                        tint = colorScheme.onPrimaryContainer,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        text = {
+                                            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = action.title,
+                                                        style = MaterialTheme.typography.labelLarge,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = colorScheme.onSurface,
+                                                        maxLines = 1
+                                                    )
+                                                    Surface(
+                                                        shape = RoundedCornerShape(6.dp),
+                                                        color = colorScheme.primary.copy(alpha = 0.14f)
+                                                    ) {
+                                                        Text(
+                                                            text = action.command,
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = colorScheme.primary,
+                                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = action.subtitle,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showAiQuickMenu = false
+                                            onAiQuickAction(action)
+                                        }
                                     )
                                 }
-                            }) {
-                                Icon(screen.icon, contentDescription = screen.label, modifier = Modifier.size(24.dp))
                             }
-                        },
-                        label           = { Text(screen.label, fontSize = 10.sp) },
-                        alwaysShowLabel = true,
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor   = MaterialTheme.colorScheme.onPrimary,
-                            selectedTextColor   = MaterialTheme.colorScheme.primary,
-                            indicatorColor      = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        ),
-                    )
+                        }
+                    } else {
+                        val dueBadgeText = if (screen == Screen.ErrorBank) {
+                            formatDueBadgeCount(dueQuestionsCount)
+                        } else {
+                            null
+                        }
+                        val pillColor by animateColorAsState(
+                            targetValue = if (isSelected) colorScheme.primaryContainer else Color.Transparent,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "nav_pill_bg_${screen.route}"
+                        )
+                        val iconTint by animateColorAsState(
+                            targetValue = if (isSelected) colorScheme.onPrimaryContainer else colorScheme.onSurfaceVariant,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "nav_icon_tint_${screen.route}"
+                        )
+                        val labelColor by animateColorAsState(
+                            targetValue = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "nav_label_tint_${screen.route}"
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(58.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .semantics {
+                                    selected = isSelected
+                                    role = Role.Tab
+                                }
+                                .clickable { onTabSelected(screen) }
+                                .padding(top = 6.dp, bottom = 4.dp, start = 2.dp, end = 2.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Box(
+                                modifier = Modifier.size(width = 46.dp, height = 28.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(pillColor)
+                                )
+                                BadgedBox(
+                                    badge = {
+                                        if (dueBadgeText != null) {
+                                            Badge(
+                                                containerColor = colorScheme.error,
+                                                contentColor = colorScheme.onError,
+                                                modifier = Modifier.offset(x = 5.dp, y = (-3).dp)
+                                            ) {
+                                                Text(
+                                                    text = dueBadgeText,
+                                                    fontSize = 9.sp,
+                                                    lineHeight = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    softWrap = false
+                                                )
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = screen.icon,
+                                        contentDescription = screen.label,
+                                        tint = iconTint,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            Text(
+                                text = screen.label,
+                                fontSize = 10.sp,
+                                lineHeight = 12.sp,
+                                letterSpacing = if (screen == Screen.Dashboard) (-0.25).sp else 0.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = labelColor,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
                 }
             }
         }
