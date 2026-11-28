@@ -484,7 +484,16 @@ fun MainScreen(
                         composable(Screen.Focus.route) {
                             HomeScreen(
                                 onNavigateToSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
-                                onNavigateToPlans = { navController.navigate(Screen.Dashboard.route) { launchSingleTop = true } }
+                                onNavigateToPlans = { navController.navigate(Screen.Dashboard.route) { launchSingleTop = true } },
+                                onNavigateToRoute = { targetRoute ->
+                                    runCatching {
+                                        navController.navigate(targetRoute) { launchSingleTop = true }
+                                    }
+                                },
+                                onLaunchSharkAiWithPrompt = { prompt ->
+                                    PendingAiPromptBus.pendingPrompt.value = prompt
+                                    navController.navigate(Screen.Shark.route) { launchSingleTop = true }
+                                }
                             )
                         }
                         composable(Screen.Dashboard.route)     { PlansScreen(onNavigateToSchedule = { navController.navigate(Screen.Schedule.route) { launchSingleTop = true } }) }

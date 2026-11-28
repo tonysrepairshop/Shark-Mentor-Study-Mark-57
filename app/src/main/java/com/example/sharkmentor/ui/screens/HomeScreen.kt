@@ -177,9 +177,11 @@ fun SharkMentorBrandTitle(modifier: Modifier = Modifier) {
 fun HomeScreen(
     modifier           : Modifier           = Modifier,
     viewModel          : TimerViewModel     = viewModel(),
-    analyticsViewModel : AnalyticsViewModel = viewModel(),
-    onNavigateToSharkAi: () -> Unit         = {},
-    onNavigateToPlans  : () -> Unit         = {}
+    analyticsViewModel       : AnalyticsViewModel = viewModel(),
+    onNavigateToSharkAi      : () -> Unit         = {},
+    onNavigateToPlans        : () -> Unit         = {},
+    onNavigateToRoute        : (String) -> Unit   = {},
+    onLaunchSharkAiWithPrompt: (String) -> Unit   = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -188,6 +190,7 @@ fun HomeScreen(
         CoachingEngine.ensureInitialized(context)
         CoachingEngine.refreshTargetAndLedgerAsync(context)
         MusicPlayerHub.ensureInitialized(context)
+        com.example.sharkmentor.core.ai.SharkTokenQuotaManager.ensureLoaded(context)
     }
 
     DisposableEffect(lifecycleOwner, context) {
@@ -268,6 +271,78 @@ fun HomeScreen(
             todayCompletedMinutes = todayDbMinutes ?: 0,
             activeRunningSeconds = activeRunningSeconds,
             targetMinutes = todayTargetMinutes
+        )
+    }
+
+    // Mark 76 Study OS Dashboard live Room streams & dual-mode landing tab
+    val homeDb = remember(context) { SharkMentorDatabase.getDatabase(context) }
+    val dueErrorCount by remember(homeDb) { homeDb.errorQuestionDao().getDueCountFlow() }
+        .collectAsStateWithLifecycle(initialValue = 0)
+    val allErrorQuestions by remember(homeDb) { homeDb.errorQuestionDao().getAllQuestions() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val allNotes by remember(homeDb) { homeDb.noteDao().getAllNotesFlow() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val allResources by remember(homeDb) { homeDb.goalsDao().getAllResourcesFlow() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val allStudyTasks by remember(homeDb) { homeDb.studyPlanDao().observeAllTasks() }
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val latestNetProjection by remember(homeDb) { homeDb.netProjectionDao().getLatestProjection() }
+        .collectAsStateWithLifecycle(initialValue = null)
+    val homeUserPrefs = remember(context) { com.example.sharkmentor.data.local.preferences.UserPreferences.getInstance(context) }
+    val syncedStudentName by homeUserPrefs.studentNameFlow.collectAsStateWithLifecycle()
+    val homeQuotaSnapshot by com.example.sharkmentor.core.ai.SharkTokenQuotaManager.snapshot.collectAsStateWithLifecycle()
+
+    val isTimerActiveNow = timerState.timerPhase == TimerPhase.FOCUSING ||
+        timerState.timerPhase == TimerPhase.PAUSED ||
+        timerState.timerPhase == TimerPhase.MANDATORY_BREAK
+    var landingTab by rememberSaveable {
+        mutableStateOf(
+            if (isTimerActiveNow) com.example.sharkmentor.core.dashboard.HomeLandingTab.FOCUS_DESK
+            else com.example.sharkmentor.core.dashboard.HomeLandingTab.DASHBOARD
+        )
+    }
+    var prevTimerPhase by remember { mutableStateOf(timerState.timerPhase) }
+    LaunchedEffect(timerState.timerPhase) {
+        if (prevTimerPhase == TimerPhase.IDLE && timerState.timerPhase == TimerPhase.FOCUSING) {
+            landingTab = com.example.sharkmentor.core.dashboard.HomeLandingTab.FOCUS_DESK
+        }
+        prevTimerPhase = timerState.timerPhase
+    }
+
+    val todayDayIndex = remember { java.time.LocalDate.now().dayOfWeek.value - 1 }
+    val todayTasks = remember(allStudyTasks, todayDayIndex) {
+        allStudyTasks.filter { it.dayIndex == todayDayIndex }
+    }
+    val currentHourNow = remember { java.time.LocalTime.now().hour }
+    val dashboardSnapshot = remember(
+        currentHourNow,
+        syncedStudentName,
+        homeQuotaSnapshot.isUnlimitedUnlocked,
+        dailyGoalStatus.workedMinutes,
+        dailyGoalStatus.targetMinutes,
+        streakState.streakCount,
+        streakState.streakGoalDays,
+        dueErrorCount,
+        allErrorQuestions.size,
+        allNotes,
+        allResources,
+        todayTasks,
+        latestNetProjection
+    ) {
+        com.example.sharkmentor.core.dashboard.HomeDashboardEngine.buildSnapshot(
+            hour = currentHourNow,
+            studentName = syncedStudentName,
+            isJarvisActive = homeQuotaSnapshot.isUnlimitedUnlocked,
+            todayFocusMinutes = dailyGoalStatus.workedMinutes,
+            todayTargetMinutes = dailyGoalStatus.targetMinutes,
+            streakDays = streakState.streakCount,
+            streakGoalDays = streakState.streakGoalDays,
+            dueErrorCount = dueErrorCount,
+            totalErrorCount = allErrorQuestions.size,
+            notes = allNotes,
+            resources = allResources,
+            todayTasks = todayTasks,
+            netProjection = latestNetProjection
         )
     }
 
@@ -514,6 +589,43 @@ fun HomeScreen(
                         )
                     }
 
+                    val activeTimerFormatted = if (isTimerActiveNow) {
+                        TimeUtils.formatAdaptiveTime(timerState.displayMillis)
+                    } else ""
+
+                    // Mark 76 Dual-Mode Switcher: Study OS Dashboard ("Genel Bakış") | Focus Desk ("Odak Masası")
+                    com.example.sharkmentor.ui.components.HomeLandingTabSwitcher(
+                        activeTab = landingTab,
+                        isTimerRunning = isTimerActiveNow,
+                        activeTimerLabel = activeTimerFormatted,
+                        onSelectTab = { landingTab = it }
+                    )
+
+                    if (landingTab == com.example.sharkmentor.core.dashboard.HomeLandingTab.DASHBOARD) {
+                        com.example.sharkmentor.ui.components.HomeStudyOsDashboard(
+                            snapshot = dashboardSnapshot,
+                            isTimerRunning = isTimerActiveNow,
+                            activeTimerLabel = activeTimerFormatted,
+                            activeTimerSubject = timerState.activeSubject,
+                            musicPlayerEnabled = musicPlayerEnabled,
+                            isMusicPlaying = musicPlaybackState.isPlaying,
+                            onStartOrOpenFocus = {
+                                landingTab = com.example.sharkmentor.core.dashboard.HomeLandingTab.FOCUS_DESK
+                            },
+                            onEditDailyGoal = { showDailyGoalDialog = true },
+                            onOpenStreakDialog = { showStreakGoalDialog = true },
+                            onOpenMusicDesk = { MusicPlayerHub.setHomePanelOpen(true) },
+                            onLaunchSharkAi = onNavigateToSharkAi,
+                            onLaunchSharkAiWithPrompt = onLaunchSharkAiWithPrompt,
+                            onNavigateToRoute = { targetRoute ->
+                                if (targetRoute == com.example.sharkmentor.ui.navigation.Screen.Dashboard.route) {
+                                    onNavigateToPlans()
+                                } else {
+                                    onNavigateToRoute(targetRoute)
+                                }
+                            }
+                        )
+                    } else {
                     // Compact Duolingo-style Water Streak & Goal Challenge Strip (7 / 14 / 30 / 50 gün)
                     WaterStreakGoalStrip(
                         streakState = streakState,
@@ -715,6 +827,7 @@ fun HomeScreen(
                         dailyScore = dailyScore,
                         onRefreshScore = { analyticsViewModel.refreshDailyScore() }
                     )
+                    }
                 }
             }
         }
