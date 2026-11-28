@@ -2,6 +2,8 @@ package com.example.sharkmentor.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -130,7 +132,9 @@ import com.example.sharkmentor.ui.coaching.DailyGoalConfigDialog
 import com.example.sharkmentor.ui.coaching.DuolingoCoachingPathView
 import com.example.sharkmentor.ui.coaching.FocusTopicLaunchDialog
 import com.example.sharkmentor.ui.coaching.StudyModeHeaderSwitcher
+import com.example.sharkmentor.ui.components.StudioQuickAccessStrip
 import com.example.sharkmentor.ui.components.ThemedMusicPlayerPage
+import com.example.sharkmentor.ui.components.shouldShowStudioQuickAccessStrip
 import com.example.sharkmentor.ui.theme.SharkMentorTheme
 import com.example.sharkmentor.ui.viewmodel.AnalyticsViewModel
 import com.example.sharkmentor.ui.viewmodel.TimerViewModel
@@ -175,11 +179,13 @@ fun SharkMentorBrandTitle(modifier: Modifier = Modifier) {
 
 @Composable
 fun HomeScreen(
-    modifier           : Modifier           = Modifier,
-    viewModel          : TimerViewModel     = viewModel(),
-    analyticsViewModel : AnalyticsViewModel = viewModel(),
-    onNavigateToSharkAi: () -> Unit         = {},
-    onNavigateToPlans  : () -> Unit         = {}
+    modifier                 : Modifier           = Modifier,
+    viewModel                : TimerViewModel     = viewModel(),
+    analyticsViewModel       : AnalyticsViewModel = viewModel(),
+    onNavigateToSharkAi      : () -> Unit         = {},
+    onNavigateToPlans        : () -> Unit         = {},
+    onNavigateToRoute        : (String) -> Unit   = {},
+    onLaunchSharkAiWithPrompt: (String) -> Unit   = {}
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -519,6 +525,18 @@ fun HomeScreen(
                         streakState = streakState,
                         onClick = { showStreakGoalDialog = true }
                     )
+
+                    // Compact "Shark Araçları" horizontal discovery strip (~68dp), hidden while actively focusing
+                    AnimatedVisibility(
+                        visible = shouldShowStudioQuickAccessStrip(timerState.timerPhase),
+                        enter = fadeIn(tween(220)) + expandVertically(expandFrom = Alignment.Top),
+                        exit = fadeOut(tween(180)) + shrinkVertically(shrinkTowards = Alignment.Top)
+                    ) {
+                        StudioQuickAccessStrip(
+                            onNavigateToRoute = onNavigateToRoute,
+                            onLaunchSharkAiWithPrompt = onLaunchSharkAiWithPrompt
+                        )
+                    }
 
                     val isBreakActive by SessionManager.isBreakActive.collectAsStateWithLifecycle()
 

@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 75.9 APK
+name: Build SharkMentor Mark 76.3 Studio APK
 
 on:
   push:
@@ -22,6 +22,7 @@ on:
       - mark-73.5
       - mark-75
       - mark-75.9
+      - mark-76.3-studio-strip
   workflow_dispatch:
 
 permissions:
@@ -275,7 +276,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark75.9-debug-apk
+          name: SharkMentor-Mark76.3-studio-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -284,8 +285,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark75.9-debug.apk
-          gh release delete mark75.9-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark75.9-apk SharkMentor-Mark75.9-debug.apk \
-            --title "Shark Mentor Study Mark 75.9 (Debug APK)" \
-            --notes "Mark 75.9: Çoklu dinamik kütüphane kitap filtreleme motoru (Durum + kütüphanedeki dersler + kitap türleri), kalıcı kilitli & otomatik 2. geçiş garantili /detayli görsel SVG fonksiyon/geometri çözücü, holografik J.A.R.V.I.S. açılış HUD'u (saat, hava durumu, akıllı öneri, doğrudan yönlendirmeler) + 'efendim' yapay zeka hitap modu + ULTRON geri alma anti-kodu, ve doğrudan düzenlenebilir hibrit modüler Kontrol Paneli."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark76.3-studio-debug.apk
+          gh release delete mark76.3-studio-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark76.3-studio-apk SharkMentor-Mark76.3-studio-debug.apk \
+            --title "Shark Mentor Study Mark 76.3 Studio (Debug APK)" \
+            --notes "Mark 76.3: Klasik Odak Masası korunarak Water Streak altına eklenen yatay 'Shark Araçları' keşif şeridi (/detayli Grafikli Çöz, /simulasyon Simülasyon Lab, FSRS canlı tekrar sayılı Hata Bankası, PDF & Kement AI, Kitaplarım, Net Sihirbazı, PACE/KEEP, Zen Odası), çalışırken (TimerPhase.FOCUSING) otomatik gizlenme ve tüm modülleri kategorili 2 sütunlu vitrinde sunan 'Tümünü Gör' ModalBottomSheet."
