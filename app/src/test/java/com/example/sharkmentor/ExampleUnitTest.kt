@@ -19,7 +19,7 @@ class ExampleUnitTest {
     fun bottomBarItems_containsNoNullElements() {
         val items = Screen.bottomBarItems
         assertNotNull(items)
-        assertEquals(5, items.size)
+        assertEquals(6, items.size)
         items.forEach { item ->
             assertNotNull("Bottom bar item should not be null", item)
             assertNotNull("Screen icon should not be null", item.icon)
