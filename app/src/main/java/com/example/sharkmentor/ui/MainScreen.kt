@@ -240,6 +240,12 @@ fun MainScreen(
     var showFirstTimeTutorial by remember {
         mutableStateOf(com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.shouldShowTutorial(context))
     }
+    val tutorialReplayCount by com.example.sharkmentor.ui.components.FirstTimeTutorialPrefs.replayTrigger.collectAsStateWithLifecycle()
+    LaunchedEffect(tutorialReplayCount) {
+        if (tutorialReplayCount > 0) {
+            showFirstTimeTutorial = true
+        }
+    }
     val errorBankViewModel: ErrorBankViewModel = viewModel()
     val dueQuestionsCount by errorBankViewModel.dueQuestionsCount.collectAsStateWithLifecycle(initialValue = 0)
     val sundayCheckInRequested by com.example.sharkmentor.core.coaching.PlanReadinessNavBus.openSundayCheckInRequested.collectAsStateWithLifecycle()
@@ -252,6 +258,7 @@ fun MainScreen(
     }
     val primaryTabRoutes = remember {
         setOf(
+            Screen.DashboardHome.route,
             Screen.Focus.route,
             Screen.Dashboard.route,
             Screen.Notes.route,
@@ -304,6 +311,7 @@ fun MainScreen(
                     val isPaceKeep = currentDestination?.route == Screen.PaceKeep.route
                     val topBarRoutes = remember {
                         setOf(
+                            Screen.DashboardHome.route,
                             Screen.Focus.route,
                             Screen.Dashboard.route,
                             Screen.Notes.route,
@@ -357,7 +365,7 @@ fun MainScreen(
                         topBarSettings.isModuleVisible(TopBarModule.MUSIC) &&
                         currentRoute != null &&
                         currentRoute !in excludedMusicRoutes
-                    val isOnHomeTab = currentRoute == Screen.Focus.route
+                    val isOnHomeTab = currentRoute == Screen.DashboardHome.route || currentRoute == Screen.Focus.route
                     val isMusicButtonActive = if (isOnHomeTab) isHomeMusicPanelOpen else isFloatingMiniOpen
                     val onToggleMusicUi: () -> Unit = {
                         if (isOnHomeTab) {
@@ -476,15 +484,13 @@ fun MainScreen(
                             ) {
                             NavHost(
                                 navController    = navController,
-                                startDestination = Screen.Focus.route,
+                                startDestination = Screen.DashboardHome.route,
                                 modifier         = Modifier.fillMaxSize(),
                                     enterTransition  = { fadeIn() },
                                     exitTransition   = { fadeOut() },
                                 ) {
-                        composable(Screen.Focus.route) {
-                            HomeScreen(
-                                onNavigateToSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
-                                onNavigateToPlans = { navController.navigate(Screen.Dashboard.route) { launchSingleTop = true } },
+                        composable(Screen.DashboardHome.route) {
+                            com.example.sharkmentor.ui.screens.DashboardScreen(
                                 onNavigateToRoute = { targetRoute ->
                                     runCatching {
                                         navController.navigate(targetRoute) { launchSingleTop = true }
@@ -494,6 +500,12 @@ fun MainScreen(
                                     PendingAiPromptBus.pendingPrompt.value = prompt
                                     navController.navigate(Screen.Shark.route) { launchSingleTop = true }
                                 }
+                            )
+                        }
+                        composable(Screen.Focus.route) {
+                            HomeScreen(
+                                onNavigateToSharkAi = { navController.navigate(Screen.Shark.route) { launchSingleTop = true } },
+                                onNavigateToPlans = { navController.navigate(Screen.Dashboard.route) { launchSingleTop = true } }
                             )
                         }
                         composable(Screen.Dashboard.route)     { PlansScreen(onNavigateToSchedule = { navController.navigate(Screen.Schedule.route) { launchSingleTop = true } }) }
@@ -693,7 +705,7 @@ fun MainScreen(
                                             com.example.sharkmentor.service.sync.SyncWorker.enqueueForceFullSync(context)
                                         }
                                     }
-                                    navController.navigate(Screen.Focus.route) {
+                                    navController.navigate(Screen.DashboardHome.route) {
                                         popUpTo(0) { inclusive = true }
                                         launchSingleTop = true
                                     }
@@ -809,7 +821,17 @@ fun MainScreen(
 
                 if (showFirstTimeTutorial) {
                     com.example.sharkmentor.ui.components.FirstTimeTutorialOverlay(
-                        onDismiss = { showFirstTimeTutorial = false }
+                        onDismiss = { showFirstTimeTutorial = false },
+                        onNavigate = { targetRoute ->
+                            if (currentDestination?.route != targetRoute) {
+                                runCatching {
+                                    navController.navigate(targetRoute) { launchSingleTop = true }
+                                }
+                            }
+                        },
+                        onLaunchAiPrompt = { prompt ->
+                            PendingAiPromptBus.pendingPrompt.value = prompt
+                        }
                     )
                 }
 
@@ -889,7 +911,8 @@ fun MainScreen(
                         dueQuestionsCount   = dueQuestionsCount,
                         onToggleMusicPlayer = if (drawerMusicEnabled) {
                             {
-                                if (currentDestination?.route == Screen.Focus.route) {
+                                val r = currentDestination?.route
+                                if (r == Screen.DashboardHome.route || r == Screen.Focus.route) {
                                     MusicPlayerHub.toggleHomePanel()
                                 } else {
                                     MusicPlayerHub.toggleFloatingMini()
@@ -1274,10 +1297,18 @@ private fun SharkMentorBottomBar(currentDestination: androidx.navigation.NavDest
                                     )
                                 }
                             }) {
-                                Icon(screen.icon, contentDescription = screen.label, modifier = Modifier.size(24.dp))
+                                Icon(screen.icon, contentDescription = screen.label, modifier = Modifier.size(22.dp))
                             }
                         },
-                        label           = { Text(screen.label, fontSize = 10.sp) },
+                        label           = {
+                            Text(
+                                text = screen.label,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         alwaysShowLabel = true,
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor   = MaterialTheme.colorScheme.onPrimary,

@@ -29,6 +29,13 @@ sealed class Screen(
     val label: String,
     val icon: ImageVector,
 ) {
+    /** Full-page customizable Study OS Dashboard landing screen. */
+    data object DashboardHome : Screen(
+        route  = "dashboard_home",
+        label  = "Panel",
+        icon   = Icons.Default.Dashboard,
+    )
+
     /** Dashboard Hub (PlansScreen) */
     data object Dashboard : Screen(
         route  = "plans",
@@ -53,8 +60,8 @@ sealed class Screen(
     /** Focus analytics and productivity metrics. */
     data object Shark : Screen(
         route  = "analytics",
-        label  = "SharkAI",
-        icon   = Icons.Default.AutoGraph, // or Psychology if preferred
+        label  = "Shark",
+        icon   = Icons.Default.AutoGraph,
     )
 
     /** Chronological focus-session history log. */
@@ -73,7 +80,7 @@ sealed class Screen(
     /** Hata Kumbarası / Smart Error Bank */
     data object ErrorBank : Screen(
         route  = "error_bank",
-        label  = "Antrenmanlar",
+        label  = "Hata",
         icon   = Icons.Default.FitnessCenter,
     )
 
@@ -130,7 +137,7 @@ sealed class Screen(
 
     data object Notes : Screen(
         route = "notes_screen",
-        label = "SharkStudio",
+        label = "Stüdyo",
         icon = Icons.Default.Draw,
     )
 
@@ -143,6 +150,6 @@ sealed class Screen(
     companion object {
         /** Ordered list used to build the bottom navigation bar. */
         val bottomBarItems: List<Screen>
-            get() = listOf(Focus, Dashboard, Notes, Shark, ErrorBank)
+            get() = listOf(DashboardHome, Focus, Dashboard, Notes, Shark, ErrorBank)
     }
 }

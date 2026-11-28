@@ -478,6 +478,11 @@ fun NoteSettingsScreen(
 
                     HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.4f))
 
+                    val hwProfile by com.example.sharkmentor.ui.screens.notes.drawing.HandwritingCalibrationStore.profile.collectAsStateWithLifecycle()
+                    LaunchedEffect(context) {
+                        com.example.sharkmentor.ui.screens.notes.drawing.HandwritingCalibrationStore.ensureLoaded(context)
+                    }
+
                     Surface(
                         onClick = { showStylusCalibrationDialog = true },
                         shape = RoundedCornerShape(12.dp),
@@ -494,7 +499,8 @@ fun NoteSettingsScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.weight(1f)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Draw,
@@ -504,19 +510,26 @@ fun NoteSettingsScreen(
                                 )
                                 Column {
                                     Text(
-                                        text = "Kalem Test & Senkronizasyon (SHARK)",
+                                        text = "Kalem & El Yazısı Senkronizasyonu",
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = if (stylusCalibrated) "Kalem basınç ve tuş profili senkronize" else "'SHARK' yazarak kalemini test edip senkronize et",
+                                        text = when {
+                                            hwProfile.isCalibrated ->
+                                                "Kalem ve el yazısı kalibre (${hwProfile.sampleCount} çizgi) • Kement → Metne Çevir hazır"
+                                            stylusCalibrated ->
+                                                "Kalem senkronize • El yazını eğitmek için 3 adımı tamamla"
+                                            else ->
+                                                "3 adımda kalemini test et ve el yazını metne çevirme için eğit"
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
-                            if (stylusCalibrated) {
+                            if (stylusCalibrated || hwProfile.isCalibrated) {
                                 Icon(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = "Senkronize",

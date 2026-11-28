@@ -1520,7 +1520,7 @@ class DrawingController(
      */
     fun eraseStrokesByScribble(
         scribblePoints: List<DrawingPoint>,
-        hitPadding: Float = 16f
+        hitPadding: Float = 12f
     ): Int {
         if (strokes.isEmpty() || scribblePoints.size < 2) return 0
 
@@ -1557,6 +1557,74 @@ class DrawingController(
         selectedStrokeIds = selectedStrokeIds - removedIds
         updateStrokesAndNotify(remaining)
         return removedIds.size
+    }
+
+    /**
+     * Returns the currently Lasso-selected strokes in z-order.
+     */
+    fun getSelectedStrokes(): List<DrawingStroke> {
+        if (selectedStrokeIds.isEmpty()) return emptyList()
+        return strokes.filter { it.id in selectedStrokeIds }
+    }
+
+    /**
+     * Replaces the currently Lasso-selected handwritten strokes with a clean editable [DrawingTextBox]
+     * anchored at the exact normalized bounding box of the handwriting, while pushing an Undo snapshot.
+     */
+    fun replaceSelectedStrokesWithTextBox(
+        recognizedText: String,
+        canvasWidth: Float,
+        canvasHeight: Float
+    ): DrawingTextBox? {
+        val cleanText = recognizedText.trim()
+        if (cleanText.isBlank() || selectedStrokeIds.isEmpty()) return null
+        val selected = getSelectedStrokes()
+        if (selected.isEmpty()) return null
+
+        val safeW = canvasWidth.coerceAtLeast(1f)
+        val safeH = canvasHeight.coerceAtLeast(1f)
+
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        selected.forEach { st ->
+            val sx = if (st.canvasWidth > 1f) safeW / st.canvasWidth else 1f
+            val sy = if (st.canvasHeight > 1f) safeH / st.canvasHeight else 1f
+            st.points.forEach { p ->
+                val px = p.x * sx
+                val py = p.y * sy
+                if (px < minX) minX = px
+                if (py < minY) minY = py
+                if (px > maxX) maxX = px
+                if (py > maxY) maxY = py
+            }
+        }
+
+        val xFrac = if (minX < maxX) (minX / safeW).coerceIn(0.02f, 0.72f) else 0.12f
+        val yFrac = if (minY < maxY) (minY / safeH).coerceIn(0.02f, 0.82f) else 0.16f
+        val wFrac = if (minX < maxX) (((maxX - minX) / safeW) + 0.12f).coerceIn(0.32f, 0.88f) else 0.60f
+
+        pushUndoSnapshot()
+        val remaining = strokes.filterNot { it.id in selectedStrokeIds }
+        clearSelection()
+        updateStrokesAndNotify(remaining)
+
+        val clampedWidth = wFrac.coerceIn(0.24f, 0.92f)
+        val maxXFrac = (0.96f - clampedWidth).coerceAtLeast(0.02f)
+        val box = DrawingTextBox(
+            xFraction = xFrac.coerceIn(0.02f, maxXFrac),
+            yFraction = yFrac.coerceIn(0.02f, 0.84f),
+            widthFraction = clampedWidth,
+            taggedContent = cleanText,
+            baseFontName = textBoxFontOption.name,
+            baseFontSizeSp = textBoxFontSizeSp,
+            baseTextColorArgb = selected.firstOrNull()?.colorArgb ?: textBoxTextColor?.toArgb()
+        )
+        val updatedBoxes = textBoxes + box
+        textBoxes = updatedBoxes
+        onTextBoxesChanged(updatedBoxes)
+        return box
     }
 
     // ── Lasso Selection & Manipulation ───────────────────────────────────────
@@ -1791,24 +1859,31 @@ class DrawingController(
 }
 
 /**
- * Heuristic detector for rapid back-and-forth zigzag / scribble-to-erase gestures.
- * Triggers when at least [MIN_SHARP_REVERSALS] sharp turns (>= 110 degrees) happen
- * inside a compact bounding box within a short gesture duration.
+ * Recognizes deliberate Scribble-to-Erase gestures while strictly protecting cursive and
+ * connected handwriting (e.g. "Merhaba", "mmmm", "wwww", "888") from false erasures.
+ *
+ * Requires ALL of:
+ * 1. Compact high-density zigzag (`totalLength / diagonal >= 2.85`, `netDisplacement / totalLength <= 0.45`)
+ * 2. At least 4 sharp whip-back reversals (>= 132 degrees)
+ * 3. True spatial back-and-forth retracing over the SAME region (`>= 3` consecutive leg pairs overlapping
+ *    on the stroke's dominant axis — normal left-to-right handwriting advances forward instead of overlapping).
  */
 object ScribbleDetector {
-    private const val MIN_POINTS = 6
-    private const val MIN_DURATION_MS = 50L
-    private const val MAX_DURATION_MS = 2600L
-    private const val MIN_DIAGONAL_PX = 24f
-    private const val MIN_PATH_LENGTH_PX = 75f
-    private const val MAX_WIDTH_PX = 460f
-    private const val MAX_HEIGHT_PX = 380f
-    private const val MIN_LENGTH_TO_DIAG_RATIO = 2.0f
-    private const val RDP_EPSILON_PX = 5.5f
-    private const val MIN_SEGMENT_LEN_PX = 10f
-    // cos(110°) = -0.34202014; angle >= 110° means dot product <= SHARP_TURN_COS_THRESHOLD
-    private const val SHARP_TURN_COS_THRESHOLD = -0.342f
-    private const val MIN_SHARP_REVERSALS = 3
+    private const val MIN_POINTS = 8
+    private const val MIN_DURATION_MS = 70L
+    private const val MAX_DURATION_MS = 2400L
+    private const val MIN_DIAGONAL_PX = 28f
+    private const val MIN_PATH_LENGTH_PX = 120f
+    private const val MAX_WIDTH_PX = 440f
+    private const val MAX_HEIGHT_PX = 340f
+    private const val MIN_LENGTH_TO_DIAG_RATIO = 2.85f
+    private const val MAX_NET_DISP_TO_LENGTH_RATIO = 0.45f
+    private const val RDP_EPSILON_PX = 6.5f
+    private const val MIN_SEGMENT_LEN_PX = 16f
+    // cos(132°) = -0.66913; angle >= 132° means dot product <= SHARP_TURN_COS_THRESHOLD
+    private const val SHARP_TURN_COS_THRESHOLD = -0.669f
+    private const val MIN_SHARP_REVERSALS = 4
+    private const val MIN_OVERLAPPING_RETRACE_PAIRS = 3
 
     fun isScribbleGesture(
         points: List<DrawingPoint>,
@@ -1842,6 +1917,10 @@ object ScribbleDetector {
         if (width > MAX_WIDTH_PX || height > MAX_HEIGHT_PX) return false
         if ((totalLength / diagonal) < MIN_LENGTH_TO_DIAG_RATIO) return false
 
+        // Reject forward-marching handwriting words (start and end far apart relative to path length)
+        val netDisp = points.first().distanceTo(points.last())
+        if ((netDisp / totalLength) > MAX_NET_DISP_TO_LENGTH_RATIO) return false
+
         val simplified = simplifyDouglasPeucker(points, RDP_EPSILON_PX)
         val filtered = ArrayList<DrawingPoint>(simplified.size)
         for (pt in simplified) {
@@ -1850,9 +1929,12 @@ object ScribbleDetector {
                 filtered.add(pt)
             }
         }
-        if (filtered.size < 4) return false
+        if (filtered.size < 6) return false
 
+        val useHorizontalAxis = width >= height
         var sharpReversals = 0
+        var overlappingRetracePairs = 0
+
         for (i in 1 until filtered.lastIndex) {
             val a = filtered[i - 1]
             val b = filtered[i]
@@ -1870,13 +1952,25 @@ object ScribbleDetector {
             val dot = ((v1x * v2x) + (v1y * v2y)) / (len1 * len2)
             if (dot <= SHARP_TURN_COS_THRESHOLD) {
                 sharpReversals++
-                if (sharpReversals >= MIN_SHARP_REVERSALS) {
-                    return true
+
+                // Verify the two legs actually backtrack over the SAME spatial span on the dominant axis
+                val leg1Min = if (useHorizontalAxis) minOf(a.x, b.x) else minOf(a.y, b.y)
+                val leg1Max = if (useHorizontalAxis) maxOf(a.x, b.x) else maxOf(a.y, b.y)
+                val leg2Min = if (useHorizontalAxis) minOf(b.x, c.x) else minOf(b.y, c.y)
+                val leg2Max = if (useHorizontalAxis) maxOf(b.x, c.x) else maxOf(b.y, c.y)
+
+                val span1 = (leg1Max - leg1Min).coerceAtLeast(1f)
+                val span2 = (leg2Max - leg2Min).coerceAtLeast(1f)
+                val overlap = (minOf(leg1Max, leg2Max) - maxOf(leg1Min, leg2Min)).coerceAtLeast(0f)
+                val overlapRatio = overlap / minOf(span1, span2)
+                if (overlapRatio >= 0.35f) {
+                    overlappingRetracePairs++
                 }
             }
         }
 
-        return false
+        return sharpReversals >= MIN_SHARP_REVERSALS &&
+            overlappingRetracePairs >= MIN_OVERLAPPING_RETRACE_PAIRS
     }
 
     private fun simplifyDouglasPeucker(

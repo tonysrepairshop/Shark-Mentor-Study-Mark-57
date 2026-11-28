@@ -1,4 +1,4 @@
-name: Build SharkMentor Mark 76 APK
+name: Build SharkMentor Mark 77 APK
 
 on:
   push:
@@ -23,6 +23,7 @@ on:
       - mark-75
       - mark-75.9
       - mark-76
+      - mark-77
   workflow_dispatch:
 
 permissions:
@@ -276,7 +277,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SharkMentor-Mark76-debug-apk
+          name: SharkMentor-Mark77-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30
@@ -285,8 +286,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark76-debug.apk
-          gh release delete mark76-apk --yes --cleanup-tag 2>/dev/null || true
-          gh release create mark76-apk SharkMentor-Mark76-debug.apk \
-            --title "Shark Mentor Study Mark 76 (Debug APK)" \
-            --notes "Mark 76: Study OS Dashboard açılış ekranı (Genel Bakış | Odak Masası geçişi, canlı odak hedef halkası, SharkAI /detayli & /simulasyon & /plan vitrin kartı, canlı 2x2 Bento kartları [FSRS Hata Bankası, SharkStudio PDF/Not, Kütüphane İlerlemesi, Günün Planı/Net], soğuk başlangıç keşif vitrini ve hızlı araçlar şeridi) + Mark 75.9'un tüm özellikleri."
+          cp app/build/outputs/apk/debug/app-debug.apk SharkMentor-Mark77-debug.apk
+          gh release delete mark77-apk --yes --cleanup-tag 2>/dev/null || true
+          gh release create mark77-apk SharkMentor-Mark77-debug.apk \
+            --title "Shark Mentor Study Mark 77 (Debug APK)" \
+            --notes "Mark 77: Tam sayfa boyutlandırılabilir & sıralanabilir Dashboard (Panel sekmesi, gömülü canlı Kronometre/Sayaç widget'ı, sol yan müzik oynatıcı bölünmüş ekran, tüm araçlar kataloğu), ayrı Masa sekmesi, sade alt bar (Panel/Masa/Planlar/Stüdyo/Shark/Hata), Mark 76.1 görsel tanıtım turu, akıllı şekil düzeltici ve karalama silgi düzeltmesi, ve 3 adımlı kişisel kalibrasyonlu El Yazısı → Metin dönüştürme motoru."

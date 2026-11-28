@@ -352,6 +352,45 @@ fun DrawingCanvasOverlay(
         }
     }
 
+    var isConvertingHandwriting by remember { mutableStateOf(false) }
+
+    fun triggerLassoHandwritingToText() {
+        if (isConvertingHandwriting || !controller.hasSelection) return
+        val selectedStrokes = controller.getSelectedStrokes()
+        if (selectedStrokes.isEmpty()) {
+            feedbackMessage = "Metne çevirmek için önce el yazısını kementle seç"
+            return
+        }
+        val cw = canvasSize.width.toFloat().coerceAtLeast(1f)
+        val ch = canvasSize.height.toFloat().coerceAtLeast(1f)
+        coroutineScope.launch {
+            isConvertingHandwriting = true
+            feedbackMessage = "El yazısı metne çevriliyor..."
+            try {
+                when (val res = HandwritingRecognitionEngine.recognizeStrokesToText(context, selectedStrokes, cw, ch)) {
+                    is HandwritingRecognitionResult.Success -> {
+                        val inserted = controller.replaceSelectedStrokesWithTextBox(res.text, cw, ch)
+                        if (inserted != null) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            feedbackMessage = if (res.usedPersonalCalibration) {
+                                "Kalibre el yazısı metne çevrildi"
+                            } else {
+                                "El yazısı metne çevrildi"
+                            }
+                        } else {
+                            feedbackMessage = "Metin kutusu yerleştirilemedi"
+                        }
+                    }
+                    is HandwritingRecognitionResult.Failure -> {
+                        feedbackMessage = res.message
+                    }
+                }
+            } finally {
+                isConvertingHandwriting = false
+            }
+        }
+    }
+
     // Listen to toolbar screenshot triggers
     LaunchedEffect(controller.screenshotRequestCounter) {
         if (controller.screenshotRequestCounter > 0) {
@@ -605,6 +644,7 @@ fun DrawingCanvasOverlay(
                 var snapAnchorPos = Offset(startX, startY)
                 var holdAnchorPos = Offset(startX, startY)
                 var holdAnchorMs = gestureStartMs
+                var lastHoldCheckedPointCount = -1
                 var lastPointerPos = Offset(startX, startY)
                 val canHoldSnap = controller.autoShapeRecognitionEnabled &&
                     effectiveTool.isPenTool &&
@@ -650,9 +690,14 @@ fun DrawingCanvasOverlay(
                         awaitPointerEvent()
                     }
                     if (event == null) {
-                        // Pointer stayed still: check if hold-to-snap threshold (~420ms) reached
+                        // Pointer stayed still: check if intentional hold-to-snap threshold (~460ms) reached
                         val nowHoldMs = SystemClock.elapsedRealtime()
-                        if (canHoldSnap && snappedBaseShape == null && (nowHoldMs - holdAnchorMs) >= 420L) {
+                        if (canHoldSnap &&
+                            snappedBaseShape == null &&
+                            inProgressPoints.size != lastHoldCheckedPointCount &&
+                            (nowHoldMs - holdAnchorMs) >= 460L
+                        ) {
+                            lastHoldCheckedPointCount = inProgressPoints.size
                             val recognized = AutoShapeRecognizer.recognize(inProgressPoints.toList())
                             if (recognized != null) {
                                 snappedBaseShape = recognized
@@ -660,9 +705,6 @@ fun DrawingCanvasOverlay(
                                 snapAnchorPos = lastPointerPos
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 feedbackMessage = "${recognized.labelTr} kilitlendi • Sürükleyerek boyutlandır"
-                            } else {
-                                // Prevent repeated futile checks while resting motionless
-                                holdAnchorMs = nowHoldMs + 10_000L
                             }
                         }
                         continue
@@ -793,10 +835,16 @@ fun DrawingCanvasOverlay(
                                     inProgressPoints.add(current)
                                     lastSampleTimeMs = nowMs
                                 }
-                                if (hypot(pos.x - holdAnchorPos.x, pos.y - holdAnchorPos.y) > 10f) {
+                                if (hypot(pos.x - holdAnchorPos.x, pos.y - holdAnchorPos.y) > 18f) {
                                     holdAnchorPos = pos
                                     holdAnchorMs = nowMs
-                                } else if (canHoldSnap && inProgressPoints.size >= 6 && (nowMs - holdAnchorMs) >= 420L) {
+                                    lastHoldCheckedPointCount = -1
+                                } else if (canHoldSnap &&
+                                    inProgressPoints.size >= 6 &&
+                                    inProgressPoints.size != lastHoldCheckedPointCount &&
+                                    (nowMs - holdAnchorMs) >= 460L
+                                ) {
+                                    lastHoldCheckedPointCount = inProgressPoints.size
                                     val recognized = AutoShapeRecognizer.recognize(inProgressPoints.toList())
                                     if (recognized != null) {
                                         snappedBaseShape = recognized
@@ -804,8 +852,6 @@ fun DrawingCanvasOverlay(
                                         snapAnchorPos = pos
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         feedbackMessage = "${recognized.labelTr} kilitlendi • Sürükleyerek boyutlandır"
-                                    } else {
-                                        holdAnchorMs = nowMs + 10_000L
                                     }
                                 }
                             }
@@ -1508,10 +1554,18 @@ fun DrawingCanvasOverlay(
                                 onClick = { triggerLassoAskAi() }
                             )
                         }
+                        if (controller.hasSelection) {
+                            LassoActionChip(
+                                label = if (isConvertingHandwriting) "Çevriliyor..." else "Metne Çevir",
+                                icon = Icons.Default.AutoFixHigh,
+                                isHighlighted = onLassoAskAi == null,
+                                onClick = { triggerLassoHandwritingToText() }
+                            )
+                        }
                         LassoActionChip(
                             label = "Kırp / SS",
                             icon = Icons.Default.Crop,
-                            isHighlighted = onLassoAskAi == null,
+                            isHighlighted = false,
                             onClick = { triggerLassoScreenshot() }
                         )
                         if (controller.hasSelection) {

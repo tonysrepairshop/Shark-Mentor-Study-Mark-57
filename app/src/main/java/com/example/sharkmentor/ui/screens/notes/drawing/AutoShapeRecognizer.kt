@@ -23,9 +23,9 @@ data class RecognizedShape(
 object AutoShapeRecognizer {
 
     private const val MIN_POINTS = 6
-    private const val MIN_DIAGONAL_PX = 52f
-    private const val MIN_PATH_LENGTH_PX = 55f
-    private const val MIN_LINE_CHORD_PX = 64f
+    private const val MIN_DIAGONAL_PX = 66f
+    private const val MIN_PATH_LENGTH_PX = 70f
+    private const val MIN_LINE_CHORD_PX = 80f
     private const val ANGLE_SNAP_DEG = 6.5
 
     fun recognize(rawPoints: List<DrawingPoint>): RecognizedShape? {
@@ -63,29 +63,49 @@ object AutoShapeRecognizer {
         tryRecognizeArrow(rawPoints, totalLength)?.let { return it }
 
         // 2. Closed-Shape Gate (Circle/Ellipse, Triangle, Rectangle/Square)
-        val first = rawPoints.first()
-        val last = rawPoints.last()
-        val closeDist = first.distanceTo(last)
-        val maxCloseGap = max(44f, diagonal * 0.32f)
+        // Trim natural start/end overshoot tails on hand-drawn loops ("O" drawn slightly past start)
+        val loopPoints = trimClosedLoopOvershoot(rawPoints, diagonal)
+        val resampled = resampleUniform(loopPoints, stepPx = (diagonal / 42f).coerceIn(5f, 12f))
+        if (resampled.size < 10) return null
+
+        var cMinX = Float.MAX_VALUE
+        var cMinY = Float.MAX_VALUE
+        var cMaxX = -Float.MAX_VALUE
+        var cMaxY = -Float.MAX_VALUE
+        var loopLength = 0f
+        for (i in resampled.indices) {
+            val p = resampled[i]
+            if (p.x < cMinX) cMinX = p.x
+            if (p.y < cMinY) cMinY = p.y
+            if (p.x > cMaxX) cMaxX = p.x
+            if (p.y > cMaxY) cMaxY = p.y
+            if (i > 0) loopLength += resampled[i - 1].distanceTo(p)
+        }
+        val cWidth = cMaxX - cMinX
+        val cHeight = cMaxY - cMinY
+        val cDiagonal = hypot(cWidth, cHeight)
+
+        val closeDist = resampled.first().distanceTo(resampled.last())
+        val maxCloseGap = max(46f, cDiagonal * 0.34f)
 
         if (closeDist > maxCloseGap) return null
-        if (width < 36f || height < 36f) return null
+        if (cWidth < 44f || cHeight < 44f) return null
 
-        val aspectRatio = max(width, height) / min(width, height).coerceAtLeast(1f)
+        val aspectRatio = max(cWidth, cHeight) / min(cWidth, cHeight).coerceAtLeast(1f)
         if (aspectRatio > 3.2f) return null
 
         // Guard against multi-loop scribbles or spirals
-        val boxPerimeter = 2f * (width + height)
-        if (totalLength > boxPerimeter * 1.65f || totalLength < diagonal * 1.9f) {
+        val boxPerimeter = 2f * (cWidth + cHeight)
+        if (loopLength > boxPerimeter * 1.55f || loopLength < cDiagonal * 1.85f) {
             return null
         }
 
-        val ellipseCandidate = evaluateEllipse(rawPoints, minX, minY, maxX, maxY)
-        val polygonCandidate = evaluatePolygon(rawPoints, minX, minY, maxX, maxY, diagonal)
+        val ellipseCandidate = evaluateEllipse(resampled, cMinX, cMinY, cMaxX, cMaxY)
+        val polygonCandidate = evaluatePolygon(resampled, cMinX, cMinY, cMaxX, cMaxY, cDiagonal)
 
         return when {
             polygonCandidate != null && ellipseCandidate != null -> {
-                if (polygonCandidate.second <= ellipseCandidate.second * 1.18f) {
+                if (polygonCandidate.second <= ellipseCandidate.second * 1.12f) {
                     polygonCandidate.first
                 } else {
                     ellipseCandidate.first
@@ -95,6 +115,73 @@ object AutoShapeRecognizer {
             ellipseCandidate != null -> ellipseCandidate.first
             else -> null
         }
+    }
+
+    /**
+     * Trims small entry/exit overshoot tails on hand-drawn closed shapes (e.g. a circle "O"
+     * whose pen passes slightly beyond its starting point) so closure and ellipse fitting stay accurate.
+     */
+    private fun trimClosedLoopOvershoot(
+        points: List<DrawingPoint>,
+        diagonal: Float
+    ): List<DrawingPoint> {
+        if (points.size < 14) return points
+        val directGap = points.first().distanceTo(points.last())
+        if (directGap <= max(28f, diagonal * 0.16f)) return points
+
+        val startLimit = (points.size * 0.22f).toInt().coerceAtLeast(1)
+        val endStart = (points.size * 0.72f).toInt().coerceAtMost(points.lastIndex - 1)
+        if (endStart <= startLimit + 4) return points
+
+        var bestDist = directGap
+        var bestI = 0
+        var bestJ = points.lastIndex
+        for (i in 0..startLimit) {
+            val pi = points[i]
+            for (j in endStart..points.lastIndex) {
+                val d = pi.distanceTo(points[j])
+                if (d < bestDist) {
+                    bestDist = d
+                    bestI = i
+                    bestJ = j
+                }
+            }
+        }
+        return if (bestDist < directGap * 0.65f && (bestJ - bestI) >= (points.size * 0.58f).toInt()) {
+            points.subList(bestI, bestJ + 1)
+        } else {
+            points
+        }
+    }
+
+    /**
+     * Resamples a polyline to uniform spacing so fast sparse strokes have full angular sector coverage.
+     */
+    private fun resampleUniform(points: List<DrawingPoint>, stepPx: Float): List<DrawingPoint> {
+        if (points.size < 2 || stepPx <= 0.5f) return points
+        val out = ArrayList<DrawingPoint>(points.size * 2)
+        out.add(points.first())
+        for (i in 1 until points.size) {
+            val a = points[i - 1]
+            val b = points[i]
+            val dist = a.distanceTo(b)
+            if (dist < 0.001f) continue
+            val steps = (dist / stepPx).toInt()
+            for (s in 1..steps) {
+                val t = (s * stepPx / dist).coerceAtMost(1f)
+                out.add(
+                    DrawingPoint(
+                        x = a.x + (b.x - a.x) * t,
+                        y = a.y + (b.y - a.y) * t,
+                        pressure = a.pressure + (b.pressure - a.pressure) * t
+                    )
+                )
+            }
+            if (out.last().distanceTo(b) > 0.5f) {
+                out.add(b)
+            }
+        }
+        return out
     }
 
     private fun tryRecognizeLine(
@@ -107,7 +194,7 @@ object AutoShapeRecognizer {
         if (chord < MIN_LINE_CHORD_PX) return null
 
         // Path length must be very close to direct chord distance (rules out arcs/letters/loops)
-        if ((totalLength / chord) > 1.14f) return null
+        if ((totalLength / chord) > 1.11f) return null
 
         var maxPerp = 0f
         var sumSqPerp = 0.0
@@ -118,8 +205,8 @@ object AutoShapeRecognizer {
         }
         val rmsPerp = sqrt(sumSqPerp / (points.size - 2).coerceAtLeast(1)).toFloat()
 
-        val maxAllowed = max(12f, chord * 0.085f)
-        val rmsAllowed = max(6f, chord * 0.045f)
+        val maxAllowed = max(11f, chord * 0.075f)
+        val rmsAllowed = max(5.5f, chord * 0.042f)
         if (maxPerp > maxAllowed || rmsPerp > rmsAllowed) return null
 
         val snappedEnd = snapEndpointAngle(start, end)
@@ -186,10 +273,10 @@ object AutoShapeRecognizer {
         val meanErr = sumAbsErr / points.size.toFloat()
         val rmsErr = sqrt(sumSqErr / points.size.toDouble()).toFloat()
 
-        if (meanErr > 0.145f || maxErr > 0.32f) return null
+        if (meanErr > 0.175f || maxErr > 0.40f) return null
 
         val ratio = w / h
-        val isCircle = ratio in 0.85f..1.18f
+        val isCircle = ratio in 0.84f..1.20f
         val (outMinX, outMinY, outMaxX, outMaxY) = if (isCircle) {
             val r = (rx + ry) * 0.5f
             listOf(cx - r, cy - r, cx + r, cy + r)

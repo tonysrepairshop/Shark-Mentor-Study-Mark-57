@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -98,9 +99,13 @@ private class StylusInterceptWindowCallback(
 }
 
 /**
- * Compact interactive "SHARK" Stylus Test & Synchronization window inside SharkStudio Settings.
- * Lets the user write "SHARK" with their stylus to calibrate natural pressure and verify
- * live Samsung S-Pen / Honor Magic-Pencil side-button hold, single-tap & double-tap hardware signals.
+ * Upgraded 3-Step Interactive Stylus & Personal Handwriting Synchronization Dialog:
+ * - Step 1/3: "SHARK" (stylus pressure + side-button test + block capital style)
+ * - Step 2/3: "Merhaba, bugün çalışıyorum." (natural Turkish lowercase & cursive rhythm)
+ * - Step 3/3: "ÇğİıÖşÜ  f(x) = x² + 5" (Turkish diacritics & math symbols)
+ *
+ * Saves both stylus pressure calibration AND the student's personal handwriting reference sheet
+ * used by [HandwritingRecognitionEngine] for accurate personal Handwriting → Text conversion.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -110,7 +115,12 @@ fun StylusCalibrationDialog(
 ) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
+    val prompts = HandwritingRecognitionHelpers.CALIBRATION_PROMPTS
 
+    var stepIndex by remember { mutableIntStateOf(0) }
+    val stepStrokesMap = remember {
+        mutableStateListOf<List<CalibStroke>>(emptyList(), emptyList(), emptyList())
+    }
     val completedStrokes = remember { mutableStateListOf<CalibStroke>() }
     val activePoints = remember { mutableStateListOf<Offset>() }
     var activeIsStylus by remember { mutableStateOf(false) }
@@ -153,11 +163,45 @@ fun StylusCalibrationDialog(
         }
     }
 
+    fun persistCurrentStepStrokes() {
+        stepStrokesMap[stepIndex] = completedStrokes.toList()
+    }
+
+    fun switchToStep(nextIdx: Int) {
+        persistCurrentStepStrokes()
+        stepIndex = nextIdx.coerceIn(0, prompts.lastIndex)
+        completedStrokes.clear()
+        completedStrokes.addAll(stepStrokesMap[stepIndex])
+        activePoints.clear()
+    }
+
+    fun finalizeCalibration() {
+        persistCurrentStepStrokes()
+        val avgPressure = if (pressureSamples > 0) pressureSum / pressureSamples else 0.55f
+        NoteDrawingPreferences.saveStylusCalibration(context, avgPressure)
+
+        val payload = prompts.mapIndexed { idx, prompt ->
+            val strokes = stepStrokesMap[idx].map { st ->
+                st.points.map { pt -> DrawingPoint(pt.x, pt.y, 1.0f) }
+            }
+            prompt.guideText to strokes
+        }
+        if (payload.any { it.second.isNotEmpty() }) {
+            HandwritingCalibrationStore.saveCalibration(context, payload)
+        }
+        onCalibrated()
+        onDismiss()
+    }
+
+    val currentPrompt = prompts[stepIndex]
+    val hasAnyStrokesAcrossSteps = completedStrokes.isNotEmpty() ||
+        activePoints.isNotEmpty() ||
+        stepStrokesMap.any { it.isNotEmpty() }
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        // Attach native Window.Callback on the Dialog's own Window so hover & KeyEvent stylus buttons work!
         val dialogView = LocalView.current
         DisposableEffect(dialogView) {
             val window = (dialogView.parent as? DialogWindowProvider)?.window
@@ -182,17 +226,21 @@ fun StylusCalibrationDialog(
                 .padding(vertical = 12.dp)
         ) {
             Column(
-                modifier = Modifier.padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp)
             ) {
+                // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Draw,
@@ -200,12 +248,22 @@ fun StylusCalibrationDialog(
                             tint = colorScheme.primary,
                             modifier = Modifier.size(20.dp)
                         )
-                        Text(
-                            text = "SharkStudio • Kalem Test & Senkron",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
-                        )
+                        Column {
+                            Text(
+                                text = "Kalem & El Yazısı Senkronizasyonu",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = currentPrompt.title,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                     IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp)) {
                         Icon(
@@ -217,35 +275,67 @@ fun StylusCalibrationDialog(
                     }
                 }
 
+                // 3-Step Selector Pills
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    prompts.forEachIndexed { idx, prompt ->
+                        val isCurrent = idx == stepIndex
+                        val isDone = (idx == stepIndex && completedStrokes.isNotEmpty()) ||
+                            (idx != stepIndex && stepStrokesMap[idx].isNotEmpty())
+                        Surface(
+                            onClick = { switchToStep(idx) },
+                            shape = RoundedCornerShape(10.dp),
+                            color = when {
+                                isCurrent -> colorScheme.primary
+                                isDone -> colorScheme.primaryContainer
+                                else -> colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = if (isDone && !isCurrent) "✓ Adım ${prompt.stepNumber}" else "Adım ${prompt.stepNumber}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when {
+                                    isCurrent -> colorScheme.onPrimary
+                                    isDone -> colorScheme.onPrimaryContainer
+                                    else -> colorScheme.onSurfaceVariant
+                                },
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 6.dp)
+                            )
+                        }
+                    }
+                }
+
                 Text(
-                    text = "Aşağıdaki kutuya kaleminle \"SHARK\" yaz ve kalem yan tuşuna basıp / çift tıklayarak Samsung S-Pen ve Honor Magic-Pencil sinyalini canlı test et.",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = currentPrompt.hint,
+                    fontSize = 11.5.sp,
                     color = colorScheme.onSurfaceVariant,
-                    lineHeight = 17.sp
+                    lineHeight = 16.sp
                 )
 
-                // Interactive "SHARK" Calibration Pad
+                // Interactive Calibration Writing Pad
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(172.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        .background(colorScheme.surfaceVariant.copy(alpha = 0.42f))
-                        .pointerInput(Unit) {
+                        .background(colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                        .pointerInput(stepIndex) {
                             awaitPointerEventScope {
                                 while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Main)
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
                                     val change = event.changes.firstOrNull() ?: continue
                                     val isStylus = change.type == PointerType.Stylus || change.type == PointerType.Eraser
                                     if (isStylus) stylusDetected = true
-                                    if (change.type == PointerType.Eraser && sideButtonStatus == "Bekleniyor") {
-                                        sideButtonStatus = "Silgi Ucu / Yan Tuş Algılandı"
-                                    }
 
                                     if (change.pressed) {
-                                        val p = change.pressure.takeIf { it > 0f } ?: 0.55f
-                                        livePressure = p.coerceIn(0f, 1.5f)
-                                        if (isStylus) {
+                                        val p = change.pressure
+                                        if (p > 0f) {
+                                            livePressure = p
                                             pressureSum += p
                                             pressureSamples += 1
                                         }
@@ -263,17 +353,29 @@ fun StylusCalibrationDialog(
                 ) {
                     if (completedStrokes.isEmpty() && activePoints.isEmpty()) {
                         Text(
-                            text = "SHARK",
-                            fontSize = 44.sp,
+                            text = currentPrompt.guideText,
+                            fontSize = if (stepIndex == 0) 42.sp else 21.sp,
                             fontWeight = FontWeight.Light,
                             fontStyle = FontStyle.Italic,
-                            letterSpacing = 6.sp,
-                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.22f)
+                            letterSpacing = if (stepIndex == 0) 6.sp else 1.2.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.28f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    } else {
+                        // Subtle top reference guide so the student sees the exact phrase while writing
+                        Text(
+                            text = currentPrompt.guideText,
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.48f),
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
                         )
                     }
 
                     val stylusStrokeColor = colorScheme.primary
-                    val touchStrokeColor = colorScheme.onSurface.copy(alpha = 0.72f)
+                    val touchStrokeColor = colorScheme.onSurface.copy(alpha = 0.78f)
                     val reusablePath = remember { Path() }
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         val strokeStyle = Stroke(
@@ -291,11 +393,7 @@ fun StylusCalibrationDialog(
                             for (i in 1 until pts.size) {
                                 reusablePath.lineTo(pts[i].x, pts[i].y)
                             }
-                            drawPath(
-                                path = reusablePath,
-                                color = color,
-                                style = strokeStyle
-                            )
+                            drawPath(path = reusablePath, color = color, style = strokeStyle)
                         }
 
                         completedStrokes.forEach { st ->
@@ -311,6 +409,7 @@ fun StylusCalibrationDialog(
                             onClick = {
                                 completedStrokes.clear()
                                 activePoints.clear()
+                                stepStrokesMap[stepIndex] = emptyList()
                             },
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -334,7 +433,7 @@ fun StylusCalibrationDialog(
                 ) {
                     TelemetryChip(
                         label = "Giriş",
-                        value = if (stylusDetected) "Kalem (Stylus)" else if (completedStrokes.isNotEmpty()) "Dokunmatik" else "Bekleniyor",
+                        value = if (stylusDetected) "Kalem (Stylus)" else if (hasAnyStrokesAcrossSteps) "Dokunmatik" else "Bekleniyor",
                         highlighted = stylusDetected,
                         modifier = Modifier.weight(0.95f)
                     )
@@ -356,33 +455,37 @@ fun StylusCalibrationDialog(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(0.85f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text("Vazgeç")
+                        Text("Vazgeç", fontSize = 12.sp)
+                    }
+                    if (stepIndex < prompts.lastIndex) {
+                        OutlinedButton(
+                            onClick = { switchToStep(stepIndex + 1) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Sonraki →", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                     Button(
-                        onClick = {
-                            val avgPressure = if (pressureSamples > 0) pressureSum / pressureSamples else 0.55f
-                            NoteDrawingPreferences.saveStylusCalibration(context, avgPressure)
-                            onCalibrated()
-                            onDismiss()
-                        },
-                        enabled = completedStrokes.isNotEmpty() || activePoints.isNotEmpty() || sideButtonStatus != "Bekleniyor",
-                        modifier = Modifier.weight(1.35f),
+                        onClick = { finalizeCalibration() },
+                        enabled = hasAnyStrokesAcrossSteps || sideButtonStatus != "Bekleniyor",
+                        modifier = Modifier.weight(1.25f),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(15.dp)
                         )
-                        Spacer(modifier = Modifier.size(6.dp))
-                        Text("Senkronize Et")
+                        Spacer(modifier = Modifier.size(5.dp))
+                        Text("Senkronize Et", fontSize = 12.sp, maxLines = 1)
                     }
                 }
             }
