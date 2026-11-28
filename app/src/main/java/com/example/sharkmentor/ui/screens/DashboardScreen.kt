@@ -111,7 +111,7 @@ import com.example.sharkmentor.core.dashboard.HomeDashboardSnapshot
 import com.example.sharkmentor.core.timer.TimerMode
 import com.example.sharkmentor.core.timer.TimerPhase
 import com.example.sharkmentor.core.timer.TimerState
-import com.example.sharkmentor.core.util.DailyFocusEngine
+import com.example.sharkmentor.domain.engine.DailyFocusEngine
 import com.example.sharkmentor.core.util.TimeUtils
 import com.example.sharkmentor.data.dashboard.DashboardLayoutPreferences
 import com.example.sharkmentor.data.dashboard.DashboardWidgetPlacement
